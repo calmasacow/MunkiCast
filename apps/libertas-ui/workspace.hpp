@@ -66,6 +66,7 @@ class Workspace : public QObject {
     Q_PROPERTY(QAbstractItemModel* workspaces READ workspacesModel CONSTANT)
     Q_PROPERTY(int workspaceCount READ workspaceCount NOTIFY workspacesChanged)
     Q_PROPERTY(int activeWorkspace READ activeWorkspace NOTIFY workspacesChanged)
+    Q_PROPERTY(QString encodeOutput READ encodeOutput NOTIFY encodeOutputChanged)
     Q_PROPERTY(QString activeWorkspaceName READ activeWorkspaceName NOTIFY workspacesChanged)
 
     /// The panel the keyboard acts on. ADR-0016's gesture is entirely pointer-driven, and an
@@ -189,6 +190,8 @@ public:
     [[nodiscard]] QString activeWorkspaceName() const;
 
     /// Switch to a saved arrangement. The one being left keeps the arrangement it had.
+    [[nodiscard]] QString encodeOutput() const { return encode_output_; }
+    Q_INVOKABLE void openEncode(const QString& outputId = QString{});
     Q_INVOKABLE void selectWorkspace(int index);
     /// Add one, starting from the arrangement currently on screen, which is almost always what
     /// someone adding one has just finished setting up.
@@ -216,12 +219,14 @@ public:
 signals:
     void layoutChanged();
     void workspacesChanged();
+    void encodeOutputChanged();
     void focusChanged();
     void dragChanged();
     /// Something the status line should say: a refused drop, a failed save, a fallback on load.
     void notice(const QString& text);
 
 private:
+    QString encode_output_;
     struct Drag {
         QString panel;
         QPointF pos;

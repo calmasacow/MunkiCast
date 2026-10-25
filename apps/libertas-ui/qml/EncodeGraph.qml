@@ -18,12 +18,24 @@ import Libertas
 /// move a node.
 Item {
     id: graph
+    objectName: "encodeGraph"
 
     required property string selectedKind
     required property string selectedId
 
     signal nodeSelected(string kind, string id)
     signal removeRequested(string kind, string id, string name)
+
+    function revealOutput(id) {
+        for (let i = 0; i < outputRepeater.count; ++i) {
+            const card = outputRepeater.itemAt(i);
+            if (card && card.outputId === id) {
+                graph.panX = (graph.width - card.width) / 2 - card.positionX;
+                graph.panY = (graph.height - card.height) / 2 - card.positionY;
+                return;
+            }
+        }
+    }
 
     function nodeMenu(card, kind, id, name, mx, my) {
         graph.nodeSelected(kind, id);
@@ -88,7 +100,7 @@ Item {
     }
 
     readonly property real railX: 30
-    readonly property real railTop: 20
+    readonly property real railTop: 66
     readonly property real railSpacing: 14
 
     function isSelected(kind, id) {
@@ -100,6 +112,33 @@ Item {
     Rectangle {
         anchors.fill: parent
         color: Theme.c.window
+    }
+
+    // Reserve the watermark's corner visually and for pointer input while the graph pans.
+    Rectangle {
+        objectName: "encodeWatermark"
+        width: watermark.implicitWidth + 32
+        height: 46
+        color: Theme.c.window
+        z: 2
+
+        Text {
+            id: watermark
+            anchors.left: parent.left
+            anchors.leftMargin: 16
+            anchors.verticalCenter: parent.verticalCenter
+            text: qsTr("Encoder Flow")
+            font.pixelSize: 19
+            font.weight: Font.DemiBold
+            color: Theme.c.accent
+            opacity: 0.45
+        }
+
+        MouseArea {
+            anchors.fill: parent
+            acceptedButtons: Qt.AllButtons
+            onWheel: wheel => { wheel.accepted = true; }
+        }
     }
 
     // The dotted ground, so panning is visible even over empty space. Drawn from the pan

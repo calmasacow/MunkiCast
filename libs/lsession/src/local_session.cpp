@@ -3,10 +3,62 @@
 
 #include "lsession/local_session.hpp"
 
+#include <algorithm>
 #include <format>
 #include <utility>
 
 namespace lsession {
+
+namespace {
+
+// Expand cues before history and journaling, so replay and undo restore explicit deck states
+// without firing cues again. Generated deck identities are recorded in the expanded command.
+Command with_scene_links(const Project& project, const Command& command) {
+    const ldoc::Deck* source = nullptr;
+    std::optional<ldoc::Id> scene_id;
+    if (const auto* set = std::get_if<ldoc::SetDeckProgram>(&command)) {
+        for (const auto& deck : project.decks)
+            if (deck.id == set->deck)
+                source = &deck;
+        scene_id = set->scene;
+    } else if (const auto* add = std::get_if<ldoc::AddDeck>(&command)) {
+        source = &add->value;
+        scene_id = source->program_scene;
+    }
+    const auto* scene = scene_id ? project.scene(*scene_id) : nullptr;
+    if (!source || !scene || project.canvases.empty() ||
+        source->canvas != project.canvases.front().id || scene->canvas != source->canvas)
+        return command;
+
+    std::vector<Command> steps{command};
+    std::size_t next_deck = project.decks.size() +
+                            (std::holds_alternative<ldoc::AddDeck>(command) ? 1 : 0);
+    for (const auto& link : project.scene_links) {
+        if (link.from != scene->id)
+            continue;
+        const auto* target = project.scene(link.to);
+        const auto* canvas = target ? project.canvas(target->canvas) : nullptr;
+        if (!canvas || canvas->id == source->canvas || canvas->emergency_scene == link.to)
+            continue;
+        const auto deck = std::find_if(project.decks.begin(), project.decks.end(),
+                                      [&](const auto& d) { return d.canvas == canvas->id; });
+        if (deck != project.decks.end()) {
+            if (deck->program_scene != link.to)
+                steps.push_back(ldoc::SetDeckProgram{deck->id, link.to});
+        } else {
+            ldoc::Deck created;
+            created.id = ldoc::Id::generate();
+            created.name = canvas->name;
+            created.canvas = canvas->id;
+            created.program_scene = link.to;
+            steps.push_back(ldoc::AddDeck{std::move(created), next_deck++});
+        }
+    }
+    return steps.size() == 1 ? command
+                             : ldoc::make_batch(std::move(steps), ldoc::describe(command));
+}
+
+} // namespace
 
 LocalSession::LocalSession(Project p) : history_(std::move(p)) {}
 
@@ -24,6 +76,7 @@ std::expected<std::unique_ptr<LocalSession>, std::string> LocalSession::open(
     std::unique_ptr<LocalSession> s{new LocalSession{std::move(opened->project)}};
     s->lock_ = std::move(opened->lock);
     s->dir_ = dir;
+    opened->problems.resize(opened->problems.size() - opened->validation_problem_count);
     s->open_problems_ = std::move(opened->problems);
 
     // Journal entries replayed on open are real changes that the project file does not yet hold,
@@ -104,18 +157,19 @@ std::expected<std::string, std::string> LocalSession::run(const Command& command
 
 std::expected<std::string, std::string> LocalSession::run(const Command& command,
                                                           std::string_view gesture) {
+    const Command expanded = with_scene_links(project(), command);
     auto description =
-        gesture.empty() ? history_.run(command) : history_.run(command, gesture);
+        gesture.empty() ? history_.run(expanded) : history_.run(expanded, gesture);
     if (!description)
         return std::unexpected(description.error());
 
     // Journaled and notified per command even when the undo stack collapsed them. The journal
     // has to match what was applied, and a listener that only saw the last value of a drag
     // would draw a fader that jumped rather than followed.
-    journal(command);
+    journal(expanded);
     dirty_ = true;
     ++revision_;
-    notify(Change::Kind::Applied, command);
+    notify(Change::Kind::Applied, expanded);
     return *description;
 }
 
@@ -184,6 +238,7 @@ std::expected<void, std::string> LocalSession::save_as(const std::filesystem::pa
 
     lock_ = std::move(opened->lock);
     dir_ = dir;
+    opened->problems.resize(opened->problems.size() - opened->validation_problem_count);
     for (Problem& p : opened->problems)
         open_problems_.push_back(std::move(p));
 

@@ -226,8 +226,8 @@ struct RecordHooks {
     /// Whether this canvas is being recorded. Asked once per canvas per commit, because the
     /// answer decides whether it has to be composited at full size as well as preview size.
     std::function<bool(const ldoc::Id&)> wants;
-    /// One freshly composited full-size frame, offered to whatever is recording that canvas.
-    std::function<void(const ldoc::Id&, const Picture&)> frame;
+    /// One full-size frame. A state is returned only when recording stops or fails.
+    std::function<std::optional<RecordState>(const ldoc::Id&, const Picture&)> frame;
 };
 
 [[nodiscard]] std::expected<void, std::string>

@@ -6,47 +6,61 @@ pragma ComponentBehavior: Bound
 import QtQuick
 import Libertas
 
-/// Which Main scenes bring this scene up.
-///
-/// The direction matters and is easy to get backwards. This is opened from a scene on a
-/// *secondary* canvas, and it does not ask what that scene cues -- it asks which scenes on Main
-/// cue it. Several Main scenes selecting one vertical scene is the ordinary case: a show where
-/// three landscape scenes all want the same vertical framing (ADR-0027).
-///
-/// Main itself has no link control anywhere. Linking is purely a secondary canvas's function,
-/// and the command layer refuses a link whose source is not on Main, so this dialog only ever
-/// lists Main's scenes.
-///
-/// "Link" is the only commit point. "Clear links" empties the tick-list and writes nothing, so
-/// closing this any other way -- Escape, the scrim, the window button -- always leaves the
-/// project exactly as it was found, and clearing then relinking is one undo step rather than
-/// two.
 Item {
     id: dialog
 
-    property string sceneId: ""
-    property string sceneName: ""
-    /// The ids currently ticked. Local until "Link" is pressed.
-    property var ticked: []
-    /// The rows as the document reported them when this opened: id, name, ticked, takenBy.
-    property var rows: []
+    property string targetCanvasId: ""
+    property string targetSceneId: ""
+    property string mainSceneId: ""
+    property var canvases: []
+    property var mainRows: []
+    readonly property var linkedMainIds: mainRows.filter(r => r.ticked).map(r => r.id)
+    readonly property bool selectedPairLinked: mainSceneId !== ""
+                                              && linkedMainIds.indexOf(mainSceneId) !== -1
+    readonly property string movingFrom: {
+        for (const row of mainRows)
+            if (row.id === mainSceneId)
+                return row.takenBy;
+        return "";
+    }
 
     signal closed
 
     anchors.fill: parent
     visible: false
     focus: visible
+    z: 50
 
-    function open(id, name) {
-        dialog.sceneId = id;
-        dialog.sceneName = name;
-        dialog.rows = Document.mainScenesForLink(id);
-        const start = [];
-        for (const r of dialog.rows) {
-            if (r.ticked)
-                start.push(r.id);
-        }
-        dialog.ticked = start;
+    function refresh() {
+        dialog.canvases = Document.sceneLinkCanvases();
+        if (!dialog.canvases.some(c => c.id === dialog.targetCanvasId))
+            dialog.setCanvas(dialog.canvases.length ? dialog.canvases[0].id : "");
+        dialog.mainRows = Document.mainScenesForLink(dialog.targetSceneId);
+        if (dialog.mainSceneId !== ""
+                && !dialog.mainRows.some(r => r.id === dialog.mainSceneId)
+                && dialog.targetSceneId !== "")
+            dialog.mainSceneId = "";
+    }
+
+    function setCanvas(id) {
+        dialog.targetCanvasId = id;
+        dialog.targetSceneId = "";
+        dialog.mainSceneId = "";
+        dialog.mainRows = [];
+    }
+
+    function selectTarget(id) {
+        dialog.targetSceneId = id;
+        dialog.mainRows = Document.mainScenesForLink(id);
+        if (dialog.linkedMainIds.length)
+            dialog.mainSceneId = dialog.linkedMainIds[0];
+    }
+
+    function open(canvasId, sceneId) {
+        dialog.setCanvas(canvasId);
+        dialog.refresh();
+        if (sceneId !== "")
+            dialog.selectTarget(sceneId);
         dialog.visible = true;
         dialog.forceActiveFocus();
     }
@@ -56,30 +70,22 @@ Item {
         dialog.closed();
     }
 
-    function isTicked(id) {
-        return dialog.ticked.indexOf(id) !== -1;
+    function link() {
+        if (!dialog.mainSceneId || !dialog.targetSceneId || dialog.selectedPairLinked)
+            return;
+        Document.commitSceneLinks(dialog.targetSceneId,
+                                  dialog.linkedMainIds.concat([dialog.mainSceneId]));
     }
 
-    function toggle(id) {
-        const next = dialog.ticked.slice();
-        const at = next.indexOf(id);
-        if (at === -1)
-            next.push(id);
-        else
-            next.splice(at, 1);
-        dialog.ticked = next;
+    function unlink() {
+        if (dialog.selectedPairLinked)
+            Document.commitSceneLinks(dialog.targetSceneId,
+                dialog.linkedMainIds.filter(id => id !== dialog.mainSceneId));
     }
 
-    /// The scenes that would lose their link if this were committed now. Shown before the
-    /// operator presses Link, not reported afterwards: a Main scene brings up at most one scene
-    /// per canvas, so ticking one that is already spoken for moves it.
-    readonly property var moving: {
-        const out = [];
-        for (const r of dialog.rows) {
-            if (r.takenBy !== "" && dialog.isTicked(r.id))
-                out.push(r.name + " → " + r.takenBy);
-        }
-        return out;
+    Connections {
+        target: Document
+        function onChanged() { if (dialog.visible) dialog.refresh(); }
     }
 
     Keys.onEscapePressed: dialog.close()
@@ -88,7 +94,7 @@ Item {
         anchors.fill: parent
         hoverEnabled: true
         onClicked: dialog.close()
-        onWheel: (wheel) => { wheel.accepted = true; }
+        onWheel: wheel => { wheel.accepted = true; }
     }
 
     Rectangle {
@@ -97,16 +103,108 @@ Item {
         opacity: 0.55
     }
 
+    component SceneList: Rectangle {
+        id: sceneList
+
+        property string canvasId: ""
+        property string selectedScene: ""
+        property bool showLinks: false
+        signal selected(string sceneId)
+
+        color: Theme.c.window
+        border.color: Theme.c.accent
+        radius: 2
+
+        ListView {
+            id: list
+
+            anchors.fill: parent
+            anchors.margins: 1
+            clip: true
+            model: dialog.visible && (!sceneList.showLinks || dialog.targetCanvasId !== "")
+                   ? Document.scenesFor(sceneList.canvasId) : null
+            boundsBehavior: Flickable.StopAtBounds
+            interactive: false
+            NoDragScroll {}
+
+            delegate: Rectangle {
+                id: row
+
+                required property int index
+                required property string sceneId
+                required property string name
+                required property int linkCount
+                readonly property bool selected: sceneList.selectedScene === row.sceneId
+
+                objectName: sceneList.showLinks ? "sceneLinkTargetRow" : "sceneLinkRow"
+                width: list.width
+                height: 30
+                color: row.selected ? Theme.c.accent
+                     : mouse.containsMouse ? Theme.c.panelHeaderActive : "transparent"
+                activeFocusOnTab: true
+                Accessible.role: Accessible.ListItem
+                Accessible.name: row.name
+                Accessible.selected: row.selected
+                Accessible.onPressAction: sceneList.selected(row.sceneId)
+                Keys.onReturnPressed: sceneList.selected(row.sceneId)
+                Keys.onSpacePressed: sceneList.selected(row.sceneId)
+                onSelectedChanged: if (selected) list.positionViewAtIndex(index, ListView.Contain)
+
+                Text {
+                    anchors.left: parent.left
+                    anchors.leftMargin: 9
+                    anchors.right: chain.left
+                    anchors.rightMargin: 6
+                    anchors.verticalCenter: parent.verticalCenter
+                    text: row.name
+                    font.pixelSize: 13
+                    color: row.selected ? Theme.c.window : Theme.c.text
+                    elide: Text.ElideRight
+                }
+
+                ChainIcon {
+                    id: chain
+                    objectName: "sceneLinkStatus"
+                    anchors.right: parent.right
+                    anchors.rightMargin: 9
+                    anchors.verticalCenter: parent.verticalCenter
+                    visible: sceneList.showLinks && row.linkCount > 0
+                    strong: true
+                    color: Theme.c.good
+                }
+
+                Rectangle {
+                    anchors.left: parent.left
+                    anchors.right: parent.right
+                    anchors.bottom: parent.bottom
+                    height: 1
+                    color: Theme.c.border
+                }
+
+                MouseArea {
+                    id: mouse
+                    anchors.fill: parent
+                    hoverEnabled: true
+                    onClicked: sceneList.selected(row.sceneId)
+                }
+            }
+
+            Text {
+                anchors.centerIn: parent
+                visible: list.count === 0
+                text: qsTr("No scenes")
+                color: Theme.c.textMuted
+                font.pixelSize: 11
+            }
+        }
+    }
+
     Rectangle {
         id: frame
 
         anchors.centerIn: parent
-        width: Math.min(parent.width - 48, 420)
-        // Fits the list rather than standing at a fixed height. A show with three scenes on
-        // Main got a half-empty 480px box, which reads as a panel that failed to load its
-        // contents.
-        height: Math.min(parent.height - 48, 480,
-                         116 + dialog.rows.length * 28 + (warning.visible ? warning.height : 0))
+        width: Math.min(parent.width - 48, 736)
+        height: Math.min(parent.height - 48, 672)
         color: Theme.c.panelBackground
         border.width: 1
         border.color: Theme.c.accent
@@ -119,207 +217,163 @@ Item {
 
         Rectangle {
             id: titleBar
-
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.top: parent.top
             anchors.margins: 1
-            height: 34
+            height: 48
             color: Theme.c.panelHeader
 
-            ChainIcon {
-                id: titleChain
-
+            Text {
                 anchors.left: parent.left
-                anchors.leftMargin: 10
+                anchors.leftMargin: 12
                 anchors.verticalCenter: parent.verticalCenter
-                color: Theme.c.accent
-                strong: true
+                text: qsTr("Scene Linker")
+                font.pixelSize: 20
+                color: Theme.c.text
             }
 
-            Column {
-                anchors.left: titleChain.right
-                anchors.leftMargin: 8
+            ChoiceField {
+                objectName: "sceneLinkCanvas"
                 anchors.right: parent.right
-                anchors.rightMargin: 10
+                anchors.rightMargin: 12
                 anchors.verticalCenter: parent.verticalCenter
-                spacing: 0
-
-                Text {
-                    width: parent.width
-                    text: qsTr("Scenes that bring up “%1”").arg(dialog.sceneName)
-                    font.pixelSize: 11
-                    font.bold: true
-                    color: Theme.c.text
-                    elide: Text.ElideRight
+                width: Math.min(310, parent.width * 0.48)
+                label: qsTr("Target Canvas")
+                labelWidth: 85
+                choices: dialog.canvases.map(c => c.id)
+                choiceLabels: {
+                    const labels = {};
+                    for (const c of dialog.canvases)
+                        labels[c.id] = c.name;
+                    return labels;
                 }
-
-                Text {
-                    width: parent.width
-                    text: qsTr("Taking one of these on Main switches this canvas.")
-                    font.pixelSize: 9
-                    color: Theme.c.textMuted
-                    elide: Text.ElideRight
-                }
-            }
-        }
-
-        ListView {
-            id: list
-
-            objectName: "sceneLinkList"
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.top: titleBar.bottom
-            anchors.bottom: warning.top
-            anchors.margins: 1
-            anchors.topMargin: 4
-            clip: true
-            boundsBehavior: Flickable.StopAtBounds
-            // Nothing here scrolls by being dragged (ADR-0039). The wheel has to come back,
-            // because Flickable drops it along with the drag.
-            interactive: false
-
-            NoDragScroll {}
-            model: dialog.rows
-
-            delegate: Rectangle {
-                id: linkRow
-
-                required property var modelData
-
-                readonly property bool on: dialog.isTicked(linkRow.modelData.id)
-
-                objectName: "sceneLinkRow"
-                width: list.width
-                height: linkRow.modelData.takenBy === "" ? 26 : 38
-                color: rowMouse.containsMouse ? Theme.c.panelHeader : "transparent"
-
-                Rectangle {
-                    id: box
-
-                    anchors.left: parent.left
-                    anchors.leftMargin: 10
-                    anchors.top: parent.top
-                    anchors.topMargin: 6
-                    width: 13
-                    height: 13
-                    radius: 2
-                    color: linkRow.on ? Theme.c.accent : "transparent"
-                    border.width: 1
-                    border.color: linkRow.on ? Theme.c.accent : Theme.c.border
-
-                    Text {
-                        anchors.centerIn: parent
-                        visible: linkRow.on
-                        text: "✓"
-                        font.pixelSize: 10
-                        color: Theme.c.window
-                    }
-                }
-
-                Column {
-                    anchors.left: box.right
-                    anchors.leftMargin: 8
-                    anchors.right: parent.right
-                    anchors.rightMargin: 10
-                    anchors.top: parent.top
-                    anchors.topMargin: 5
-                    spacing: 1
-
-                    Text {
-                        width: parent.width
-                        text: linkRow.modelData.name
-                        font.pixelSize: 11
-                        color: Theme.c.text
-                        elide: Text.ElideRight
-                    }
-
-                    // Said before the commit, not reported after it. A Main scene brings up at
-                    // most one scene per canvas, so ticking one that is spoken for moves it.
-                    Text {
-                        width: parent.width
-                        visible: linkRow.modelData.takenBy !== ""
-                        text: linkRow.on
-                              ? qsTr("moves here from “%1”").arg(linkRow.modelData.takenBy)
-                              : qsTr("currently brings up “%1”").arg(linkRow.modelData.takenBy)
-                        font.pixelSize: 9
-                        color: linkRow.on ? Theme.c.warning : Theme.c.textMuted
-                        elide: Text.ElideRight
-                    }
-                }
-
-                MouseArea {
-                    id: rowMouse
-
-                    anchors.fill: parent
-                    hoverEnabled: true
-                    onClicked: dialog.toggle(linkRow.modelData.id)
-                }
-            }
-
-            footer: Text {
-                width: list.width
-                visible: dialog.rows.length === 0
-                padding: 10
-                text: qsTr("Main has no scenes to link to yet.")
-                font.pixelSize: 10
-                color: Theme.c.textMuted
-                wrapMode: Text.WordWrap
+                value: dialog.targetCanvasId
+                onCommitted: id => dialog.setCanvas(id)
             }
         }
 
         Text {
-            id: warning
+            id: mainLabel
+            anchors.left: mainList.left
+            anchors.bottom: mainList.top
+            anchors.bottomMargin: 6
+            text: qsTr("Main")
+            font.pixelSize: 11
+            color: Theme.c.textMuted
+        }
 
+        Text {
+            anchors.left: targetList.left
+            anchors.bottom: targetList.top
+            anchors.bottomMargin: 6
+            text: {
+                for (const c of dialog.canvases)
+                    if (c.id === dialog.targetCanvasId)
+                        return c.name;
+                return qsTr("Target canvas");
+            }
+            font.pixelSize: 11
+            color: Theme.c.textMuted
+        }
+
+        SceneList {
+            id: mainList
             anchors.left: parent.left
+            anchors.leftMargin: 20
+            anchors.top: titleBar.bottom
+            anchors.topMargin: 28
+            anchors.bottom: status.top
+            anchors.bottomMargin: 8
+            width: Math.max(0, (frame.width - 92) / 2)
+            selectedScene: dialog.mainSceneId
+            onSelected: id => { dialog.mainSceneId = id; }
+        }
+
+        Column {
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.verticalCenter: mainList.verticalCenter
+            spacing: Math.max(24, mainList.height * 0.22)
+
+            ToolButton {
+                objectName: "commitLinks"
+                width: 36
+                height: 36
+                label: ""
+                tip: dialog.movingFrom !== ""
+                    ? qsTr("Link scenes (moves link from %1)").arg(dialog.movingFrom)
+                    : qsTr("Link selected scenes")
+                enabled: dialog.mainSceneId !== "" && dialog.targetSceneId !== ""
+                         && !dialog.selectedPairLinked
+                onClicked: dialog.link()
+                ChainIcon {
+                    anchors.centerIn: parent
+                    width: 26
+                    height: 26
+                    strong: true
+                    color: parent.enabled ? Theme.c.text : Theme.c.textMuted
+                    opacity: parent.enabled ? 1 : 0.4
+                }
+            }
+
+            ToolButton {
+                objectName: "unlinkScenes"
+                width: 36
+                height: 36
+                label: ""
+                tip: qsTr("Unlink selected scenes")
+                enabled: dialog.selectedPairLinked
+                onClicked: dialog.unlink()
+                ChainIcon {
+                    anchors.centerIn: parent
+                    width: 26
+                    height: 26
+                    broken: true
+                    color: parent.enabled ? Theme.c.text : Theme.c.textMuted
+                    opacity: parent.enabled ? 1 : 0.4
+                }
+            }
+        }
+
+        SceneList {
+            id: targetList
             anchors.right: parent.right
-            anchors.bottom: bottomBar.top
-            anchors.leftMargin: 11
-            anchors.rightMargin: 11
-            visible: dialog.moving.length > 0
-            height: visible ? implicitHeight + 8 : 0
-            text: qsTr("⚠ Linking moves: %1").arg(dialog.moving.join(", "))
-            font.pixelSize: 9
-            color: Theme.c.warning
+            anchors.rightMargin: 20
+            anchors.top: mainList.top
+            anchors.bottom: mainList.bottom
+            width: mainList.width
+            canvasId: dialog.targetCanvasId
+            selectedScene: dialog.targetSceneId
+            showLinks: true
+            visible: dialog.targetCanvasId !== ""
+            onSelected: id => dialog.selectTarget(id)
+        }
+
+        Text {
+            id: status
+            anchors.left: mainList.left
+            anchors.right: targetList.right
+            anchors.bottom: exitButton.top
+            anchors.bottomMargin: 8
+            height: 28
+            text: dialog.movingFrom !== "" && !dialog.selectedPairLinked
+                ? qsTr("Linking moves the Main scene’s link from “%1”.").arg(dialog.movingFrom)
+                : qsTr("Select a Main scene and a target scene, then link or unlink.")
+            color: dialog.movingFrom !== "" ? Theme.c.warning : Theme.c.textMuted
+            font.pixelSize: 10
             wrapMode: Text.WordWrap
         }
 
-        Rectangle {
-            id: bottomBar
-
-            anchors.left: parent.left
+        DialogButton {
+            id: exitButton
+            objectName: "exitSceneLinker"
             anchors.right: parent.right
+            anchors.rightMargin: 20
             anchors.bottom: parent.bottom
-            anchors.margins: 1
-            height: 40
-            color: Theme.c.panelHeader
-
-            Row {
-                anchors.right: parent.right
-                anchors.rightMargin: 10
-                anchors.verticalCenter: parent.verticalCenter
-                spacing: 6
-
-                DialogButton {
-                    objectName: "clearLinks"
-                    text: qsTr("Clear links")
-                    enabled: dialog.ticked.length > 0
-                    // Unticks only. Nothing is written until Link, so closing after this
-                    // changes nothing -- and clearing then relinking is one undo step.
-                    onClicked: dialog.ticked = []
-                }
-
-                DialogButton {
-                    objectName: "commitLinks"
-                    text: qsTr("Link")
-                    primary: true
-                    onClicked: {
-                        Document.commitSceneLinks(dialog.sceneId, dialog.ticked);
-                        dialog.close();
-                    }
-                }
-            }
+            anchors.bottomMargin: 16
+            minimumWidth: 150
+            text: qsTr("Exit")
+            onClicked: dialog.close()
         }
     }
 }

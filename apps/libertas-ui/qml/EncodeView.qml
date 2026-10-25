@@ -29,173 +29,31 @@ Item {
         initializedProjectPath = Document.projectPath;
         Document.initializeEncodeGraph();
     }
-    Component.onCompleted: initializeProject()
-
-    /// Record follows the Recording output's route, regardless of the current selection.
-    property int revision: 0
-    readonly property string recordTarget: view.revision >= 0 ? Document.recordingEncodeId() : ""
+    Component.onCompleted: { initializeProject(); selectOutput(); }
 
     Connections {
         target: Document
         function onChanged() {
-            view.revision++;
             if (view.initializedProjectPath !== Document.projectPath)
                 Qt.callLater(view.initializeProject);
         }
     }
 
-    function bytesLabel(n) {
-        if (n >= 1024 * 1024 * 1024 * 1024)
-            return (n / (1024 * 1024 * 1024 * 1024)).toFixed(1) + " TB";
-        if (n >= 1024 * 1024 * 1024)
-            return (n / (1024 * 1024 * 1024)).toFixed(1) + " GB";
-        return (n / (1024 * 1024)).toFixed(1) + " MB";
+    function selectOutput() {
+        view.selectedKind = Workspace.encodeOutput !== "" ? "output" : "";
+        view.selectedId = Workspace.encodeOutput;
+        if (view.selectedId !== "")
+            Qt.callLater(() => graph.revealOutput(view.selectedId));
+    }
+
+    Connections {
+        target: Workspace
+        function onEncodeOutputChanged() { view.selectOutput(); }
     }
 
     Rectangle {
         anchors.fill: parent
         color: Theme.c.window
-    }
-
-    // --- the top bar -------------------------------------------------------------------------
-
-    Item {
-        id: topBar
-
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.top: parent.top
-        height: 46
-
-        Text {
-            anchors.left: parent.left
-            anchors.leftMargin: 16
-            anchors.verticalCenter: parent.verticalCenter
-            text: qsTr("Encoder Flow")
-            font.pixelSize: 19
-            font.weight: Font.DemiBold
-            color: Theme.c.accent
-        }
-
-        Row {
-            anchors.right: actions.left
-            anchors.rightMargin: 20
-            anchors.verticalCenter: parent.verticalCenter
-            spacing: 22
-
-            Column {
-                spacing: 1
-
-                Text {
-                    text: Telemetry.diskAvailable
-                          ? view.bytesLabel(Telemetry.diskFreeBytes)
-                          : "—"
-                    font.pixelSize: 12
-                    color: Theme.c.text
-                }
-
-                Text {
-                    text: qsTr("Disk space")
-                    font.pixelSize: 9
-                    color: Theme.c.textMuted
-                }
-            }
-
-            Column {
-                spacing: 1
-
-                Text {
-                    // The first canvas's rate. Not a measured figure -- nothing is encoding
-                    // yet -- so it says the target rather than inventing a number.
-                    text: canvasFps.value > 0 ? canvasFps.value.toFixed(1) : "—"
-                    font.pixelSize: 12
-                    color: Theme.c.text
-                }
-
-                Text {
-                    text: qsTr("FPS")
-                    font.pixelSize: 9
-                    color: Theme.c.textMuted
-                }
-            }
-        }
-
-        QtObject {
-            id: canvasFps
-
-            // An empty id means the first canvas. A call, so the Connections below is what
-            // makes it re-read; Document emits `changed` after every command.
-            property real value: 0
-
-            function refresh() { canvasFps.value = Document.canvasFpsOf(""); }
-            Component.onCompleted: refresh()
-        }
-
-        Connections {
-            target: Document
-            function onChanged() { canvasFps.refresh(); }
-        }
-
-        Row {
-            id: actions
-
-            anchors.right: parent.right
-            anchors.rightMargin: 14
-            anchors.verticalCenter: parent.verticalCenter
-            spacing: 8
-
-            // Nothing behind these yet. Drawn because the mockup places them and an operator
-            // should see where they will be, disabled because a button that looks live and
-            // does nothing is worse than one that says it cannot.
-            ToolButton {
-                width: 96
-                height: 28
-                label: qsTr("Go Live!")
-                enabled: false
-                tip: qsTr("Streaming is not connected yet")
-            }
-
-            // The Recording node names the bitstreams this action writes.
-            ToolButton {
-                objectName: "encodeRecord"
-                width: 96
-                height: 28
-                label: Preview.recording ? qsTr("Stop") : qsTr("Record")
-                active: Preview.recording
-                activeColor: Theme.c.error
-                enabled: Preview.recording || view.recordTarget !== ""
-                tip: Preview.recording
-                     ? qsTr("Stop recording and close the file")
-                     : view.recordTarget !== ""
-                       ? qsTr("Record the Recording output to a file beside the project")
-                       : qsTr("Connect a Recording destination to video and audio encoders")
-                onClicked: {
-                    if (Preview.recording) {
-                        Preview.stopRecording(view.recordTarget);
-                        return;
-                    }
-                    const path = Document.recordingPathFor(view.recordTarget);
-                    if (path !== "")
-                        Preview.startRecording(view.recordTarget, path);
-                }
-            }
-
-            ToolButton {
-                width: 96
-                height: 28
-                label: qsTr("Replay")
-                enabled: false
-                tip: qsTr("The replay buffer is not built yet")
-            }
-        }
-
-        Rectangle {
-            anchors.left: parent.left
-            anchors.right: parent.right
-            anchors.bottom: parent.bottom
-            height: 1
-            color: Theme.c.border
-        }
     }
 
     // --- the graph ---------------------------------------------------------------------------
@@ -205,7 +63,7 @@ Item {
 
         anchors.left: parent.left
         anchors.right: properties.left
-        anchors.top: topBar.bottom
+        anchors.top: parent.top
         anchors.bottom: parent.bottom
 
         selectedKind: view.selectedKind
@@ -275,7 +133,7 @@ Item {
 
         objectName: "encodeProperties"
         anchors.right: parent.right
-        anchors.top: topBar.bottom
+        anchors.top: parent.top
         anchors.bottom: parent.bottom
         // The mockup's proportion. Narrow enough that the graph keeps the room, wide enough
         // that "Two Passes (Quarter Resolution)" fits in a dropdown without eliding.
@@ -283,6 +141,15 @@ Item {
 
         selectedKind: view.selectedKind
         selectedId: view.selectedId
+    }
+
+    Rectangle {
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        height: 1
+        color: Theme.c.border
+        z: 2
     }
 
     Item {

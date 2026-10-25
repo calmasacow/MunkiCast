@@ -212,7 +212,16 @@ struct Exporter {
         };
         std::string type;
         J settings(Json::objectValue);
-        if (src.type == "source.color") {
+        if (src.type == "source.clone") {
+            type = "source-clone";
+            settings["clone_type"] = 0;
+            const auto id = ldoc::Id::parse(text("target"));
+            const auto* target = id ? project.source(*id) : nullptr;
+            settings["clone"] = target && records.contains(target->id)
+                                    ? records.at(target->id).name : std::string{};
+            settings["audio"] = flag("audio", false);
+            settings["no_filters"] = flag("noFilters", false);
+        } else if (src.type == "source.color") {
             type = "color_source_v3";
             const auto color = setting(src, "color", ldoc::Rgba{}).to_srgb8();
             settings["color"] = Json::UInt(
@@ -472,16 +481,19 @@ struct Exporter {
                         root["current_transition"] = src.name;
                 continue;
             }
+            const auto input = src.type == "source.clone" ? ldoc::resolve_source(project, src)
+                                                          : std::optional<ldoc::Source>{};
+            const auto& geometry = input ? *input : src;
             const auto dimension = [&](const char* key, std::int64_t fallback) {
                 const double value =
-                    setting(src, key, static_cast<double>(setting(src, key, fallback)));
+                    setting(geometry, key, static_cast<double>(setting(geometry, key, fallback)));
                 if (!std::isfinite(value) || value < 1 || value > 8192)
                     throw std::runtime_error(src.name + ": invalid source dimension");
                 return value;
             };
             ldoc::Vec2 size{dimension("width", 1920), dimension("height", 1080)};
-            if (src.type == "source.image") {
-                const auto file = path(setting(src, "file", std::string{}));
+            if (geometry.type == "source.image") {
+                const auto file = path(setting(geometry, "file", std::string{}));
                 const auto measured = QImageReader(QString::fromStdString(file)).size();
                 if (measured.isValid())
                     size = {static_cast<double>(measured.width()),
@@ -489,9 +501,15 @@ struct Exporter {
             }
             if (size.x <= 0 || size.y <= 0)
                 size = {1920, 1080};
+            if (input)
+                if (const auto filtered = lcomp::filter_size(input->effects, size.x, size.y))
+                    size = *filtered;
             records.emplace(src.id, record(src.name, size));
-            root["sources"].append(source(src));
         }
+        // Clone targets may follow their clones and may need a unique exported name.
+        for (const auto& src : project.sources)
+            if (records.contains(src.id))
+                root["sources"].append(source(src));
         for (const auto& scene : project.scenes) {
             const auto& rec = records.at(scene.id);
             auto out = base(rec, "scene");

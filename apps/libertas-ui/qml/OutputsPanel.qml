@@ -20,14 +20,10 @@ import Libertas
 
 Item {
     id: panel
-
-    // Reparented to the window so the panel does not clip it; one surface either way
-    // (ADR-0015).
-    OutputsManagerDialog {
-        id: managerDialog
-
-        objectName: "outputsManagerDialog"
-        parent: panel.Window.contentItem
+    property string recordTarget: Document.recordingEncodeId()
+    Connections {
+        target: Document
+        function onChanged() { panel.recordTarget = Document.recordingEncodeId(); }
     }
 
     StripMenu {
@@ -65,6 +61,7 @@ Item {
                 delegate: Item {
                     id: output
 
+                    required property string encodeId
                     required property string outputId
                     required property string name
                     required property string canvasName
@@ -113,12 +110,12 @@ Item {
                                 id: rowMouse
                                 anchors.fill: parent
                                 acceptedButtons: Qt.LeftButton | Qt.RightButton
-                                onDoubleClicked: managerDialog.openOutput(output.outputId)
+                                onDoubleClicked: Workspace.openEncode(output.outputId)
                                 onClicked: mouse => {
                                     if (mouse.button !== Qt.RightButton) return;
                                     const at = mapToItem(outputMenu, mouse.x, mouse.y);
                                     outputMenu.popup(at.x, at.y, [
-                                        {text: qsTr("Settings"), action: () => { managerDialog.openOutput(output.outputId); }},
+                                        {text: qsTr("Settings"), action: () => { Workspace.openEncode(output.outputId); }},
                                         {text: qsTr("Include in output configuration"), checked: output.isEnabled,
                                          action: () => Document.setOutputEnabled(output.outputId, !output.isEnabled)},
                                         {separator: true},
@@ -135,8 +132,8 @@ Item {
                                 anchors.left: parent.left
                                 anchors.verticalCenter: parent.verticalCenter
                                 label: output.destinationKind === "file" ? "REC" : "LIVE"
-                                tip: qsTr("Manage %1").arg(output.name)
-                                onClicked: managerDialog.openOutput(output.outputId)
+                                tip: qsTr("Settings for %1").arg(output.name)
+                                onClicked: Workspace.openEncode(output.outputId)
                             }
                             Row {
                                 anchors.left: badge.right
@@ -172,9 +169,19 @@ Item {
                                 anchors.verticalCenter: parent.verticalCenter
                                 width: 26
                                 height: 26
-                                label: output.destinationKind === "file" ? "\u25cf" : "\u25b6"
-                                enabled: false
-                                tip: qsTr("Start output - not available yet")
+                                label: output.destinationKind === "file"
+                                     ? (Preview.recording ? "\u25a0" : "\u25cf") : "\u25b6"
+                                enabled: output.destinationKind === "file" &&
+                                         !Preview.recordingPending &&
+                                         (Preview.recording || output.encodeId === panel.recordTarget)
+                                tip: output.destinationKind === "file"
+                                     ? (Preview.recording ? qsTr("Stop recording") : qsTr("Start recording"))
+                                     : qsTr("Streaming is not connected yet")
+                                onClicked: {
+                                    if (Preview.recording) Preview.stopRecording(output.encodeId);
+                                    else Preview.startRecording(output.encodeId,
+                                        Document.recordingPathFor(output.encodeId));
+                                }
                             }
                         }
 
@@ -261,8 +268,8 @@ Item {
                 // Where reuse is made. A row answers "what does this destination use", one row
                 // at a time; the manager is encode-centred and shows what the GPU is actually
                 // being asked for (ADR-0029 amendment).
-                tip: qsTr("Outputs manager — encodes and what shares them")
-                onClicked: managerDialog.open()
+                tip: qsTr("Open Encoder Flow")
+                onClicked: Workspace.openEncode()
             }
 
             ToolButton {
@@ -290,7 +297,7 @@ Item {
             anchors.rightMargin: 8
             anchors.verticalCenter: parent.verticalCenter
             horizontalAlignment: Text.AlignRight
-            text: qsTr("Not encoding")
+            text: Preview.recording ? qsTr("Recording") : qsTr("Idle")
             font.pixelSize: 9
             color: Theme.c.textMuted
             opacity: 0.6

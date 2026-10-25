@@ -26,14 +26,6 @@ Item {
         color: Theme.c.panelHeader
     }
 
-    Rectangle {
-        anchors.left: parent.left
-        anchors.right: parent.right
-        anchors.bottom: parent.bottom
-        height: 1
-        color: Theme.c.border
-    }
-
     Row {
         anchors.left: parent.left
         anchors.leftMargin: 6
@@ -105,7 +97,7 @@ Item {
                     anchors.leftMargin: 10
                     anchors.verticalCenter: parent.verticalCenter
                     visible: !rename.visible
-                    text: tab.name
+                    text: tab.name === "Encode" ? qsTr("Encoder Flow") : tab.name
                     font.pixelSize: 11
                     font.weight: tab.isActive ? Font.DemiBold : Font.Normal
                     color: tab.isActive ? Theme.c.text : Theme.c.textMuted

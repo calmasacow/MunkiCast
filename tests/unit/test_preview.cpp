@@ -202,7 +202,7 @@ LTEST_CASE(record_writes_playable_rescaled_video_with_correct_colours_and_routed
     control(true);
     for (int i = 0; i < 60; ++i) {
         commit(link, project);
-        std::this_thread::sleep_for(std::chrono::milliseconds(33));
+        std::this_thread::sleep_for(std::chrono::milliseconds(30));
     }
     control(false);
     link.quit();
@@ -248,10 +248,69 @@ LTEST_CASE(record_writes_playable_rescaled_video_with_correct_colours_and_routed
               "decoded red pixel is {}, {}, {}", rgba[pixel_offset], rgba[pixel_offset + 1],
               rgba[pixel_offset + 2]);
     sws_freeContext(converter);
+    int video_packets = 1;
+    while (av_read_frame(file, packet) >= 0) {
+        if (packet->stream_index == vi) ++video_packets;
+        av_packet_unref(packet);
+    }
+    CHECK_MSG(video_packets >= 50, "early preview ticks retained only {} video frames", video_packets);
     av_frame_free(&frame);
     av_packet_free(&packet);
     avcodec_free_context(&decoder);
     avformat_close_input(&file);
+    std::filesystem::remove(path);
+}
+
+LTEST_CASE(recording_failure_reaches_the_client_without_killing_preview) {
+    auto ends = lipc::Channel::pair();
+    REQUIRE(ends);
+    auto child = lcomp::spawn_renderer(LIBERTAS_RENDER, std::move(ends->second).take_socket());
+    REQUIRE(child);
+    lcomp::PreviewLink link{std::move(ends->first)};
+    REQUIRE(link.take_hello(5000));
+    auto project = ldoc::make_default_project("record failure");
+    project.canvases.front().width = project.canvases.front().height = 64;
+    ldoc::Encode video;
+    video.id = ldoc::Id::generate();
+    video.canvas = project.canvases.front().id;
+    video.encoder.implementation = "x264";
+    video.encoder.preset = "ultrafast";
+    project.encodes.push_back(video);
+    const auto path = std::filesystem::temp_directory_path() /
+                      ("libertas-failure-" + video.id.to_string() + ".mkv");
+    commit(link, project);
+    REQUIRE(link.send_record({true, video.id, path.string()}));
+    bool started = false;
+    for (int i = 0; i < 8 && !started; ++i) {
+        auto event = link.receive(2000);
+        REQUIRE(event && *event);
+        if ((**event).kind == lcomp::PreviewEvent::Kind::Record) {
+            CHECK((**event).record.error.empty());
+            started = (**event).record.running;
+        }
+    }
+    REQUIRE(started);
+    for (int i = 0; i < 12; ++i) commit(link, project);
+    project.canvases.front().width = 32;
+    REQUIRE(link.send_project(project));
+    bool stopped = false;
+    for (int i = 0; i < 12 && !stopped; ++i) {
+        auto event = link.receive(2000);
+        REQUIRE(event && *event);
+        if ((**event).kind == lcomp::PreviewEvent::Kind::Record) {
+            CHECK(!(**event).record.running);
+            CHECK((**event).record.error.contains("size changed"));
+            stopped = true;
+        }
+    }
+    CHECK(stopped);
+    while (auto event = link.receive(100)) {
+        if (!*event || (**event).kind == lcomp::PreviewEvent::Kind::Ack) break;
+    }
+    CHECK(commit(link, project).width == 32);
+    link.quit();
+    link.close();
+    CHECK_EQ(reap(*child, 5000), 0);
     std::filesystem::remove(path);
 }
 
@@ -634,6 +693,77 @@ LTEST_CASE(media_audio_crosses_worker_mixer_and_meter_transport) {
         }
     }
     project.buses.front().mute = true;
+    bool muted = false;
+    // Drain the in-flight refresh before sending an edited project.
+    for (int i = 0; i < 8; ++i) {
+        auto event = link.receive(1000);
+        if (event && event->has_value() && (**event).kind == lcomp::PreviewEvent::Kind::Ack) break;
+    }
+    REQUIRE(link.send_project(project).has_value());
+    const auto mute_until = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+    while (std::chrono::steady_clock::now() < mute_until && !muted) {
+        auto event = link.receive(1000);
+        REQUIRE(event && event->has_value());
+        if ((**event).kind == lcomp::PreviewEvent::Kind::Audio)
+            for (const auto& level : (**event).audio)
+                if (level.node == project.buses.front().id && level.available && level.left == 0) muted = true;
+        if ((**event).kind == lcomp::PreviewEvent::Kind::Ack) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            REQUIRE(link.refresh(64).has_value());
+        }
+    }
+    for (int i = 0; i < 8; ++i) {
+        auto event = link.receive(1000);
+        if (event && event->has_value() && (**event).kind == lcomp::PreviewEvent::Kind::Ack) break;
+    }
+    link.quit(); link.close();
+    CHECK_EQ(reap(*child, 3000), 0);
+    CHECK(source_signal);
+    CHECK(bus_signal);
+    CHECK(muted);
+}
+
+LTEST_CASE(source_clone_audio_uses_original_worker_and_independent_route) {
+    auto ends = lipc::Channel::pair();
+    REQUIRE(ends.has_value());
+    auto child = lcomp::spawn_renderer(LIBERTAS_RENDER, std::move(ends->second).take_socket());
+    REQUIRE(child.has_value());
+    lcomp::PreviewLink link{std::move(ends->first)};
+    REQUIRE(link.take_hello(2000).has_value());
+    auto source = colour_source(0, 0, 0);
+    source.type = "source.media";
+    source.settings["localFile"] = std::string(LIBERTAS_IMAGE_FIXTURES) + "/motion-tone.mkv";
+    source.settings["width"] = std::int64_t{32};
+    source.settings["height"] = std::int64_t{24};
+    auto clone = source;
+    clone.id = ldoc::Id::generate();
+    clone.type = "source.clone";
+    clone.settings.clear();
+    clone.settings["target"] = source.id.to_string();
+    clone.settings["audio"] = true;
+    auto node = bound_to(clone);
+    ldoc::Scene scene;
+    scene.id = ldoc::Id::generate();
+    auto project = show(scene, {source, clone});
+    std::get<ldoc::SourceData>(node.data).audio.bus = project.buses.front().id;
+    project.scenes[0].roots = {node};
+    bool source_signal = false, bus_signal = false;
+    REQUIRE(link.send_project(project).has_value());
+    const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(8);
+    while (std::chrono::steady_clock::now() < until && !(source_signal && bus_signal)) {
+        auto event = link.receive(1000);
+        REQUIRE(event && event->has_value());
+        if ((**event).kind == lcomp::PreviewEvent::Kind::Audio)
+            for (const auto& level : (**event).audio) {
+                if (level.node == node.id && level.available && level.left > 0.01f) source_signal = true;
+                if (level.node == project.buses.front().id && level.available && level.left > 0.01f) bus_signal = true;
+            }
+        if ((**event).kind == lcomp::PreviewEvent::Kind::Ack) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            REQUIRE(link.refresh(64).has_value());
+        }
+    }
+    std::get<ldoc::SourceData>(project.scenes[0].roots[0].data).audio.mute = true;
     bool muted = false;
     // Drain the in-flight refresh before sending an edited project.
     for (int i = 0; i < 8; ++i) {

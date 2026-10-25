@@ -164,6 +164,7 @@ Item {
             required property int depth
             required property bool nodeVisible
             required property bool locked
+            required property bool expanded
             required property bool isGroup
             required property int effectCount
             // Declared like every other role: this delegate is `ComponentBehavior: Bound`, so
@@ -225,25 +226,34 @@ Item {
                 /// would feel like it was catching on things.
                 property real pressY: -1
                 property real pressX: -1
+                property bool moved: false
 
                 onPressed: (ev) => {
                     mouse.pressX = ev.x;
                     mouse.pressY = ev.y;
+                    mouse.moved = false;
+                    if (ev.button === Qt.LeftButton &&
+                        ((ev.modifiers & (Qt.ControlModifier | Qt.ShiftModifier)) !== 0 ||
+                         Document.selectedNodes.indexOf(row.nodeId) < 0)) {
+                        Document.selectNodeExtended(panel.canvasId, row.nodeId,
+                                                    (ev.modifiers & Qt.ControlModifier) !== 0,
+                                                    (ev.modifiers & Qt.ShiftModifier) !== 0);
+                    }
                 }
 
                 onPositionChanged: (ev) => {
                     if (ev.buttons !== Qt.LeftButton || mouse.pressY < 0)
                         return;
                     if (!panel.dragging) {
-                        // Four pixels: enough that a click with a shaky hand is still a
-                        // click, small enough that a deliberate drag starts at once.
-                        if (Math.abs(ev.y - mouse.pressY) < 4 &&
-                            Math.abs(ev.x - mouse.pressX) < 4)
+                        // Use the platform threshold so a shaky Shift-click stays a click.
+                        if (Math.abs(ev.y - mouse.pressY) < Qt.styleHints.startDragDistance &&
+                            Math.abs(ev.x - mouse.pressX) < Qt.styleHints.startDragDistance)
                             return;
                         // Dragging something outside the selection takes just that one, which
                         // is what a layers panel does -- the selection is not a cargo net.
                         if (Document.selectedNodes.indexOf(row.nodeId) < 0)
                             Document.selectNodeOn(panel.canvasId, row.nodeId);
+                        mouse.moved = true;
                         panel.dragNode = row.nodeId;
                     }
                     panel.updateDrop(mapToItem(list, ev.x, ev.y).y);
@@ -268,13 +278,13 @@ Item {
                     // what every other list does. A right-click never changes the selection
                     // when it lands on something already in it, so the menu can act on all
                     // of them (ADR-0037).
+                    if (mouse.moved)
+                        return;
                     if (ev.button === Qt.RightButton) {
                         if (Document.selectedNodes.indexOf(row.nodeId) < 0)
                             Document.selectNodeOn(panel.canvasId, row.nodeId);
-                    } else {
-                        Document.selectNodeExtended(panel.canvasId, row.nodeId,
-                                                    (ev.modifiers & Qt.ControlModifier) !== 0,
-                                                    (ev.modifiers & Qt.ShiftModifier) !== 0);
+                    } else if ((ev.modifiers & (Qt.ControlModifier | Qt.ShiftModifier)) === 0) {
+                        Document.selectNodeOn(panel.canvasId, row.nodeId);
                     }
                     if (ev.button !== Qt.RightButton)
                         return;
@@ -286,6 +296,7 @@ Item {
                         checked: false,
                         action: () => Document.copySelectedNodes()
                     }];
+                    rows.push(transformMenu.menu());
                     // Rename, which was double-click and F2 only. A right-click is where
                     // people look for it.
                     // Delete, where a right-click menu is expected to have it, and acting
@@ -356,7 +367,11 @@ Item {
                 // OBS does and what the operator asked for. A group, or a source node bound to
                 // nothing, has no settings to open -- so there it still starts a rename, which
                 // is the only thing a double-click could usefully mean on one.
-                onDoubleClicked: {
+                onDoubleClicked: (ev) => {
+                    if ((ev.modifiers & (Qt.ControlModifier | Qt.ShiftModifier)) !== 0) {
+                        ev.accepted = false;
+                        return;
+                    }
                     Document.selectNodeOn(panel.canvasId, row.nodeId);
                     if (row.sourceId !== "")
                         panel.configure(row.sourceId);
@@ -365,11 +380,25 @@ Item {
                 }
             }
 
+            ToolButton {
+                objectName: "sourceGroupToggle"
+                visible: row.isGroup
+                x: 4 + row.depth * 20
+                anchors.verticalCenter: parent.verticalCenter
+                width: 18
+                height: 18
+                label: row.expanded ? "▾" : "▸"
+                tip: row.expanded ? qsTr("Collapse group") : qsTr("Expand group")
+                Accessible.expandable: true
+                Accessible.expanded: row.expanded
+                onClicked: Document.toggleGroupExpanded(panel.canvasId, row.nodeId)
+            }
+
             // Visibility, first and widest, because it is the control that gets used constantly.
             Rectangle {
                 id: eye
 
-                x: 4 + row.depth * 12
+                x: 24 + row.depth * 20
                 anchors.verticalCenter: parent.verticalCenter
                 width: 18
                 height: 18
@@ -560,6 +589,29 @@ Item {
         }
     }
 
+    MouseArea {
+        anchors.fill: list
+        acceptedButtons: Qt.RightButton
+        onPressed: ev => {
+            // Let source rows keep their own context menu.
+            if (list.indexAt(ev.x + list.contentX, ev.y + list.contentY) >= 0)
+                ev.accepted = false;
+        }
+        onClicked: ev => {
+            panel.use();
+            const at = mapToItem(nodeMenu, ev.x, ev.y);
+            nodeMenu.popup(at.x, at.y, [{
+                text: Document.pasteDescription() || qsTr("Paste"),
+                enabled: Document.selectedScene !== "" && Document.pasteDescription() !== "",
+                action: () => {
+                    panel.use();
+                    Document.selectNode("");
+                    Document.paste();
+                }
+            }]);
+        }
+    }
+
     // Choosing what to add is a browse, not a menu: ten types, each with its own set of
     // sources you already made. So it is the dialog in AddSourceDialog.qml.
     //
@@ -603,6 +655,8 @@ Item {
                                              : item.y - scrolled - 1;
         }
     }
+
+    TransformMenu { id: transformMenu }
 
     StripMenu {
         id: nodeMenu

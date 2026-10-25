@@ -90,6 +90,7 @@ struct Preview::Link {
     bool have_pending = false;
     bool refresh_only = false;
     bool refresh_pending = false;
+    std::optional<lcomp::RecordRequest> record_request;
     /// Set when this commit was a fault, so its ack does not publish a picture of the last one.
     bool failed = false;
     ldoc::Project pending;
@@ -271,7 +272,9 @@ QString Preview::caption(const QString& canvasId) const {
 
 void Preview::setLive(bool live, ldoc::Fps rate) {
     program_live_ = live;
-    live = live || !filter_target_.isEmpty();
+    live = live || recording_ || !filter_target_.isEmpty();
+    if (recording_ && recording_rate_.valid() && (!rate.valid() || recording_rate_.hz() > rate.hz()))
+        rate = recording_rate_;
     if (!live) {
         if (link_) link_->refresh_pending = false;
         if (live_ != nullptr)
@@ -550,16 +553,23 @@ void Preview::on_readable() {
             break;
         case lcomp::PreviewEvent::Kind::Hello:
             break;
-        case lcomp::PreviewEvent::Kind::Record:
+        case lcomp::PreviewEvent::Kind::Record: {
             // Said by the renderer, not assumed here: the encoder opens over there and may
             // refuse, and a UI that latched its own button would claim a recording nobody has.
             if (!got.record.error.empty())
                 report(QString::fromStdString(got.record.error));
-            if (recording_ != got.record.running) {
-                recording_ = got.record.running;
-                emit recordingChanged();
-            }
+            recording_pending_ = false;
+            const bool was_recording = recording_;
+            recording_ = got.record.running;
+            if (recording_ && !was_recording)
+                report(QStringLiteral("Recording to %1").arg(recording_path_));
+            if (!recording_ && was_recording && got.record.error.empty())
+                report(QStringLiteral("Recording saved to %1").arg(recording_path_));
+            emit recordingChanged();
+            setLive(program_live_, latest_.canvases.empty() ? ldoc::Fps{}
+                                                          : latest_.canvases.front().fps);
             break;
+        }
         case lcomp::PreviewEvent::Kind::Frame: {
             Held held;
             held.status = got.frame.status;
@@ -619,7 +629,14 @@ void Preview::on_readable() {
             }
             if (link_->dirty)
                 try_send();
-            else if (link_->refresh_pending) {
+            else if (link_->record_request) {
+                const auto request = std::exchange(link_->record_request, std::nullopt);
+                if (const auto sent = link_->channel->send_record(*request); !sent) {
+                    recording_pending_ = false;
+                    emit recordingChanged();
+                    report(QString::fromStdString(sent.error()));
+                }
+            } else if (link_->refresh_pending) {
                 link_->refresh_only = true;
                 try_send();
             }
@@ -644,10 +661,17 @@ void Preview::on_writable() {
 }
 
 void Preview::startRecording(const QString& encodeId, const QString& path) {
+    if (recording_ || recording_pending_)
+        return;
     if (path.isEmpty()) {
         report(QStringLiteral("A recording needs somewhere to write."));
         return;
     }
+    recording_path_ = path;
+    const auto id = ldoc::Id::parse(encodeId.toStdString());
+    const auto* encode = id ? latest_.encode(*id) : nullptr;
+    const auto* canvas = encode ? latest_.canvas(encode->canvas) : nullptr;
+    recording_rate_ = canvas ? canvas->fps : ldoc::Fps{};
     send_record(encodeId, path, true);
 }
 
@@ -670,8 +694,21 @@ void Preview::send_record(const QString& encodeId, const QString& path, bool sta
     // Stop must still work after the recording node or its encoder has been removed.
     request.encode = id.value_or(ldoc::Id::nil());
     request.path = path.toStdString();
-    if (const auto sent = link_->channel->send_record(request); !sent)
+    if (recording_pending_)
+        return;
+    // Start after the renderer has acknowledged the latest encoder and routing settings.
+    if (start && (link_->in_flight || link_->dirty)) {
+        link_->record_request = request;
+        recording_pending_ = true;
+        emit recordingChanged();
+        return;
+    }
+    if (const auto sent = link_->channel->send_record(request); !sent) {
         report(QString::fromStdString(sent.error()));
+    } else {
+        recording_pending_ = true;
+        emit recordingChanged();
+    }
 }
 
 void Preview::lose(const QString& why) {
@@ -687,8 +724,9 @@ void Preview::lose(const QString& why) {
     link_->dirty = false;
     // A renderer that died took the file with it. Saying otherwise would leave a Record
     // button latched over a recording that stopped some time ago.
-    if (recording_) {
+    if (recording_ || recording_pending_) {
         recording_ = false;
+        recording_pending_ = false;
         emit recordingChanged();
     }
     if (link_->read != nullptr)

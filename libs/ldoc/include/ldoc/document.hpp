@@ -225,7 +225,7 @@ enum class DestinationKind : std::uint8_t { Rtmp, Rtmps, Srt, Whip, File, Replay
 /// field.
 struct Destination {
     DestinationKind kind = DestinationKind::Rtmp;
-    /// The ingest URL. Servers sometimes put the key in the path; see `credential_ref`.
+    /// The ingest URL, or output directory for File. See `credential_ref` for stream keys.
     std::string url;
     /// The name of a credential, never the credential.
     std::string credential_ref;
@@ -361,6 +361,12 @@ struct Project {
 
     friend bool operator==(const Project&, const Project&) = default;
 };
+
+/// Resolve a source clone to its shared input, preserving the input ID/settings and composing
+/// source filters. Missing targets and cycles return no value; no capture is duplicated.
+/// Audio taps also require Audio enabled at every clone; video bypass never skips audio filters.
+[[nodiscard]] std::optional<Source> resolve_source(const Project& project, const Source& source,
+                                                   bool audio = false);
 
 /// A new project with one 1080p60 canvas, a program bus and a VOD track, one empty scene and a
 /// deck pointed at it. Enough to open and look at; nothing that pretends to be configured.

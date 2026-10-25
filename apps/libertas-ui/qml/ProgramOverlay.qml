@@ -17,6 +17,7 @@ import Libertas
 Item {
     id: overlay
 
+    required property Item inputSurface
     required property string canvasId
     /// How close, in screen pixels, an edge has to come before it snaps. Screen pixels rather
     /// than canvas units so the feel does not change with the canvas size or the panel's zoom.
@@ -396,7 +397,6 @@ Item {
     }
 
     function menuRows() {
-        const locked = Document.nodeProperties.locked === true;
         const id = Document.selectedNode;
         const sep = {separator: true};
         return [
@@ -415,45 +415,7 @@ Item {
                                 () => Document.moveSelectedToEnd(false))
                 ]
             },
-            {
-                text: qsTr("Transform"),
-                checked: false,
-                children: [
-                    overlay.row(qsTr("Edit Transform"), "Ctrl+E", true,
-                                () => Workspace.focusPanel("properties")),
-                    overlay.row(qsTr("Copy Transform"), "Ctrl+Shift+C", true,
-                                () => Document.copyTransform()),
-                    overlay.row(qsTr("Paste Transform"), "Ctrl+Shift+V",
-                                !locked && Document.hasCopiedTransform(),
-                                () => Document.pasteTransform()),
-                    overlay.row(qsTr("Reset Transform"), "Ctrl+R", !locked,
-                                () => Document.resetTransform()),
-                    sep,
-                    overlay.row(qsTr("Rotate 90 degrees CW"), "", !locked,
-                                () => Document.rotateBy(90)),
-                    overlay.row(qsTr("Rotate 90 degrees CCW"), "", !locked,
-                                () => Document.rotateBy(-90)),
-                    overlay.row(qsTr("Rotate 180 degrees"), "", !locked,
-                                () => Document.rotateBy(180)),
-                    sep,
-                    overlay.row(qsTr("Flip Horizontal"), "", !locked,
-                                () => Document.flipHorizontal()),
-                    overlay.row(qsTr("Flip Vertical"), "", !locked,
-                                () => Document.flipVertical()),
-                    sep,
-                    overlay.row(qsTr("Fit to screen"), "Ctrl+F", !locked,
-                                () => Document.fitToCanvas(false)),
-                    // Ctrl+S is Save. The item is here; it does not wear that key.
-                    overlay.row(qsTr("Stretch to screen"), "", !locked,
-                                () => Document.fitToCanvas(true)),
-                    overlay.row(qsTr("Center to screen"), "Ctrl+D", !locked,
-                                () => Document.centerOnCanvas(true, true)),
-                    overlay.row(qsTr("Center Vertically"), "", !locked,
-                                () => Document.centerOnCanvas(false, true)),
-                    overlay.row(qsTr("Center Horizontally"), "", !locked,
-                                () => Document.centerOnCanvas(true, false))
-                ]
-            },
+            transformMenu.menu(),
             sep,
             overlay.row(qsTr("Copy"), "Ctrl+C", true, () => Document.copySelectedNodes()),
             overlay.row(qsTr("Paste"), "Ctrl+V", Document.pasteDescription() !== "",
@@ -473,7 +435,8 @@ Item {
         // menu can act on all of it. The same rule as the sources list.
         if (Document.selectedNodes.indexOf(target.id) < 0)
             Document.focusPlacedNode(overlay.canvasId, target.id);
-        canvasMenu.popup(x, y, overlay.menuRows());
+        const at = overlay.mapToItem(canvasMenu, x, y);
+        canvasMenu.popup(at.x, at.y, overlay.menuRows());
     }
 
     Rectangle {
@@ -505,8 +468,14 @@ Item {
         }
     }
 
+    TransformMenu { id: transformMenu }
+
     MouseArea {
+        // Paint in canvas coordinates; receive input throughout the panel's letterbox area.
+        parent: overlay.inputSurface
         anchors.fill: parent
+        z: 3
+        visible: overlay.visible
         hoverEnabled: true
         acceptedButtons: Qt.LeftButton | Qt.RightButton
         preventStealing: true
@@ -514,16 +483,18 @@ Item {
         enabled: overlay.canvasWidth > 0 && overlay.canvasHeight > 0
 
         onPressed: (ev) => {
+            const at = mapToItem(overlay, ev.x, ev.y);
             if (ev.button === Qt.RightButton)
-                overlay.openMenu(ev.x, ev.y);
+                overlay.openMenu(at.x, at.y);
             else
-                overlay.press(ev.x, ev.y);
+                overlay.press(at.x, at.y);
         }
         onPositionChanged: (ev) => {
+            const at = mapToItem(overlay, ev.x, ev.y);
             if (overlay.dragging)
-                overlay.drag(ev.x, ev.y, ev.modifiers);
+                overlay.drag(at.x, at.y, ev.modifiers);
             else
-                overlay.hover(ev.x, ev.y);
+                overlay.hover(at.x, at.y);
         }
         onReleased: overlay.release()
         onCanceled: overlay.release()
@@ -531,6 +502,8 @@ Item {
 
     StripMenu {
         id: canvasMenu
+        parent: overlay.inputSurface
+        z: 4
         objectName: "canvasMenu"
     }
 }

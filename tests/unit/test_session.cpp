@@ -288,6 +288,42 @@ LTEST_CASE(problems_combine_what_opening_found_with_what_the_document_says) {
     CHECK(problems.front().severity == ldoc::Severity::Warning);
 }
 
+LTEST_CASE(open_validation_refreshes_after_audio_is_ignored_or_routes_are_repaired) {
+    const ScratchDir sd{"live-problems"};
+    auto project = starter();
+    ldoc::Source source;
+    source.id = Id::generate();
+    source.name = "Video";
+    source.type = "source.media";
+    project.sources.push_back(source);
+    auto& node = project.scenes.front().roots.front();
+    auto& data = std::get<ldoc::SourceData>(node.data);
+    data.source = source.id;
+    data.audio.bus = Id::generate();
+    const auto scene_id = project.scenes.front().id;
+    const auto node_id = node.id;
+    auto session = LocalSession::create(project, sd.project());
+    REQUIRE(session.has_value());
+    // Exactly one live warning, rather than an open-time copy plus the same live warning.
+    CHECK_EQ((*session)->problems().size(), std::size_t{1});
+    CHECK((*session)->problems().front().message.contains("Intro"));
+    CHECK((*session)->problems().front().message.contains("Camera"));
+    source.settings["ignoreAudio"] = true;
+    REQUIRE((*session)->run(ldoc::SetSource{source}).has_value());
+    CHECK((*session)->problems().empty());
+    REQUIRE((*session)->undo().has_value());
+    CHECK_EQ((*session)->problems().size(), std::size_t{1});
+    auto audio = data.audio;
+    audio.bus = project.buses.front().id;
+    REQUIRE((*session)->run(ldoc::SetNodeAudio{scene_id, node_id, audio}).has_value());
+    CHECK((*session)->problems().empty());
+    REQUIRE((*session)->save().has_value());
+    session->reset();
+    session = LocalSession::open(sd.project());
+    REQUIRE(session.has_value());
+    CHECK((*session)->problems().empty());
+}
+
 LTEST_CASE(a_journal_that_cannot_be_written_is_a_warning_not_a_refusal_to_open) {
     if (::geteuid() == 0) {
         std::fprintf(stderr, "       (running as root; permissions cannot be tested)\n");
@@ -349,6 +385,77 @@ LTEST_CASE(a_session_refuses_newer_schema_without_rewriting_it) {
     REQUIRE(lc::write_atomic(scratch.project() / "project.json", *bytes));
     CHECK(!LocalSession::open(scratch.project()));
     CHECK_EQ(lc::read_file(scratch.project() / "project.json"), bytes);
+}
+
+LTEST_CASE(main_program_activation_fires_links_and_replays_exact_deck_states) {
+    ScratchDir scratch{"scene-links"};
+    auto p = starter();
+    const Id main_scene = p.scenes.front().id;
+    const Id main_deck = p.decks.front().id;
+    std::vector<Id> targets;
+    for (const auto* name : {"Vertical", "Square", "Independent"}) {
+        ldoc::Canvas canvas;
+        canvas.id = Id::generate();
+        canvas.name = name;
+        p.canvases.push_back(canvas);
+        ldoc::Scene scene;
+        scene.id = Id::generate();
+        scene.name = name;
+        scene.canvas = canvas.id;
+        targets.push_back(scene.id);
+        p.scenes.push_back(scene);
+    }
+    ldoc::Deck vertical;
+    vertical.id = Id::generate();
+    vertical.name = "Vertical";
+    vertical.canvas = p.scenes[1].canvas;
+    p.decks.push_back(vertical);
+    p.scene_links.push_back({Id::generate(), main_scene, targets[0]});
+    p.scene_links.push_back({Id::generate(), main_scene, targets[1]});
+    // Stale imported references are ignored; even an imported chain never fires a second hop.
+    p.scene_links.push_back({Id::generate(), main_scene, Id::generate()});
+    p.scene_links.push_back({Id::generate(), targets[0], targets[2]});
+    auto opened = LocalSession::create(p, scratch.project());
+    REQUIRE(opened);
+    auto session = std::move(*opened);
+    const auto before = session->project();
+    REQUIRE(session->run(ldoc::SetDeckProgram{main_deck, main_scene}));
+    const auto after = session->project();
+    REQUIRE(after.decks.size() == 3);
+    CHECK(after.decks[1].program_scene == targets[0]);
+    CHECK(after.decks[2].program_scene == targets[1]);
+    CHECK(std::none_of(after.decks.begin(), after.decks.end(), [&](const auto& deck) {
+        return deck.program_scene == targets[2];
+    }));
+    REQUIRE(session->undo());
+    CHECK(session->project() == before);
+    REQUIRE(session->redo());
+    CHECK(session->project() == after);
+    session.reset();
+    opened = LocalSession::open(scratch.project());
+    REQUIRE(opened);
+    session = std::move(*opened);
+    CHECK(session->project() == after);
+
+    // Reasserting an already-live Main scene repairs a target changed independently.
+    REQUIRE(session->run(ldoc::SetDeckProgram{vertical.id, std::nullopt}));
+    REQUIRE(session->run(ldoc::SetDeckProgram{main_deck, main_scene}));
+    CHECK(session->project().decks[1].program_scene == targets[0]);
+    REQUIRE(session->run(ldoc::RemoveSceneLink{p.scene_links[0].id}));
+    REQUIRE(session->run(ldoc::SetDeckProgram{vertical.id, std::nullopt}));
+    REQUIRE(session->run(ldoc::SetDeckProgram{main_deck, main_scene}));
+    CHECK(!session->project().decks[1].program_scene);
+
+    // Older projects can also lack Main's deck; first activation still fires its links.
+    p.decks.clear();
+    auto fresh = LocalSession::in_memory(p);
+    ldoc::Deck main = before.decks.front();
+    REQUIRE(fresh->run(ldoc::AddDeck{main, 0}));
+    REQUIRE(fresh->project().decks.size() == 3);
+    CHECK(fresh->project().decks[1].program_scene == targets[0]);
+    CHECK(fresh->project().decks[2].program_scene == targets[1]);
+    REQUIRE(fresh->undo());
+    CHECK(fresh->project() == p);
 }
 
 LTEST_MAIN("session")

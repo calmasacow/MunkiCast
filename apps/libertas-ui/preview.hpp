@@ -38,6 +38,8 @@ class Preview : public QObject {
     /// Whether the renderer is writing a file right now. Reported by the renderer rather than
     /// assumed from the request: the encoder opens over there, and it can fail to.
     Q_PROPERTY(bool recording READ recording NOTIFY recordingChanged)
+    Q_PROPERTY(bool recordingPending READ recordingPending NOTIFY recordingChanged)
+    Q_PROPERTY(QString recordingPath READ recordingPath NOTIFY recordingChanged)
 
   public:
     /// Not default-constructible. Qt's singleton registration prefers a default constructor
@@ -95,6 +97,8 @@ class Preview : public QObject {
     friend class ProgramImageProvider;
 
     [[nodiscard]] bool recording() const { return recording_; }
+    [[nodiscard]] bool recordingPending() const { return recording_pending_; }
+    [[nodiscard]] QString recordingPath() const { return recording_path_; }
     /// Start writing `encodeId` to `path`, or stop whatever is being written. The answer
     /// arrives as `recordingChanged`, or as a notice when the encoder would not open.
     Q_INVOKABLE void startRecording(const QString& encodeId, const QString& path);
@@ -129,6 +133,9 @@ class Preview : public QObject {
     QTimer* live_ = nullptr;
     bool program_live_ = false;
     bool recording_ = false;
+    bool recording_pending_ = false;
+    QString recording_path_;
+    ldoc::Fps recording_rate_;
     ldoc::Project latest_;
     QString filter_target_;
     ldoc::Id filter_canvas_ = ldoc::Id::generate();

@@ -1,0 +1,141 @@
+// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+
+pragma ComponentBehavior: Bound
+
+import QtQuick
+import Libertas
+
+Item {
+    id: bar
+    objectName: "broadcastBar"
+    implicitHeight: info.height + 20
+    property string recordTarget: ""
+    function refresh() {
+        bar.recordTarget = Document.recordingEncodeId();
+        Telemetry.setDiskPath(Document.recordingDirectory());
+    }
+    Component.onCompleted: refresh()
+    Connections {
+        target: Document
+        function onChanged() { bar.refresh(); }
+    }
+
+    function bytesLabel(n) {
+        if (n >= 1024 * 1024 * 1024 * 1024)
+            return (n / (1024 * 1024 * 1024 * 1024)).toFixed(1) + " TB";
+        if (n >= 1024 * 1024 * 1024)
+            return (n / (1024 * 1024 * 1024)).toFixed(1) + " GB";
+        return (n / (1024 * 1024)).toFixed(1) + " MB";
+    }
+
+    Row {
+        id: info
+        anchors.right: actions.left
+        anchors.rightMargin: 20
+        anchors.verticalCenter: parent.verticalCenter
+        spacing: 22
+
+        Column {
+            spacing: 1
+
+            Text {
+                text: Telemetry.diskAvailable
+                      ? bar.bytesLabel(Telemetry.diskFreeBytes)
+                      : "—"
+                font.pixelSize: 12
+                color: "#7AA2F7"
+            }
+
+            Text {
+                text: qsTr("Disk space")
+                font.pixelSize: 9
+                color: Theme.c.textMuted
+            }
+        }
+
+        Column {
+            spacing: 1
+
+            Text {
+                // Target rate of the first canvas, rather than a measured encoding rate.
+                text: canvasFps.value > 0 ? canvasFps.value.toFixed(1) : "—"
+                font.pixelSize: 12
+                color: "#7AA2F7"
+            }
+
+            Text {
+                text: qsTr("FPS")
+                font.pixelSize: 9
+                color: Theme.c.textMuted
+            }
+        }
+    }
+
+    QtObject {
+        id: canvasFps
+
+        // An empty id means the first canvas. A call, so the Connections below is what
+        // makes it re-read; Document emits `changed` after every command.
+        property real value: 0
+
+        function refresh() { canvasFps.value = Document.canvasFpsOf(""); }
+        Component.onCompleted: refresh()
+    }
+
+    Connections {
+        target: Document
+        function onChanged() { canvasFps.refresh(); }
+    }
+
+    Row {
+        id: actions
+
+        anchors.right: parent.right
+        anchors.rightMargin: 14
+        anchors.verticalCenter: parent.verticalCenter
+        spacing: 8
+
+        ToolButton {
+            width: 96
+            height: 28
+            label: qsTr("Go Live!")
+            enabled: false
+            tip: qsTr("Streaming is not connected yet")
+        }
+
+        // The Recording node names the bitstreams this action writes.
+        ToolButton {
+            objectName: "recordButton"
+            width: 96
+            height: 28
+            label: Preview.recording ? qsTr("Stop") : qsTr("Record")
+            active: Preview.recording
+            activeColor: Theme.c.error
+            enabled: !Preview.recordingPending && (Preview.recording || bar.recordTarget !== "")
+            tip: Preview.recording
+                 ? qsTr("Stop recording and close %1").arg(Preview.recordingPath)
+                 : bar.recordTarget !== ""
+                   ? qsTr("Record to the configured recording folder")
+                   : qsTr("Connect a Recording destination to video and audio encoders")
+            onClicked: {
+                if (Preview.recording) {
+                    Preview.stopRecording(bar.recordTarget);
+                    return;
+                }
+                const path = Document.recordingPathFor(bar.recordTarget);
+                if (path !== "")
+                    Preview.startRecording(bar.recordTarget, path);
+            }
+        }
+
+        ToolButton {
+            width: 96
+            height: 28
+            label: qsTr("Replay")
+            enabled: false
+            tip: qsTr("The replay buffer is not built yet")
+        }
+    }
+
+}

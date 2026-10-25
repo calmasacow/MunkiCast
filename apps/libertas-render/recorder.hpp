@@ -11,6 +11,7 @@
 #include <lencode/encoder.hpp>
 
 #include <chrono>
+#include <cmath>
 #include <string>
 
 /// Writing one encode to one file.
@@ -25,7 +26,10 @@ class Recorder {
   public:
     explicit Recorder(AudioSources& audio) : audio_(audio) {}
 
-    ~Recorder() { stop(); }
+    ~Recorder() {
+        const auto error = stop();
+        if (!error.empty()) lc::error("Recording did not close cleanly: {}", error);
+    }
 
     [[nodiscard]] bool running() const { return encoder_ != nullptr; }
 
@@ -36,14 +40,10 @@ class Recorder {
     lcomp::RecordState control(const lcomp::RecordRequest& request,
                                const ldoc::Project& project) {
         if (!request.start) {
-            stop();
-            return {};
+            return {false, stop()};
         }
-        if (encoder_) {
-            // Not an error worth refusing over: the operator asked for a recording and will
-            // get one. Rolling the file over is the behaviour that matches the button.
-            stop();
-        }
+        if (encoder_)
+            return {true, "A recording is already running; stop it before starting another."};
 
         const ldoc::Encode* encode = project.encode(request.encode);
         if (!encode)
@@ -84,73 +84,72 @@ class Recorder {
         canvas_ = canvas->id;
         width_ = cfg.source_width;
         height_ = cfg.source_height;
+        frame_rate_ = static_cast<double>(cfg.fps_num) / cfg.fps_den;
+        video_origin_ = -1;
+        last_video_slot_ = -1;
         started_ = std::chrono::steady_clock::now();
         audio_.tap(audio ? audio->bus : ldoc::Id::nil());
         lc::info("recording {} to {}", encode->name, request.path);
         return {true, {}};
     }
 
-    /// One composited frame at the canvas's own size.
-    void frame(const ldoc::Id& canvas, const lcomp::Picture& picture) {
+    /// One composited frame; report a failed recording back over the preview channel.
+    std::optional<lcomp::RecordState> frame(const ldoc::Id& canvas,
+                                           const lcomp::Picture& picture) {
         if (!encoder_ || canvas != canvas_)
-            return;
-        // A frame that is not the size the encoder opened with cannot be submitted; the
-        // encoder would have to be reopened, and a file that changes size mid-stream is not
-        // one that plays. Dropping is the honest failure, and it says so once.
+            return std::nullopt;
+        std::string error;
         if (picture.width != static_cast<std::int32_t>(width_) ||
             picture.height != static_cast<std::int32_t>(height_)) {
-            if (!warned_size_) {
-                warned_size_ = true;
-                lc::warn("the canvas is {}x{} but the recording opened at {}x{}; frames are "
-                         "being dropped",
-                         picture.width, picture.height, width_, height_);
+            error = "Recording stopped because the canvas size changed.";
+        } else if (const auto* pixels = picture.read_from()) {
+            const auto pts = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                std::chrono::steady_clock::now() - started_).count();
+            // Match encoder timestamp rounding; millisecond preview ticks may arrive early.
+            if (video_origin_ < 0) video_origin_ = pts;
+            const auto slot = std::llround(static_cast<double>(pts - video_origin_) * frame_rate_ / 1e9);
+            if (slot > last_video_slot_) {
+                if (libertas::encode::encoder_video(*encoder_, pixels, picture.stride, pts, error))
+                    last_video_slot_ = slot;
             }
-            return;
+            if (error.empty()) pump_audio(pts, error);
+        } else {
+            error = "Recording stopped because the rendered frame is unavailable.";
         }
-        const std::uint8_t* pixels = picture.read_from();
-        if (pixels == nullptr)
-            return;
-
-        const auto now = std::chrono::steady_clock::now();
-        const auto pts = std::chrono::duration_cast<std::chrono::nanoseconds>(now - started_)
-                             .count();
-        std::string error;
-        if (!libertas::encode::encoder_video(*encoder_, pixels, picture.stride, pts, error)) {
-            lc::error("recording stopped: {}", error);
-            stop();
-            return;
-        }
-        pump_audio(pts);
+        if (error.empty())
+            return std::nullopt;
+        const auto finish_error = stop();
+        if (!finish_error.empty())
+            error += " " + finish_error;
+        lc::error("{}", error);
+        return lcomp::RecordState{false, std::move(error)};
     }
 
-    /// Flush and write the trailer. A file is not playable before this, so it happens on every
-    /// path out -- an explicit stop, a failed frame, and the destructor.
-    void stop() {
+    /// Flush even after failure, then release the file and audio route.
+    std::string stop() {
         if (!encoder_)
-            return;
-        pump_audio(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                       std::chrono::steady_clock::now() - started_)
-                       .count());
+            return {};
         std::string error;
-        if (!libertas::encode::encoder_finish(*encoder_, error))
-            lc::error("the recording did not close cleanly: {}", error);
-        else
-            lc::info("recording finished");
+        pump_audio(std::chrono::duration_cast<std::chrono::nanoseconds>(
+                       std::chrono::steady_clock::now() - started_).count(), error);
+        std::string finish_error;
+        if (!libertas::encode::encoder_finish(*encoder_, finish_error)) {
+            if (!error.empty()) error += " ";
+            error += finish_error;
+        }
         encoder_.reset();
         canvas_ = ldoc::Id::nil();
-        warned_size_ = false;
         audio_.tap(ldoc::Id::nil());
+        return error;
     }
 
   private:
-    void pump_audio(std::int64_t pts_ns) {
+    void pump_audio(std::int64_t pts_ns, std::string& error) {
         auto samples = audio_.drain_tap();
         if (samples.empty())
             return;
-        std::string error;
         const auto frames = static_cast<std::uint32_t>(samples.size() / 2);
-        if (!libertas::encode::encoder_audio(*encoder_, samples.data(), frames, pts_ns, error))
-            lc::warn("audio was not accepted by the recording: {}", error);
+        libertas::encode::encoder_audio(*encoder_, samples.data(), frames, pts_ns, error);
     }
 
     AudioSources& audio_;
@@ -159,5 +158,7 @@ class Recorder {
     std::uint32_t width_ = 0;
     std::uint32_t height_ = 0;
     std::chrono::steady_clock::time_point started_{};
-    bool warned_size_ = false;
+    double frame_rate_ = 0;
+    std::int64_t video_origin_ = -1;
+    std::int64_t last_video_slot_ = -1;
 };

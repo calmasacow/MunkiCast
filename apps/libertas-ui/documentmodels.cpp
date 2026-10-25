@@ -56,6 +56,7 @@ QVariant NodeModel::data(const QModelIndex& index, int role) const {
     case VisibleRole:     return r->visible;
     case LockedRole:      return r->locked;
     case IsGroupRole:     return r->isGroup;
+    case ExpandedRole:    return r->expanded;
     case EffectCountRole: return r->effectCount;
     case CacheableRole:   return r->cacheable;
     case CacheUsedRole:   return r->cacheUsed;
@@ -71,7 +72,7 @@ QHash<int, QByteArray> NodeModel::roleNames() const {
         {SourceTypeRole, "sourceType"},
         {SourceIdRole, "sourceId"},
         {DepthRole, "depth"},    {VisibleRole, "nodeVisible"},
-        {LockedRole, "locked"},  {IsGroupRole, "isGroup"},
+        {LockedRole, "locked"},  {IsGroupRole, "isGroup"}, {ExpandedRole, "expanded"},
         {EffectCountRole, "effectCount"},
         {CacheableRole, "cacheable"},
         {CacheUsedRole, "cacheUsed"},

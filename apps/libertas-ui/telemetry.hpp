@@ -89,6 +89,7 @@ public:
 
     /// Take a reading now, rather than waiting for the timer. Used by the self-check.
     Q_INVOKABLE void sample();
+    Q_INVOKABLE void setDiskPath(const QString& path);
 
 signals:
     void sampled();

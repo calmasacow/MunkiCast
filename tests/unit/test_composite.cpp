@@ -757,4 +757,69 @@ LTEST_CASE(cropping_samples_only_the_retained_source_pixels) {
     CHECK_EQ(pixel(picture, 3, 3), std::tuple(0, 255, 0, 255));
 }
 
+LTEST_CASE(source_clones_follow_shared_inputs_and_keep_independent_filters) {
+    auto input = colour_source(0, 0, 0, 4, 4);
+    ldoc::Effect correction;
+    correction.id = ldoc::Id::generate();
+    correction.type = "filter.color-correction";
+    correction.params["brightness"] = 0.25;
+    input.effects = {correction};
+    auto clone = colour_source(0, 0, 0, 4, 4);
+    clone.type = "source.clone";
+    clone.settings["target"] = input.id.to_string();
+    auto scene = scene_named("Clone only");
+    scene.roots = {bound_to(clone)};
+    auto project = show(4, scene, {input, clone});
+    auto image = lcomp::composite_canvas(project, project.canvases[0].id);
+    REQUIRE(image.gaps.empty());
+    CHECK_EQ(image.pixels[0], 64);
+    project.sources[1].settings["noFilters"] = true;
+    image = lcomp::composite_canvas(project, project.canvases[0].id);
+    CHECK_EQ(image.pixels[0], 0);
+    correction.id = ldoc::Id::generate();
+    correction.params["brightness"] = 0.5;
+    project.sources[1].effects = {correction};
+    image = lcomp::composite_canvas(project, project.canvases[0].id);
+    CHECK_EQ(image.pixels[0], 128);
+    project.sources[0].settings["color"] = ldoc::Rgba::from_srgb8(255, 0, 0);
+    image = lcomp::composite_canvas(project, project.canvases[0].id);
+    CHECK_EQ(image.pixels[0], 255);
+    project.sources[0].name = "Renamed input";
+    CHECK(ldoc::resolve_source(project, project.sources[1]).has_value());
+    project.sources.erase(project.sources.begin());
+    image = lcomp::composite_canvas(project, project.canvases[0].id);
+    REQUIRE(!image.gaps.empty());
+    CHECK_EQ(image.gaps.front().reason, GapReason::NoSource);
+}
+
+LTEST_CASE(source_clones_share_capture_identity_and_reject_cycles) {
+    auto input = screen_source("DP-1");
+    auto clone = input;
+    clone.id = ldoc::Id::generate();
+    clone.type = "source.clone";
+    clone.settings["target"] = input.id.to_string();
+    auto scene = scene_named("Clone");
+    scene.roots = {bound_to(clone)};
+    auto project = show(4, scene, {input, clone});
+    const auto pixels = flat_bgra(4, 4, 255, 0, 0);
+    int requested = 0;
+    const auto image = lcomp::composite_canvas(project, project.canvases[0].id,
+        [&](const ldoc::Source& source) {
+            CHECK_EQ(source.id, input.id);
+            CHECK_EQ(source.type, input.type);
+            ++requested;
+            return view_of(pixels, 4, 4);
+        });
+    CHECK_EQ(requested, 1);
+    CHECK_EQ(pixel(image, 0, 0), std::tuple(255, 0, 0, 255));
+    project.sources[0].type = "source.clone";
+    project.sources[0].settings["target"] = clone.id.to_string();
+    CHECK(!ldoc::resolve_source(project, project.sources[1]));
+    const auto cyclic = lcomp::composite_canvas(project, project.canvases[0].id);
+    CHECK(!cyclic.gaps.empty());
+    CHECK(!ldoc::has_audio(project.sources[1]));
+    project.sources[1].settings["audio"] = true;
+    CHECK(ldoc::has_audio(project.sources[1]));
+}
+
 LTEST_MAIN("composite")

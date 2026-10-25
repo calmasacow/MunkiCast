@@ -190,12 +190,22 @@ category. The category-change handler previously depended on a derived QML bindi
 that could still hold the preceding category, yielding an empty source query.
 The UI self-check now switches categories and checks actual scene tiles.
 
-Source Clone remains **unimplemented as a user workflow**. ReferenceData exists
-in the document model but the compositor rejects reference nodes; it is not a
-working source-clone port. Countdown gained a native dock on 2026-10-22 (see above),
-with explicit limits rather than full plugin equivalence. Reference repositories
-were inspected at `/tmp/libertas-clone-reference` and
-`/tmp/libertas-countdown-reference`.
+Source Clone now has a native fixed-source workflow (2026-10-24): **Add Source →
+Source Clone**, then choose an input in its settings. `source.clone` follows a
+stable source ID, shares the existing capture/worker, supports independent source
+and placement filters, optional audio with independent routing, and bypass of
+input video filters. Audio starts disabled; enabling it routes existing placements
+to Program. Settings use ordinary save/load and undo commands. Missing inputs and
+cycles produce no picture; settings reject cycles and invalid targets. Chains are
+bounded to 64. OBS collection import/export maps fixed source targets and options.
+
+This is native source cloning, not full OBS plugin equivalence: current/previous
+scene selection, scene/canvas targets, active-clone lifecycle controls and video
+buffer/downscale options are not implemented. Imports report unsupported target
+modes and buffering. The compositor still rejects the separate `ReferenceData`
+node concept. Countdown gained a native dock on 2026-10-22 (see above), also with
+explicit compatibility limits. Reference repos include
+`/home/calmasacow/Development/obs-source-clone` and `/tmp/libertas-countdown-reference`.
 
 Nested-scene failure was subsequently identified as frozen playback in
 `FS.W.CAM`; see the live-refresh fix above. Saved Marathon collection remains
@@ -484,7 +494,9 @@ import report remain alongside the imported project.
 1. **Native source cloning.** Use https://github.com/exeldro/obs-source-clone as a
    behavior reference; expose a native equivalent and translate OBS parameters.
    Review target source/scene/canvas, audio, active lifetime, buffering and filter
-   inclusion. Six imported clones currently produce no picture/audio. Two target
+   inclusion. Fixed-source cloning and import/export landed on 2026-10-24 (see
+   above); scene/canvas and buffer modes remain pending. At the initial audit,
+   six imported clones produced no picture/audio. Two target
    `Camera.SRC`, which is absent from the original collection: report unresolved
    targets and support explicit remapping rather than guessing a replacement.
 2. **Stock filters.** Make OBS-equivalent filters available natively and translate

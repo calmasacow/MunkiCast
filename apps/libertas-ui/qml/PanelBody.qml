@@ -283,6 +283,7 @@ Item {
             // Once a frame is up, the caption is a corner note. The picture is the content;
             // a title stacked on the middle of it would be covering the thing it describes.
             ProgramOverlay {
+                inputSurface: body
                 z: 2
                 canvasId: body.panelCanvas
                 canvasWidth: programView.canvasSize.width

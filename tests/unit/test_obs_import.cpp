@@ -78,6 +78,53 @@ std::array<int, 3> pixel(const lcomp::Picture& p, int x, int y) {
 }
 } // namespace
 
+LTEST_CASE(source_clone_import_export_preserves_input_identity_and_options) {
+    Scratch scratch;
+    auto root = collection();
+    auto clone = source("Clone green", "source-clone", "clone-green");
+    clone["settings"]["clone"] = "green";
+    clone["settings"]["audio"] = true;
+    clone["settings"]["no_filters"] = true;
+    auto placement = item("Clone green", "clone-green", 2, 2);
+    placement["align"] = 0;
+    root["sources"][2]["settings"]["items"] = J(Json::arrayValue);
+    root["sources"][2]["settings"]["items"].append(placement);
+    root["sources"].append(clone);
+    scratch.write(root);
+    auto imported = scratch.convert();
+    REQUIRE_MSG(imported.has_value(), "{}", imported.error());
+    const auto find_clone = [](const ldoc::Project& project) -> const ldoc::Source* {
+        for (const auto& source : project.sources)
+            if (source.type == "source.clone") return &source;
+        return nullptr;
+    };
+    const auto* native = find_clone(imported->project);
+    REQUIRE(native);
+    auto input = ldoc::resolve_source(imported->project, *native);
+    REQUIRE(input);
+    CHECK_EQ(input->name, std::string("green"));
+    const auto picture = lcomp::composite_canvas(imported->project, imported->project.canvases[0].id);
+    CHECK_EQ(pixel(picture, 2, 2), (std::array<int, 3>{0, 255, 0}));
+    CHECK_EQ(pixel(picture, 0, 0), (std::array<int, 3>{0, 0, 0}));
+    CHECK(ldoc::has_audio(*native));
+    CHECK(std::get<bool>(native->settings.at("noFilters")));
+    const auto output = scratch.output.string() + ".obs.json";
+    auto reordered = imported->project;
+    for (auto& source : reordered.sources)
+        if (source.id == input->id) source.name = "Show";
+    std::reverse(reordered.sources.begin(), reordered.sources.end());
+    REQUIRE(limport::export_obs(reordered, scratch.output, output));
+    const auto again = limport::import_obs(output, output + ".libertas", {4, 4, {60, 1}});
+    REQUIRE_MSG(again.has_value(), "{}", again.error());
+    native = find_clone(again->project);
+    REQUIRE(native);
+    input = ldoc::resolve_source(again->project, *native);
+    REQUIRE(input);
+    CHECK_EQ(input->name, std::string("Show (2)"));
+    const auto roundtrip = lcomp::composite_canvas(again->project, again->project.canvases[0].id);
+    CHECK_EQ(roundtrip.pixels, picture.pixels);
+}
+
 LTEST_CASE(import_creates_reopenable_project_and_preserves_stack_and_identity) {
     Scratch scratch;
     auto root = collection();

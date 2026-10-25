@@ -413,7 +413,22 @@ struct Converter {
         auto& p = out.settings;
         const auto version = str(e.original, "versioned_id", e.type);
         bool audio = false;
-        if (e.type.starts_with("color_source")) {
+        if (e.type == "source-clone") {
+            out.type = "source.clone";
+            audio = flag(s, "audio");
+            p["audio"] = audio;
+            p["noFilters"] = flag(s, "no_filters");
+            p["target"] = std::string{};
+            const auto name = str(s, "clone");
+            const auto found = names.find(name);
+            if (integer(s, "clone_type", 0, 0, 2) == 0 && found != names.end() &&
+                found->second.size() == 1 && !entries[found->second.front()].scene)
+                p["target"] = entries[found->second.front()].id.to_string();
+            else
+                warn(e, "clone target unavailable: " + name + "; select a native source input");
+            if (num(s, "buffer_frame") != 0)
+                warn(e, "clone video buffer not applied; uses the shared live frame");
+        } else if (e.type.starts_with("color_source")) {
             out.type = "source.color";
             const bool old = version == "color_source";
             p["color"] = colour(s, "color", version == "color_source_v3" ? 0xffd1d1d1 : 0xffffffff);
@@ -858,6 +873,22 @@ struct Converter {
             }
             if (num(e.original, "deinterlace_mode") != 0)
                 warn(e, "deinterlacing not applied");
+        }
+        // Clone placement uses the input's filtered bounds, including inputs listed later.
+        for (auto& entry : entries) {
+            if (entry.type != "source-clone") continue;
+            const auto* source = result.project.source(entry.id);
+            const auto input = source ? ldoc::resolve_source(result.project, *source) : std::nullopt;
+            if (!input) continue;
+            const auto width = input->settings.find("width");
+            const auto height = input->settings.find("height");
+            if (width == input->settings.end() || height == input->settings.end()) continue;
+            const auto* w = std::get_if<std::int64_t>(&width->second);
+            const auto* h = std::get_if<std::int64_t>(&height->second);
+            if (w && h)
+                if (const auto size = lcomp::filter_size(input->effects, static_cast<double>(*w),
+                                                        static_cast<double>(*h)))
+                    entry.size = *size;
         }
         // Validate references and bound recursive scene evaluation before constructing any output.
         std::vector<int> state(entries.size());

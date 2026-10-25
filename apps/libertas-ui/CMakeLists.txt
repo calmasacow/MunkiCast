@@ -73,6 +73,7 @@ qt_add_qml_module(libertas-ui
         qml/CacheStateDialog.qml
         qml/CanvasPanel.qml
         qml/ChainIcon.qml
+        qml/BroadcastBar.qml
         qml/EncodeView.qml
         qml/EncodeGraph.qml
         qml/EncodeNodeCard.qml
@@ -100,11 +101,11 @@ qt_add_qml_module(libertas-ui
         qml/MainMenu.qml
         qml/NoticeLog.qml
         qml/NumberField.qml
-        qml/OutputsManagerDialog.qml
         qml/OutputsPanel.qml
         qml/PanelBody.qml
         qml/PanelFrame.qml
         qml/PreferencesDialog.qml
+        qml/TransformMenu.qml
         qml/ProgramOverlay.qml
         qml/PropertiesPanel.qml
         qml/SceneLinkDialog.qml

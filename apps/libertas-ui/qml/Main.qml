@@ -59,6 +59,11 @@ Window {
     }
 
     Connections {
+        target: Preview
+        function onNotice(text) { root.report(text); }
+    }
+
+    Connections {
         target: Document
         function onFiltersRequested(owner) { filtersDialog.open(owner); }
         function onNotice(text) {
@@ -108,20 +113,35 @@ Window {
         z: 10000
     }
 
-    MainMenu {
-        id: mainMenu
+    Rectangle {
+        id: topChrome
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: parent.top
+        height: Math.max(mainMenu.height + workspaceTabs.height, broadcastBar.height)
+        color: Theme.c.panelHeader
+    }
+
+    MainMenu {
+        id: mainMenu
+        anchors.left: parent.left
+        anchors.top: parent.top
         mainWindow: root
         collectionDialog: collectionEditor
+    }
+
+    BroadcastBar {
+        id: broadcastBar
+        anchors.left: mainMenu.right
+        anchors.right: parent.right
+        anchors.verticalCenter: topChrome.verticalCenter
     }
 
     WorkspaceTabs {
         id: workspaceTabs
 
         anchors.left: parent.left
-        anchors.right: parent.right
+        anchors.right: mainMenu.right
         anchors.top: mainMenu.bottom
     }
 
@@ -139,7 +159,7 @@ Window {
 
         anchors.left: parent.left
         anchors.right: parent.right
-        anchors.top: workspaceTabs.bottom
+        anchors.top: topChrome.bottom
         anchors.bottom: statusBar.top
 
         onWidthChanged: Workspace.setViewport(width, height)
@@ -311,7 +331,7 @@ Window {
     Loader {
         anchors.left: parent.left
         anchors.right: parent.right
-        anchors.top: workspaceTabs.bottom
+        anchors.top: topChrome.bottom
         anchors.bottom: statusBar.top
         active: root.encodeActive
         visible: root.encodeActive

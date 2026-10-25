@@ -127,6 +127,7 @@ Item {
 
     Rectangle {
         id: knob
+        objectName: "mixerFaderHandle"
 
         anchors.horizontalCenter: parent.horizontalCenter
         y: (fader.height - height) * (1 - fader.fraction(fader.shownGain))
@@ -163,6 +164,8 @@ Item {
             fader.moved(fader.shownGain);
         }
         onReleased: {
+            if (!fader.dragging)
+                return;
             fader.dragging = false;
             fader.moved(fader.shownGain);
             fader.released();
@@ -175,8 +178,12 @@ Item {
             fader.shownGain = fader.gainDb;
         }
         onDoubleClicked: {
-            if (!fader.locked)
-                fader.reset();
+            if (fader.locked)
+                return;
+            fader.dragging = false;
+            fader.shownGain = 0;
+            fader.released();
+            fader.reset();
         }
     }
 

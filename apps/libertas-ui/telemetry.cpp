@@ -154,6 +154,13 @@ Telemetry* Telemetry::create(QQmlEngine*, QJSEngine*) {
     return new Telemetry;
 }
 
+void Telemetry::setDiskPath(const QString& path) {
+    if (disk_path_ == path)
+        return;
+    disk_path_ = path;
+    sample();
+}
+
 void Telemetry::sample() {
     read_cpu();
     read_memory();

@@ -14,6 +14,7 @@
 
 #include "ldoc/json.hpp"
 #include "ldoc/project_io.hpp"
+#include "lcomp/composite.hpp"
 
 #include <QCommandLineOption>
 #include <QCommandLineParser>
@@ -36,6 +37,7 @@
 #include <QTemporaryDir>
 #include <QStandardPaths>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJSValue>
@@ -975,6 +977,28 @@ int main(int argc, char** argv) {
                 QObject* props =
                     window->findChild<QObject*>(QStringLiteral("encodeProperties"));
                 report(props != nullptr, "with a properties column beside it");
+                auto* graph = window->findChild<QQuickItem*>(QStringLiteral("encodeGraph"));
+                auto* watermark = window->findChild<QQuickItem*>(QStringLiteral("encodeWatermark"));
+                report(graph && watermark && props && graph->y() == 0 &&
+                           props->property("y").toDouble() == 0,
+                       "the graph and properties reach the top edge without a header row");
+                if (graph && watermark && view) {
+                    const auto old_pan = graph->property("panY");
+                    const auto old_kind = view->property("selectedKind");
+                    const auto old_id = view->property("selectedId");
+                    graph->setProperty("panY", -graph->property("railTop").toDouble());
+                    settle();
+                    const auto at = watermark->mapToScene(
+                        QPointF(watermark->width() / 2, watermark->height() / 2));
+                    post(QEvent::MouseButtonPress, at, Qt::LeftButton, Qt::LeftButton);
+                    post(QEvent::MouseButtonRelease, at, Qt::LeftButton, Qt::NoButton);
+                    settle();
+                    report(view->property("selectedKind") == old_kind &&
+                               view->property("selectedId") == old_id,
+                           "the reserved watermark area blocks nodes panned beneath it");
+                    graph->setProperty("panY", old_pan);
+                    settle();
+                }
                 // A graph with nodes and no edges is a list. The curves are what say which
                 // bitstream goes where, so their absence is a failure, not a cosmetic one.
                 QObject* edges =
@@ -2222,6 +2246,42 @@ int main(int argc, char** argv) {
             document.undo(); document.undo(); document.undo(); document.undo();
         }
 
+        {
+            document.addNewSourceToScene(QStringLiteral("Clone input"), QStringLiteral("source.color"));
+            const auto input = document.nodeProperties().value("sourceId").toString();
+            const auto input_node = document.selectedNode();
+            document.addNewSourceToScene(QStringLiteral("Source Clone"), QStringLiteral("source.clone"));
+            const auto clone = document.nodeProperties().value("sourceId").toString();
+            document.applySourceSettings(clone, QStringLiteral("Source Clone"),
+                {{"target", input}, {"audio", true}, {"noFilters", true}});
+            const auto details = document.sourceDetails(clone).value("settings").toMap();
+            report(details.value("target").toString() == input && details.value("audio").toBool() &&
+                   !document.placedRect(QString{}, document.selectedNode()).isEmpty(),
+                   "Source Clone selects a shared input with transform bounds and audio");
+            const auto resolved_id = ldoc::Id::parse(clone.toStdString());
+            const auto* source = resolved_id ? document.projectForBindings().source(*resolved_id) : nullptr;
+            report(source && ldoc::resolve_source(document.projectForBindings(), *source).has_value(),
+                   "the clone resolves through the document used by the renderer");
+            document.applySourceSettings(clone, QStringLiteral("Source Clone"), {{"target", clone}});
+            report(document.sourceDetails(clone).value("settings").toMap().value("target").toString() == input,
+                   "Source Clone refuses a self-reference without changing its input");
+            if (source) {
+                auto media = *ldoc::resolve_source(document.projectForBindings(), *source);
+                media.type = "source.media";
+                document.runCommand(ldoc::SetSource{media});
+                document.setNodeVisible(input_node, false);
+                report(document.hasLiveSource(),
+                       "a visible clone of a hidden media input keeps live refresh running");
+                document.undo();
+                document.undo();
+            }
+            document.undo();
+            report(document.sourceDetails(clone).value("settings").toMap().value("target").toString().isEmpty(),
+                   "one Undo restores the clone's previous settings");
+            document.undo();
+            document.undo();
+        }
+
         // ---- a source's own settings, behind the gear -------------------------------------
         //
         // The dialog commits nothing until it is accepted, so what is checked is the commit:
@@ -2257,6 +2317,16 @@ int main(int argc, char** argv) {
                                                   field.value("value").toBool();
                                        }),
                    "media settings expose hardware decoding enabled by default");
+        }
+        for (const auto* type : {"source.media", "source.playlist", "source.browser"}) {
+            const auto fields = document.sourceSettingsSchema(QString::fromLatin1(type));
+            report(std::ranges::any_of(fields, [](const QVariant& value) {
+                const auto field = value.toMap();
+                return field.value("key").toString() == "ignoreAudio" &&
+                       field.value("label").toString() == "Ignore Audio" &&
+                       field.value("kind").toString() == "bool" &&
+                       !field.value("value").toBool();
+            }), "media and browser settings expose Ignore Audio unchecked by default");
         }
 
         {
@@ -2995,6 +3065,107 @@ int main(int argc, char** argv) {
                 document.undo();
                 settle();
 
+                // The source is wholly outside the renderable canvas. Its right handle is
+                // still visible in the panel gutter and must receive real pointer events.
+                const double units_per_pixel = 1920.0 / frame->width();
+                document.setDrawnRect(-1920.0 - 5.0 * units_per_pixel, 0.0, 1920.0, 1080.0);
+                settle();
+                const QString off_canvas_stack = document.undoDescription();
+                const QPointF outside = frame->mapToScene(QPointF(-5.0, frame->height() / 2.0));
+                const QPointF recovered = outside + QPointF(35.0, 0.0);
+                post(QEvent::MouseButtonPress, outside, Qt::LeftButton, Qt::LeftButton);
+                post(QEvent::MouseMove, recovered, Qt::NoButton, Qt::LeftButton,
+                     Qt::ShiftModifier);
+                post(QEvent::MouseButtonRelease, recovered, Qt::LeftButton, Qt::NoButton,
+                     Qt::ShiftModifier);
+                settle();
+                const QVariantMap recovered_rect = document.placedRect(QString{}, card);
+                report(recovered_rect.value(QStringLiteral("x")).toDouble() +
+                           recovered_rect.value(QStringLiteral("width")).toDouble() >
+                               20.0 * units_per_pixel,
+                       "an off-canvas handle resizes a wholly off-canvas source back into view");
+                document.undo();
+                settle();
+                report(document.undoDescription() == off_canvas_stack &&
+                           std::abs(document.placedRect(QString{}, card)
+                                        .value(QStringLiteral("width")).toDouble() - 1920.0) < 0.1,
+                       "one undo restores the off-canvas resize");
+
+                // A body drag can also start beyond the canvas, away from every handle.
+                document.setDrawnRect(-100.0 * units_per_pixel, 0.0,
+                                      200.0 * units_per_pixel, 1080.0);
+                settle();
+                const QPointF body = frame->mapToScene(QPointF(-5.0, frame->height() / 4.0));
+                const QPointF body_to = body + QPointF(30.0, 0.0);
+                post(QEvent::MouseButtonPress, body, Qt::LeftButton, Qt::LeftButton);
+                post(QEvent::MouseMove, body_to, Qt::NoButton, Qt::LeftButton);
+                post(QEvent::MouseButtonRelease, body_to, Qt::LeftButton, Qt::NoButton);
+                settle();
+                report(std::abs(document.placedRect(QString{}, card)
+                                    .value(QStringLiteral("x")).toDouble() +
+                                70.0 * units_per_pixel) < 1.5,
+                       "a source body can be dragged from outside the canvas");
+
+                // Sources provides the same Transform recovery commands without needing to
+                // locate any part of the source in the viewport.
+                QQuickItem* source_row = nullptr;
+                for (auto* item : collect(window->contentItem(), QStringLiteral("sourceRow"))) {
+                    if (item->isVisible() && item->property("nodeId").toString() == card)
+                        source_row = item;
+                }
+                report(source_row != nullptr, "the off-canvas source remains in Sources");
+                if (source_row != nullptr) {
+                    const QPointF row_at = source_row->mapToScene(
+                        QPointF(source_row->width() / 2.0, source_row->height() / 2.0));
+                    post(QEvent::MouseMove, row_at, Qt::NoButton, Qt::NoButton);
+                    post(QEvent::MouseButtonPress, row_at, Qt::RightButton, Qt::RightButton);
+                    post(QEvent::MouseButtonRelease, row_at, Qt::RightButton, Qt::NoButton);
+                    settle();
+                    QQuickItem* transform_row = nullptr;
+                    for (auto* item : collect(window->contentItem(), QStringLiteral("stripMenuItem"))) {
+                        if (item->isVisible() &&
+                            item->property("label").toString() == QLatin1String("Transform"))
+                            transform_row = item;
+                    }
+                    report(transform_row != nullptr, "Sources context menu offers Transform");
+                    if (transform_row != nullptr) {
+                        const QPointF at = transform_row->mapToScene(
+                            QPointF(transform_row->width() / 2.0, transform_row->height() / 2.0));
+                        post(QEvent::MouseMove, at, Qt::NoButton, Qt::NoButton);
+                        settle();
+                        post(QEvent::MouseButtonPress, at, Qt::LeftButton, Qt::LeftButton);
+                        post(QEvent::MouseButtonRelease, at, Qt::LeftButton, Qt::NoButton);
+                        settle();
+                        QQuickItem* reset_row = nullptr;
+                        for (auto* item : collect(window->contentItem(), QStringLiteral("stripMenuItem"))) {
+                            if (item->isVisible() && item->property("label").toString() ==
+                                                        QLatin1String("Reset Transform"))
+                                reset_row = item;
+                        }
+                        report(reset_row != nullptr, "Sources Transform submenu offers Reset Transform");
+                        if (reset_row != nullptr) {
+                            const QPointF reset_at = reset_row->mapToScene(
+                                QPointF(reset_row->width() / 2.0, reset_row->height() / 2.0));
+                            post(QEvent::MouseMove, reset_at, Qt::NoButton, Qt::NoButton);
+                            settle();
+                            post(QEvent::MouseButtonPress, reset_at, Qt::LeftButton, Qt::LeftButton);
+                            post(QEvent::MouseButtonRelease, reset_at, Qt::LeftButton, Qt::NoButton);
+                            settle();
+                            const QVariantMap reset_rect = document.placedRect(QString{}, card);
+                            report(std::abs(reset_rect.value(QStringLiteral("x")).toDouble()) < 0.1 &&
+                                       std::abs(reset_rect.value(QStringLiteral("width")).toDouble() -
+                                                1920.0) < 0.1,
+                                   "Sources Reset Transform recovers the source onto the canvas");
+                        }
+                    }
+                    for (auto* menu : collect(window->contentItem(), QStringLiteral("nodeMenu")))
+                        QMetaObject::invokeMethod(menu, "close");
+                }
+                for (int step = 0; step < 8 && document.canUndo() &&
+                                    document.undoDescription() != after_add; ++step)
+                    document.undo();
+                settle();
+
                 const QPointF nudged = frame->mapToScene(
                     QPointF(frame->width() / 2.0 + 20.0, frame->height() / 2.0 + 16.0));
                 post(QEvent::MouseButtonPress, mid, Qt::LeftButton, Qt::LeftButton);
@@ -3528,12 +3699,73 @@ int main(int argc, char** argv) {
 
             // Shift, from the anchor. Three nodes were added in a row, so a run from the
             // first to the last takes all three however the tree is shaped.
-            document.selectNode(a);
+            const auto source_row = [&](const QString& id) -> QQuickItem* {
+                for (auto* row : collect(window->contentItem(), QStringLiteral("sourceRow")))
+                    if (row->isVisible() && row->property("nodeId").toString() == id)
+                        return row;
+                return nullptr;
+            };
+            const auto click_source = [&](const QString& id, Qt::KeyboardModifiers mods) {
+                auto* row = source_row(id);
+                if (!row)
+                    return false;
+                const QPointF at = row->mapToScene(QPointF(row->width() / 2.0, row->height() / 2.0));
+                post(QEvent::MouseMove, at, Qt::NoButton, Qt::NoButton, mods);
+                post(QEvent::MouseButtonPress, at, Qt::LeftButton, Qt::LeftButton, mods);
+                // Modest hand movement must not turn a range click into a drag.
+                const QPointF release = at + QPointF(6.0, 0.0);
+                post(QEvent::MouseMove, release, Qt::NoButton, Qt::LeftButton, mods);
+                post(QEvent::MouseButtonRelease, release, Qt::LeftButton, Qt::NoButton, mods);
+                settle();
+                return true;
+            };
+            report(click_source(a, Qt::NoModifier) && click_source(pick_c, Qt::ShiftModifier) &&
+                       document.selectedNodes().size() == 3 &&
+                       document.selectedNodes().contains(b),
+                   "real Shift-click selects every row between, despite small pointer movement");
+            report(click_source(b, Qt::ControlModifier) && document.selectedNodes().size() == 2 &&
+                       !document.selectedNodes().contains(b),
+                   "real Ctrl-click toggles one source without clearing the others");
+            click_source(a, Qt::NoModifier);
+            click_source(pick_c, Qt::ShiftModifier);
+
+            const QString home_scene = document.selectedScene();
+            document.copySelectedNodes();
+            document.addSceneOn(canvas, QStringLiteral("Paste range target"));
             settle();
+            report(document.nodesModel()->rowCount() == 0, "the range paste target starts empty");
+            for (auto* panel : collect(window->contentItem(), QStringLiteral("sourcesPanel"))) {
+                if (!panel->isVisible() || panel->property("canvasId").toString() != QString{})
+                    continue;
+                const QPointF at = panel->mapToScene(QPointF(panel->width() / 2.0, 40.0));
+                post(QEvent::MouseMove, at, Qt::NoButton, Qt::NoButton);
+                post(QEvent::MouseButtonPress, at, Qt::RightButton, Qt::RightButton);
+                post(QEvent::MouseButtonRelease, at, Qt::RightButton, Qt::NoButton);
+                settle();
+                break;
+            }
+            QQuickItem* paste_item = nullptr;
+            for (auto* item : collect(window->contentItem(), QStringLiteral("stripMenuItem")))
+                if (item->isVisible() && item->property("label").toString().startsWith(QLatin1String("Paste")))
+                    paste_item = item;
+            report(paste_item != nullptr, "empty Sources space offers a Paste context menu");
+            if (paste_item) {
+                const QPointF at = paste_item->mapToScene(
+                    QPointF(paste_item->width() / 2.0, paste_item->height() / 2.0));
+                post(QEvent::MouseMove, at, Qt::NoButton, Qt::NoButton);
+                post(QEvent::MouseButtonPress, at, Qt::LeftButton, Qt::LeftButton);
+                post(QEvent::MouseButtonRelease, at, Qt::LeftButton, Qt::NoButton);
+                settle();
+                report(document.nodesModel()->rowCount() == 3 && document.selectedNodes().size() == 3,
+                       "empty-space Paste copies the whole selected range into another scene");
+                document.undo();
+                settle();
+            }
+            document.undo(); // The temporary scene.
+            document.selectScene(home_scene);
+            document.selectNode(a);
             document.selectNodeExtended(canvas, pick_c, false, true);
             settle();
-            report(document.selectedNodes().size() >= 3,
-                   "shift-click takes the run between");
 
             // Group them. The group lands where the topmost selected node was.
             const QStringList before_group = document.selectedNodes();
@@ -3551,6 +3783,37 @@ int main(int argc, char** argv) {
                     all_inside = false;
             }
             report(all_inside, "with every selected source inside it");
+
+            auto* group_row = source_row(group);
+            auto* child_row = source_row(a);
+            report(group_row && child_row &&
+                       child_row->property("depth").toInt() > group_row->property("depth").toInt(),
+                   "group children carry an indented depth");
+            const auto toggle_group = [&] {
+                auto* row = source_row(group);
+                if (!row)
+                    return false;
+                const auto buttons = collect(row, QStringLiteral("sourceGroupToggle"));
+                if (buttons.isEmpty())
+                    return false;
+                auto* button = buttons.front();
+                const QPointF at = button->mapToScene(
+                    QPointF(button->width() / 2.0, button->height() / 2.0));
+                post(QEvent::MouseMove, at, Qt::NoButton, Qt::NoButton);
+                post(QEvent::MouseButtonPress, at, Qt::LeftButton, Qt::LeftButton);
+                post(QEvent::MouseButtonRelease, at, Qt::LeftButton, Qt::NoButton);
+                settle();
+                return true;
+            };
+            const int expanded_rows = document.nodesModel()->rowCount();
+            const QString group_undo = document.undoDescription();
+            report(toggle_group() && document.nodesModel()->rowCount() == expanded_rows - 3 &&
+                       source_row(a) == nullptr && document.parentOfNode(a) == group &&
+                       document.undoDescription() == group_undo,
+                   "the disclosure triangle hides children without changing scene data or undo");
+            report(toggle_group() && document.nodesModel()->rowCount() == expanded_rows &&
+                       source_row(a) != nullptr,
+                   "the disclosure triangle restores the children");
 
             document.undo();
             settle();
@@ -3951,6 +4214,19 @@ int main(int argc, char** argv) {
                 offered = offered || v.toMap().value("id").toString() == overlay;
             report(offered, "another scene is offered as something to add");
             const auto sourceDialogs = collect(window->contentItem(), QStringLiteral("addSourceDialog"));
+            const auto scene_usage_label = [&](const QString& scene_id) {
+                for (auto* tile : collect(window->contentItem(), QStringLiteral("existingSourceTile"))) {
+                    auto data = tile->property("modelData");
+                    if (data.metaType() == QMetaType::fromType<QJSValue>())
+                        data = data.value<QJSValue>().toVariant();
+                    if (tile->isVisible() && data.toMap().value("id").toString() == scene_id) {
+                        const auto labels = collect(tile, QStringLiteral("sourceUsageLabel"));
+                        if (!labels.isEmpty())
+                            return labels.front()->property("text").toString();
+                    }
+                }
+                return QString{};
+            };
             if (sourceDialogs.size() == 1) {
                 auto* picker = sourceDialogs.front();
                 QMetaObject::invokeMethod(picker, "open");
@@ -3967,6 +4243,9 @@ int main(int argc, char** argv) {
                     visibleOverlay = visibleOverlay || data.toMap().value("id") == overlay;
                 }
                 report(visibleOverlay, "switching source category to Scene immediately draws scene tiles");
+                report(scene_usage_label(overlay).contains(QLatin1String("scene list")) &&
+                           !scene_usage_label(overlay).contains(QLatin1String("unused")),
+                       "a standalone scene is listed on its canvas without an unused warning");
                 QMetaObject::invokeMethod(picker, "close");
                 settle();
             }
@@ -3982,6 +4261,17 @@ int main(int argc, char** argv) {
             settle();
             report(document.nodesModel()->rowCount() == pre_nodes_before + 1,
                    "adding it puts one node in the scene, not a copy of its contents");
+
+            if (sourceDialogs.size() == 1) {
+                auto* picker = sourceDialogs.front();
+                QMetaObject::invokeMethod(picker, "open");
+                picker->setProperty("selectedType", QStringLiteral("scene"));
+                settle();
+                report(scene_usage_label(overlay).contains(QLatin1String("nested in 1 scene")),
+                       "the scene picker distinguishes nesting from scene-list membership");
+                QMetaObject::invokeMethod(picker, "close");
+                settle();
+            }
 
             // The loop. Showing the first scene inside the overlay would close the ring, and
             // the renderer would recurse until it died -- so the command refuses it and the
@@ -4017,6 +4307,83 @@ int main(int argc, char** argv) {
         settle();
 
         // ---- the audio mixer -------------------------------------------------------------
+        {
+            const auto project = document.projectForBindings();
+            const auto previous_scene = document.selectedScene();
+            const auto previous_node = document.selectedNode();
+            ldoc::Source microphone;
+            microphone.id = ldoc::Id::generate();
+            microphone.name = "Nested microphone";
+            microphone.type = "source.media";
+            auto node = ldoc::make_node(ldoc::NodeKind::Source, microphone.name);
+            std::get<ldoc::SourceData>(node.data).source = microphone.id;
+            ldoc::Scene inner;
+            inner.id = ldoc::Id::generate();
+            inner.canvas = project.canvases.front().id;
+            inner.name = "Inner audio scene";
+            inner.roots = {node};
+            auto precomp = ldoc::make_node(ldoc::NodeKind::Precomp, "Nested scene");
+            std::get<ldoc::PrecompData>(precomp.data).scene = inner.id;
+            auto duplicate = precomp;
+            duplicate.id = ldoc::Id::generate();
+            ldoc::Scene middle;
+            middle.id = ldoc::Id::generate();
+            middle.canvas = inner.canvas;
+            middle.name = "Shared nested audio";
+            middle.roots = {precomp, duplicate};
+            std::get<ldoc::PrecompData>(precomp.data).scene = middle.id;
+            precomp.id = ldoc::Id::generate();
+            ldoc::Scene outer;
+            outer.id = ldoc::Id::generate();
+            outer.canvas = inner.canvas;
+            outer.name = "Outer audio scene";
+            outer.roots = {precomp};
+            document.runCommand(ldoc::make_batch({
+                ldoc::AddSource{microphone, project.sources.size()},
+                ldoc::AddScene{inner, project.scenes.size()},
+                ldoc::AddScene{middle, project.scenes.size() + 1},
+                ldoc::AddScene{outer, project.scenes.size() + 2}}, "Nested mixer fixture"));
+            document.selectScene(QString::fromStdString(outer.id.to_string()));
+            settle();
+            const auto* model = document.mixerStripsModel();
+            const auto value = [&](const char* role) {
+                return model->index(0, 0).data(role_of(model, role));
+            };
+            const auto owner = QString::fromStdString(inner.id.to_string());
+            const auto node_id = QString::fromStdString(node.id.to_string());
+            report(model->rowCount() == 1 && value("nodeId").toString() == node_id &&
+                       value("sceneId").toString() == owner &&
+                       collect(window->contentItem(), QStringLiteral("sourceStrip")).size() == 1,
+                   "nested precomp audio appears once in the mixer with its owning scene");
+            document.setNodeGain(owner, node_id, -9);
+            document.setNodeMute(owner, node_id, true);
+            const auto bus = QString::fromStdString(project.buses.front().id.to_string());
+            document.routeNode(owner, node_id, bus);
+            settle();
+            report(value("gainDb").toDouble() == -9 && value("mute").toBool() &&
+                       value("busId").toString() == bus &&
+                       document.selectedScene() == QString::fromStdString(outer.id.to_string()),
+                   "nested audio gain, mute, and routing edit the source without leaving its parent scene");
+            document.undo();
+            document.undo();
+            document.undo();
+            settle();
+            report(value("gainDb").toDouble() == 0 && !value("mute").toBool() &&
+                       value("busId").toString().isEmpty(), "nested mixer edits undo normally");
+            const auto source_id = QString::fromStdString(microphone.id.to_string());
+            document.applySourceSettings(source_id, {}, {{"ignoreAudio", true}});
+            settle();
+            report(model->rowCount() == 0 &&
+                       collect(window->contentItem(), QStringLiteral("sourceStrip")).isEmpty(),
+                   "Ignore Audio removes nested media from the mixer");
+            document.undo();
+            settle();
+            report(model->rowCount() == 1, "undo restores the media audio strip");
+            document.undo();
+            document.selectScene(previous_scene);
+            document.selectNode(previous_node);
+            settle();
+        }
         //
         // No audio host exists yet, so what is checked here is the document half: the buses, the
         // faders, and which bus a source node's audio goes to. All of it is commands, so all of
@@ -4293,10 +4660,12 @@ int main(int argc, char** argv) {
                 // first version of this check managed to drag one bus's fader and assert about
                 // another's.
                 QString dragged_bus;
+                QQuickItem* bus_strip = nullptr;
                 for (QQuickItem* up = fader; up != nullptr; up = up->parentItem()) {
                     const QVariant id = up->property("busId");
                     if (id.isValid() && !id.toString().isEmpty()) {
                         dragged_bus = id.toString();
+                        bus_strip = up;
                         break;
                     }
                 }
@@ -4309,6 +4678,39 @@ int main(int argc, char** argv) {
                 const auto gain_of_dragged = [&] {
                     return dragged_row < 0 ? 0.0 : bus_at(dragged_row, "gainDb").toDouble();
                 };
+                const auto double_click = [&](QQuickItem* item) {
+                    const auto at = item->mapToScene(QPointF(item->width() / 2, item->height() / 2));
+                    post(QEvent::MouseButtonPress, at, Qt::LeftButton, Qt::LeftButton);
+                    post(QEvent::MouseButtonRelease, at, Qt::LeftButton, Qt::NoButton);
+                    post(QEvent::MouseButtonPress, at, Qt::LeftButton, Qt::LeftButton);
+                    post(QEvent::MouseButtonDblClick, at, Qt::LeftButton, Qt::LeftButton);
+                    post(QEvent::MouseButtonRelease, at, Qt::LeftButton, Qt::NoButton);
+                    settle();
+                };
+                const auto names = collect(bus_strip, QStringLiteral("mixerChannelName"));
+                const auto editors = collect(bus_strip, QStringLiteral("mixerChannelNameEditor"));
+                report(!names.isEmpty() && !editors.isEmpty(), "output channels expose inline name editors");
+                if (!names.isEmpty() && !editors.isEmpty()) {
+                    double_click(names.front());
+                    auto* editor = editors.front();
+                    report(editor->isVisible() && editor->hasActiveFocus(),
+                           "double-clicking an output channel name starts editing");
+                    editor->setProperty("text", QStringLiteral("Renamed output channel"));
+                    fader->forceActiveFocus();
+                    settle();
+                    report(bus_at(dragged_row, "name").toString() == "Renamed output channel",
+                           "leaving the name editor saves the output channel name");
+                    document.undo();
+                    settle();
+                    const auto original = bus_at(dragged_row, "name").toString();
+                    double_click(names.front());
+                    editor->setProperty("text", QStringLiteral("Cancelled channel name"));
+                    QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+                    QCoreApplication::sendEvent(window, &escape);
+                    settle();
+                    report(bus_at(dragged_row, "name").toString() == original,
+                           "Escape cancels output channel renaming");
+                }
 
                 const QPointF top = fader->mapToScene(QPointF(fader->width() / 2.0, 2.0));
                 const QPointF bottom =
@@ -4346,6 +4748,17 @@ int main(int argc, char** argv) {
                 settle();
                 report(qFuzzyCompare(gain_of_dragged() + 1.0, after_drag + 1.0),
                        "which redo puts back");
+                const auto handles = collect(fader->parentItem(), QStringLiteral("mixerFaderHandle"));
+                report(!handles.isEmpty(), "the fader exposes its handle");
+                if (!handles.isEmpty()) {
+                    double_click(handles.front());
+                    report(gain_of_dragged() == 0 &&
+                               fader->parentItem()->property("shownGain").toDouble() == 0,
+                           "double-clicking the handle stays at 0 dB after release");
+                    document.undo();
+                    settle();
+                    report(gain_of_dragged() == after_drag, "the 0 dB reset undoes in one step");
+                }
             }
         }
 
@@ -4698,39 +5111,29 @@ int main(int argc, char** argv) {
         {
             const auto rows = collect(window->contentItem(), QStringLiteral("outputBlock"));
             const auto icons = collect(window->contentItem(), QStringLiteral("outputIcon"));
-            const auto managers = collect(window->contentItem(), QStringLiteral("outputsManagerDialog"));
             const auto gears = collect(window->contentItem(), QStringLiteral("manageOutputs"));
-            const auto start = collect(window->contentItem(), QStringLiteral("startAllOutputs"));
-            report(!start.isEmpty() && !start.front()->isEnabled(),
-                   "Start All cannot pretend to encode before an output engine exists");
-            report(collect(window->contentItem(), QStringLiteral("outputSettingsButton")).isEmpty(),
-                   "output rows have no settings gear");
-            report(!icons.isEmpty() && !managers.isEmpty() && !gears.isEmpty(),
-                   "output icons and manager controls exist");
-            if (!rows.isEmpty() && !icons.isEmpty() && !managers.isEmpty() && !gears.isEmpty()) {
+            report(collect(window->contentItem(), QStringLiteral("outputsManagerDialog")).isEmpty(),
+                   "the redundant outputs manager is removed");
+            if (!rows.isEmpty() && !icons.isEmpty() && !gears.isEmpty()) {
+                const int previous_workspace = workspace.activeWorkspace();
+                const auto selected = rows.front()->property("outputId").toString();
                 auto click = [&](QQuickItem* button) {
                     const auto at = button->mapToScene(QPointF(button->width() / 2, button->height() / 2));
                     post(QEvent::MouseButtonPress, at, Qt::LeftButton, Qt::LeftButton);
                     post(QEvent::MouseButtonRelease, at, Qt::LeftButton, Qt::NoButton);
                     settle();
                 };
-                auto* manager = managers.front();
                 click(icons.front());
-                const auto selected = rows.front()->property("outputId").toString();
-                report(manager->isVisible() && manager->property("selectedOutputId").toString() == selected,
-                       "clicking an output icon opens the manager at that output");
-                bool expanded = false;
-                for (auto* entry : collect(manager, QStringLiteral("encodeBlock"))) {
-                    if (entry->property("encodeId").toString() ==
-                        document.outputEncoderSettings(selected).value("id").toString())
-                        expanded = entry->property("expanded").toBool();
-                }
-                report(expanded, "the selected output editor expands in the manager");
-                auto visibleControl = [&](const char* name) -> QQuickItem* {
-                    for (auto* item : collect(manager, QString::fromLatin1(name))) {
-                        if (item->isVisible())
-                            return item;
-                    }
+                auto views = collect(window->contentItem(), QStringLiteral("encodeView"));
+                auto* view = views.isEmpty() ? nullptr : views.front();
+                report(workspace.activeWorkspaceName() == "Encode" && view &&
+                           view->property("selectedId").toString() == selected &&
+                           view->property("selectedKind").toString() == "output",
+                       "output settings switch to Encode and select the destination");
+                const auto visibleControl = [&](const char* name) -> QQuickItem* {
+                    if (!view) return nullptr;
+                    for (auto* item : collect(view, QString::fromLatin1(name)))
+                        if (item->isVisible()) return item;
                     return nullptr;
                 };
                 auto reveal = [&](QQuickItem* item) {
@@ -4747,21 +5150,14 @@ int main(int argc, char** argv) {
                 };
                 auto editText = [&](QQuickItem* input, const QString& value) {
                     reveal(input);
-                    click(input);
-                    input->setProperty("text", value);
+                    const auto children = collect(input, QStringLiteral("textLineInput"));
+                    auto* editor = children.isEmpty() ? input : children.front();
+                    click(editor);
+                    editor->setProperty("text", value);
                     QKeyEvent enter(QEvent::KeyPress, Qt::Key_Return, Qt::NoModifier);
                     QCoreApplication::sendEvent(window, &enter);
                     settle();
                 };
-                auto* outputName = visibleControl("managedOutputName");
-                report(outputName != nullptr, "output Name is available without opening destination settings");
-                if (outputName) {
-                    const auto previous = outputName->property("text").toString();
-                    editText(outputName, QStringLiteral("Renamed output"));
-                    report(document.outputEncoderSettings(selected).value("name").toString() == "Renamed output",
-                           "manager Name field changes the encoder group name");
-                    editText(outputName, previous);
-                }
                 auto choose = [&](QQuickItem* field, const QString& text) {
                     reveal(field);
                     click(field);
@@ -4788,111 +5184,9 @@ int main(int argc, char** argv) {
                     }
                     return false;
                 };
-                auto* preset = visibleControl("outputPreset");
-                report(preset != nullptr, "selected encode exposes preset choices");
-                if (preset) {
-                    report(choose(preset, QStringLiteral("fast")), "x264 offers its fast preset");
-                    report(document.outputEncoderSettings(selected).value("preset").toString() == "fast",
-                           "selecting a preset updates the actual shared encode");
-                    choose(preset, QStringLiteral("veryfast"));
-                }
-                auto* custom = visibleControl("encoderText_x264.options");
-                report(custom != nullptr, "x264 exposes its custom options");
-                if (custom) {
-                    editText(custom, QStringLiteral("bframes=3"));
-                    report(document.outputEncoderSettings(selected).value("extra").toMap()
-                               .value("x264.options").toString() == "bframes=3",
-                           "custom x264 options persist in the encoder configuration");
-                }
-                auto* videoEncoder = visibleControl("outputEncoderChoice");
-                if (videoEncoder) {
-                    report(choose(videoEncoder, QStringLiteral("H.264 (NVENC)")),
-                           "NVENC can be selected through the video encoder dropdown");
-                    auto* nvPreset = visibleControl("outputPreset");
-                    auto* profile = visibleControl("encoderOption_nvenc.profile");
-                    report(nvPreset && profile && nvPreset->property("value").toString() == "p5" &&
-                               profile->property("value").toString() == "high",
-                           "NVENC H.264 starts at P5 and High profile");
-                    if (nvPreset && profile) {
-                        report(!nvPreset->property("choices").toStringList().contains(QString{}) &&
-                                   !profile->property("choices").toStringList().contains(QString{}),
-                               "NVENC preset and profile menus contain no empty default option");
-                        report(choose(nvPreset, QStringLiteral("P6: Slower")), "NVENC P6 can be clicked");
-                        report(document.outputEncoderSettings(selected).value("preset").toString() == "p6",
-                               "NVENC preset selection persists in the document");
-                        profile = visibleControl("encoderOption_nvenc.profile");
-                        if (profile) {
-                            report(choose(profile, QStringLiteral("Main")), "NVENC Main profile can be clicked");
-                            report(document.outputEncoderSettings(selected).value("extra").toMap()
-                                       .value("nvenc.profile").toString() == "main",
-                                   "NVENC profile selection persists in the document");
-                        }
-                        QMetaObject::invokeMethod(manager, "close");
-                        QMetaObject::invokeMethod(manager, "openOutput", Q_ARG(QVariant, QVariant(selected)));
-                        settle();
-                        nvPreset = visibleControl("outputPreset");
-                        profile = visibleControl("encoderOption_nvenc.profile");
-                        report(nvPreset && profile && nvPreset->property("value").toString() == "p6" &&
-                                   profile->property("value").toString() == "main",
-                               "reopening the manager keeps the chosen NVENC preset and profile");
-                    }
-                    auto* lookahead = visibleControl("encoderFlag_nvenc.lookahead");
-                    report(lookahead && visibleControl("encoderOption_nvenc.multipass") &&
-                               visibleControl("encoderNumber_nvenc.bframes"),
-                           "NVENC exposes look-ahead, multipass, and B-frame settings");
-                    if (lookahead) {
-                        reveal(lookahead);
-                        report(lookahead->width() > 0 && lookahead->height() > 0,
-                               "NVENC checkbox has a real clickable area");
-                        click(lookahead);
-                        report(document.outputEncoderSettings(selected).value("extra").toMap()
-                                   .value("nvenc.lookahead").toBool(),
-                               "NVENC look-ahead toggle updates the saved configuration");
-                    }
-                    choose(videoEncoder, QStringLiteral("H.264 (x264)"));
-                }
-                auto* rate = visibleControl("outputRateControl");
-                report(rate != nullptr && visibleControl("savedEncoderPreset") != nullptr,
-                       "output manager exposes saved presets and rate control");
-                if (rate) {
-                    reveal(rate);
-                    click(rate);
-                    QList<QQuickItem*> pending{window->contentItem()};
-                    QQuickItem* option = nullptr;
-                    while (!pending.isEmpty()) {
-                        auto* item = pending.takeLast();
-                        if (item->isVisible() && item->property("text").toString() == "vbr") {
-                            option = item;
-                            break;
-                        }
-                        pending.append(item->childItems());
-                    }
-                    report(option != nullptr, "rate control dropdown offers VBR");
-                    if (option) click(option);
-                    report(document.outputEncoderSettings(selected).value("rateControl").toString() == "vbr",
-                           "clicking VBR changes the selected encoder settings");
-                }
-                auto* destination = visibleControl("destinationSettings");
-                report(destination != nullptr, "destination settings have a clickable entry");
-                if (destination) {
-                    reveal(destination);
-                    click(destination);
-                    if (!visibleControl("outputDestinationName")) click(destination);
-                    auto* name = visibleControl("outputDestinationName");
-                    auto* url = visibleControl("outputUrl");
-                    auto* key = visibleControl("outputKey");
-                    report(name && url && key, "destination click exposes Name, URL, and Key fields");
-                    if (name && url && key) {
-                        const auto oldName = name->property("text").toString();
-                        editText(name, QStringLiteral("Destination editor check"));
-                        report(rows.front()->property("name").toString() == "Destination editor check",
-                               "destination Name edits the output");
-                        editText(name, oldName);
-                        const auto oldUrl = url->property("text").toString();
-                        editText(url, QStringLiteral("rtmps://example.test/live"));
-                        report(rows.front()->property("url").toString() == "rtmps://example.test/live",
-                               "destination URL edits the output");
-                        editText(url, oldUrl);
+                auto* key = visibleControl("encodeDestinationKey");
+                report(key != nullptr, "stream destination properties expose the key field");
+                if (key) {
                         report(key->property("echoMode").toInt() == 2,
                                "stream keys are password masked");
                         QTemporaryDir store;
@@ -4909,8 +5203,8 @@ int main(int argc, char** argv) {
                             const auto oldFile = qgetenv("LIBERTAS_TEST_KEY_FILE");
                             qputenv("PATH", store.path().toUtf8() + ":" + oldPath);
                             qputenv("LIBERTAS_TEST_KEY_FILE", store.filePath("secret").toUtf8());
-                            key->setProperty("text", QStringLiteral("self-check-only-key"));
-                            auto* save = visibleControl("saveOutputKey");
+                            editText(key, QStringLiteral("self-check-only-key"));
+                            auto* save = visibleControl("encodeSaveDestinationKey");
                             if (save) {
                                 reveal(save);
                                 click(save);
@@ -4921,12 +5215,16 @@ int main(int argc, char** argv) {
                             else qputenv("LIBERTAS_TEST_KEY_FILE", oldFile);
                             QFile secret(store.filePath("secret"));
                             report(secret.open(QIODevice::ReadOnly) && secret.readAll() == "self-check-only-key" &&
-                                       !rows.front()->property("credentialRef").toString().isEmpty(),
+                                       !document.outputEncoderSettings(selected).value("credentialRef").toString().isEmpty(),
                                    "Save key sends the secret through stdin and stores only a reference");
-                            report(key->property("text").toString().isEmpty(),
+                            report(key->property("value").toString().isEmpty(),
                                    "saving clears the key from the editor");
                         }
-                    }
+                }
+                if (view) {
+                    view->setProperty("selectedKind", "encode");
+                    view->setProperty("selectedId", document.outputEncoderSettings(selected).value("id"));
+                    settle();
                 }
                 const auto encodeId = document.outputEncoderSettings(selected).value("id").toString();
                 auto* savedName = visibleControl("newEncoderPresetName");
@@ -4936,7 +5234,7 @@ int main(int argc, char** argv) {
                 auto* replacePreset = visibleControl("replaceEncoderPreset");
                 auto* deletePreset = visibleControl("removeEncoderPreset");
                 report(savedName && savePreset && savedChoice && applyPreset && replacePreset && deletePreset,
-                       "manager exposes global preset save, apply, replace, and delete controls");
+                       "Encoder Flow exposes global preset save, apply, replace, and delete controls");
                 if (savedName && savePreset && savedChoice && applyPreset && replacePreset && deletePreset) {
                     const QString presetName = QStringLiteral("Default custom check");
                     const auto savedSettings = document.encodeSettings(encodeId);
@@ -5039,33 +5337,102 @@ int main(int argc, char** argv) {
                     }
                     document.removeEncoderPreset(presetName);
                 }
-                QQuickItem* remove = nullptr;
-                for (auto* button : collect(manager, QStringLiteral("removeManagedOutput"))) {
-                    if (button->property("encodeId").toString() ==
-                        document.outputEncoderSettings(selected).value("id").toString())
-                        remove = button;
-                }
-                report(remove != nullptr, "every output has a Remove button in the manager");
-                if (remove) {
-                    const auto count = document.outputsModel()->rowCount();
-                    const auto encodes = document.encodeCount();
-                    reveal(remove);
-                    click(remove);
-                    report(document.outputsModel()->rowCount() == count &&
-                               document.encodeCount() == encodes - 1 &&
-                               document.outputEncoderSettings(selected).value("id").toString().isEmpty() &&
-                               manager->property("selectedOutputId").toString().isEmpty(),
-                           "manager Remove deletes only the encoder, keeps destinations and clears its editor");
-                    document.undo();
+                const auto configured = document.projectForBindings();
+                const auto recording = std::find_if(configured.outputs.begin(), configured.outputs.end(),
+                    [](const auto& output) { return output.destination.kind == ldoc::DestinationKind::File; });
+                QTemporaryDir recording_folder;
+                if (view && recording != configured.outputs.end()) {
+                    const auto recording_id = QString::fromStdString(recording->id.to_string());
+                    workspace.openEncode(recording_id);
                     settle();
-                    report(document.outputsModel()->rowCount() == count,
-                           "removing an output from the manager can be undone");
+                    auto* folder = visibleControl("recordingDirectory");
+                    report(folder && folder->property("browsable").toBool(),
+                           "Recording properties have an output folder and system Browse action");
+                    if (folder) {
+                        QMetaObject::invokeMethod(folder, "committed",
+                                                  Q_ARG(QString, recording_folder.path()));
+                        settle();
+                        auto* disk_telemetry = engine.singletonInstance<libertas::ui::Telemetry*>(
+                            "Libertas", "Telemetry");
+                        report(document.recordingDirectory() == recording_folder.path() &&
+                                   disk_telemetry && disk_telemetry->diskPath() == recording_folder.path(),
+                               "the recording folder persists and disk telemetry follows it");
+                        document.setRecordingDirectory(recording_id, QStringLiteral("relative/path"));
+                        report(document.recordingDirectory() == recording_folder.path(),
+                               "invalid recording folders leave the stored location intact");
+                        const auto video_id = document.recordingEncodeId();
+                        const auto first_path = document.recordingPathFor(video_id);
+                        const auto second_path = document.recordingPathFor(video_id);
+                        report(first_path != second_path &&
+                                   QFileInfo(first_path).absolutePath() == recording_folder.path(),
+                               "every take gets a unique path in the chosen folder");
+                        document.undo();
+                        settle();
+                        report(document.recordingDirectory() != recording_folder.path(),
+                               "the recording folder change is undoable");
+                        document.redo();
+                        settle();
+
+                        const auto parsed_video = ldoc::Id::parse(video_id.toStdString());
+                        const auto* video = parsed_video ? configured.encode(*parsed_video) : nullptr;
+                        const auto* canvas = video ? configured.canvas(video->canvas) : nullptr;
+                        const auto buttons = collect(window->contentItem(), QStringLiteral("recordButton"));
+                        if (video && canvas && !buttons.isEmpty()) {
+                            auto test_encode = *video;
+                            test_encode.encoder.implementation = "x264";
+                            test_encode.encoder.codec = "h264";
+                            test_encode.encoder.preset = "ultrafast";
+                            test_encode.encoder.rate_control = "cbr";
+                            test_encode.encoder.extra.clear();
+                            test_encode.rescale = ldoc::Vec2{64, 64};
+                            document.runCommand(ldoc::SetEncode{test_encode});
+                            auto test_canvas = *canvas;
+                            test_canvas.width = test_canvas.height = 64;
+                            document.runCommand(ldoc::SetCanvas{test_canvas});
+                            settle();
+                            preview.setLive(false, test_canvas.fps);
+                            auto* record_button = buttons.front();
+                            report(record_button->isEnabled(), "Record is enabled for a complete recording route");
+                            click(record_button);
+                            for (int i = 0; i < 20 && preview.recordingPending(); ++i) pump(100);
+                            report(preview.recording(), "the persistent Record button starts recording");
+                            const auto written = preview.recordingPath();
+                            const auto canvas_id = QString::fromStdString(canvas->id.to_string());
+                            const auto initial_frames = preview.renderStats(canvas_id).value("frames").toULongLong();
+                            workspace.selectWorkspace(0);
+                            pump(400);
+                            report(record_button->isVisible() && preview.recording() &&
+                                       preview.renderStats(canvas_id).value("frames").toULongLong() > initial_frames,
+                                   "static recording keeps receiving frames after switching to Build");
+                            if (parser.isSet(shot_opt))
+                                grab().save(parser.value(shot_opt) + QStringLiteral("/persistent-recording.png"));
+                            click(record_button);
+                            for (int i = 0; i < 20 && preview.recordingPending(); ++i) pump(100);
+                            report(!preview.recording() && QFileInfo(written).size() > 0,
+                                   "Stop on another tab closes a nonempty recording file");
+                            click(record_button);
+                            for (int i = 0; i < 20 && preview.recordingPending(); ++i) pump(100);
+                            document.setCanvasSize(canvas_id, 32, 64);
+                            for (int i = 0; i < 20 && preview.recording(); ++i) pump(100);
+                            report(!preview.recording() && !preview.recordingPending() &&
+                                       window->property("notice").toString().contains("size changed"),
+                                   "recording failure resets Record and reports why it stopped");
+                            document.runCommand(ldoc::SetCanvas{*canvas});
+                            document.runCommand(ldoc::SetEncode{*video});
+                        }
+                        document.setRecordingDirectory(recording_id,
+                            QString::fromStdString(recording->destination.url));
+                        settle();
+                    }
                 }
-                QMetaObject::invokeMethod(manager, "close");
-                click(gears.front());
-                report(manager->isVisible() && manager->property("selectedOutputId").toString().isEmpty(),
-                       "the footer gear opens the manager without selecting an output");
-                QMetaObject::invokeMethod(manager, "close");
+                workspace.selectWorkspace(previous_workspace);
+                settle();
+                const auto current_gears = collect(window->contentItem(), QStringLiteral("manageOutputs"));
+                if (!current_gears.isEmpty()) click(current_gears.front());
+                report(workspace.activeWorkspaceName() == "Encode" && workspace.encodeOutput().isEmpty(),
+                       "the Outputs footer gear opens Encoder Flow");
+                workspace.selectWorkspace(previous_workspace);
+                settle();
             }
         }
 
@@ -5255,6 +5622,100 @@ int main(int argc, char** argv) {
                    "a new scene lands on the canvas the shell is working on");
             const QString vertical_scene = document.selectedScene();
 
+            // Transform commands act on the selected scene, including one not on Program.
+            {
+                const auto before = document.projectForBindings();
+                const QString undo_before = document.undoDescription();
+                document.addNewSourceToScene(QStringLiteral("Vertical transform check"),
+                                             QStringLiteral("source.color"));
+                const QString node = document.selectedNode();
+                document.setDrawnRect(40, 60, 400, 300);
+                settle();
+                const auto baseline = document.nodeProperties();
+                report(document.placedRect(vertical_id, node).isEmpty(),
+                       "the Vertical transform fixture is selected without being on Program");
+                workspace.activate(v_sources);
+                settle();
+                const auto menu_item = [&](const QString& label) -> QQuickItem* {
+                    for (auto* item : collect(window->contentItem(), QStringLiteral("stripMenuItem")))
+                        if (item->isVisible() && item->property("label").toString() == label)
+                            return item;
+                    return nullptr;
+                };
+                const auto click_item = [&](QQuickItem* item, Qt::MouseButton button) {
+                    if (!item)
+                        return false;
+                    const QPointF at = item->mapToScene(
+                        QPointF(item->width() / 2.0, item->height() / 2.0));
+                    post(QEvent::MouseMove, at, Qt::NoButton, Qt::NoButton);
+                    settle();
+                    post(QEvent::MouseButtonPress, at, button, button);
+                    post(QEvent::MouseButtonRelease, at, button, Qt::NoButton);
+                    settle();
+                    return true;
+                };
+                const auto transform_action = [&](const QString& label) {
+                    QQuickItem* source = nullptr;
+                    for (auto* row : collect(window->contentItem(), QStringLiteral("sourceRow")))
+                        if (row->isVisible() && row->property("nodeId").toString() == node)
+                            source = row;
+                    return click_item(source, Qt::RightButton) &&
+                           click_item(menu_item(QStringLiteral("Transform")), Qt::LeftButton) &&
+                           click_item(menu_item(label), Qt::LeftButton);
+                };
+                const auto at_position = [&](double x, double y) {
+                    const auto project = document.projectForBindings();
+                    const auto* scene = project.scene(*ldoc::Id::parse(vertical_scene.toStdString()));
+                    const auto* source = scene
+                        ? ldoc::find_node(scene->roots, *ldoc::Id::parse(node.toStdString())) : nullptr;
+                    if (!source)
+                        return false;
+                    lcomp::GapReason why = lcomp::GapReason::NoSize;
+                    const auto frame = lcomp::drawn_frame(*source, 1920, 1080, true, why);
+                    return frame && std::abs(frame->x - x) < 0.1 && std::abs(frame->y - y) < 0.1;
+                };
+                report(transform_action(QStringLiteral("Center to screen")) && at_position(340, 810),
+                       "Vertical Sources Transform centers using the portrait canvas dimensions");
+                document.undo();
+                settle();
+                report(at_position(40, 60), "Vertical centering undoes as one edit");
+                report(transform_action(QStringLiteral("Fit to screen")) && at_position(0, 555),
+                       "Vertical Sources Transform fits the selected off-air scene");
+                document.undo();
+                settle();
+                report(transform_action(QStringLiteral("Stretch to screen")) && at_position(0, 0) &&
+                           std::abs(document.nodeProperties().value("scaleY").toDouble() /
+                                    baseline.value("scaleY").toDouble() - 6.4) < 0.01,
+                       "Vertical Sources Transform stretches to the portrait canvas");
+                document.undo();
+                settle();
+                report(transform_action(QStringLiteral("Rotate 90 degrees CW")) &&
+                           document.nodeProperties().value("rotation").toDouble() == 90,
+                       "Vertical Sources Transform rotates its selected source");
+                document.undo();
+                settle();
+                report(transform_action(QStringLiteral("Flip Horizontal")) &&
+                           document.nodeProperties().value("scaleX").toDouble() < 0,
+                       "Vertical Sources Transform flips its selected source");
+                document.undo();
+                settle();
+                report(transform_action(QStringLiteral("Reset Transform")) && at_position(0, 0) &&
+                           document.nodeProperties().value("scaleX").toDouble() == 1 &&
+                           document.nodeProperties().value("scaleY").toDouble() == 1,
+                       "Vertical Sources Transform resets its selected source");
+                for (auto* menu : collect(window->contentItem(), QStringLiteral("nodeMenu")))
+                    QMetaObject::invokeMethod(menu, "close");
+                for (int i = 0; i < 12 && document.canUndo() &&
+                                document.undoDescription() != undo_before; ++i)
+                    document.undo();
+                document.selectSceneOn(vertical_id, vertical_scene);
+                auto after = document.projectForBindings();
+                after.generation = before.generation;
+                report(after == before, "Vertical transform checks preserve Main and restore the fixture");
+                workspace.activate(v_scenes);
+                settle();
+            }
+
             // ---- linking: which Main scenes bring this one up --------------------------
             //
             // The direction is the thing to get right. This is a scene on a secondary canvas
@@ -5306,8 +5767,8 @@ int main(int argc, char** argv) {
             if (QQuickItem* link_dialog = dialog_named(QStringLiteral("sceneLinkDialog"))) {
                 report(!link_dialog->isVisible(), "the link popup starts closed");
                 QMetaObject::invokeMethod(link_dialog, "open",
-                                          Q_ARG(QVariant, QVariant{vertical_scene}),
-                                          Q_ARG(QVariant, QVariant{QStringLiteral("Vertical A")}));
+                                          Q_ARG(QVariant, QVariant{vertical_id}),
+                                          Q_ARG(QVariant, QVariant{vertical_scene}));
                 settle();
                 report(link_dialog->isVisible(), "and the chain icon's click opens it");
                 report(collect(window->contentItem(), QStringLiteral("sceneLinkRow")).size() ==
@@ -5315,14 +5776,152 @@ int main(int argc, char** argv) {
                        "with one row per Main scene, drawn");
                 if (parser.isSet(shot_opt))
                     grab().save(parser.value(shot_opt) + QStringLiteral("/scene-link.png"));
-                // Clear unticks and writes nothing: Link is the only commit point, so closing
-                // any other way has to leave the project exactly as it was found.
+                report(link_dialog->property("targetCanvasId").toString() == vertical_id,
+                       "the linker opens on the originating secondary canvas");
+                report(document.sceneLinkCanvases().size() ==
+                           document.canvasesModel()->rowCount() - 1,
+                       "the target choices exclude Main");
+                const QString first_main = offered.front().toMap()
+                                               .value(QStringLiteral("id")).toString();
+                report(link_dialog->property("mainSceneId").toString() == first_main,
+                       "selecting a linked target selects its Main scene");
+                report(collect(window->contentItem(), QStringLiteral("sceneLinkTargetRow"))
+                           .size() == 1,
+                       "the right list draws the target canvas scenes");
+                const auto click_link_button = [&](const QString& name) {
+                    auto* button = dialog_named(name);
+                    if (!button || !button->isEnabled())
+                        return false;
+                    const auto at = button->mapToScene(
+                        QPointF(button->width() / 2, button->height() / 2));
+                    post(QEvent::MouseButtonPress, at, Qt::LeftButton, Qt::LeftButton);
+                    post(QEvent::MouseButtonRelease, at, Qt::LeftButton, Qt::NoButton);
+                    settle();
+                    return true;
+                };
+                report(click_link_button(QStringLiteral("unlinkScenes")) &&
+                           document.sceneLinkCount(vertical_scene) == 0,
+                       "the unlink button removes the selected pair immediately");
+                report(click_link_button(QStringLiteral("commitLinks")) &&
+                           document.sceneLinkCount(vertical_scene) == 1,
+                       "the link button stores the selected pair without closing");
+                report(link_dialog->isVisible(), "the linker stays open for more links");
+                const auto indicators = collect(window->contentItem(),
+                                                QStringLiteral("sceneLinkStatus"));
+                report(std::any_of(indicators.begin(), indicators.end(),
+                                   [](QQuickItem* item) { return item->isVisible(); }),
+                       "a linked target displays its chain indicator");
+
+                document.addSceneOn(vertical_id, QStringLiteral("Vertical B"));
+                settle();
+                const QString other_target = document.selectedSceneOn(vertical_id);
+                QMetaObject::invokeMethod(link_dialog, "selectTarget",
+                                          Q_ARG(QVariant, QVariant{other_target}));
+                settle();
+                report(click_link_button(QStringLiteral("commitLinks")) &&
+                           document.sceneLinkCount(other_target) == 1 &&
+                           document.sceneLinkCount(vertical_scene) == 0,
+                       "linking an occupied Main scene moves its link to the new target");
+                document.activateScene(first_main);
+                settle();
+                bool target_on_air = false;
+                for (int row = 0; row < document.decksModel()->rowCount(); ++row)
+                    target_on_air = target_on_air ||
+                                    deck_at(row, "programSceneId").toString() == other_target;
+                report(target_on_air, "activating Main puts its linked target on Program");
+                document.activateScene(vertical_scene);
+                settle();
+                document.activateScene(first_main);
+                settle();
+                target_on_air = false;
+                for (int row = 0; row < document.decksModel()->rowCount(); ++row)
+                    target_on_air = target_on_air ||
+                                    deck_at(row, "programSceneId").toString() == other_target;
+                report(target_on_air, "re-clicking Main restores a manually changed target");
+                // Restore these activations before checking the link move's own undo step.
+                document.undo();
+                document.undo();
+                document.undo();
+                document.selectCanvas(vertical_id);
+                settle();
+                document.undo();
+                settle();
+                report(document.sceneLinkCount(vertical_scene) == 1 &&
+                           document.sceneLinkCount(other_target) == 0,
+                       "moving a link undoes as one step");
+                document.redo();
+                settle();
+                report(document.sceneLinkCount(other_target) == 1,
+                       "moving a link redoes as one step");
+                document.undo();
+                settle();
+                document.removeScene(other_target);
+                settle();
+                QMetaObject::invokeMethod(link_dialog, "selectTarget",
+                                          Q_ARG(QVariant, QVariant{vertical_scene}));
+                settle();
                 const int links_before = document.sceneLinkCount(vertical_scene);
                 QMetaObject::invokeMethod(link_dialog, "close");
                 settle();
-                report(!link_dialog->isVisible(), "and Escape closes it");
+                report(!link_dialog->isVisible(), "Exit closes the linker");
                 report(document.sceneLinkCount(vertical_scene) == links_before,
-                       "having changed nothing, because Link was not pressed");
+                       "closing the linker preserves committed links");
+
+                workspace.activate(v_scenes);
+                settle();
+                bool footer_opened = false;
+                for (auto* button : collect(window->contentItem(),
+                                            QStringLiteral("openSceneLinker"))) {
+                    if (!button->isVisible())
+                        continue;
+                    const auto at = button->mapToScene(QPointF(10, 10));
+                    post(QEvent::MouseButtonPress, at, Qt::LeftButton, Qt::LeftButton);
+                    post(QEvent::MouseButtonRelease, at, Qt::LeftButton, Qt::NoButton);
+                    settle();
+                    for (auto* popup : collect(window->contentItem(),
+                                               QStringLiteral("sceneLinkDialog"))) {
+                        if (!popup->isVisible())
+                            continue;
+                        footer_opened = popup->property("targetCanvasId").toString() == vertical_id;
+                        QMetaObject::invokeMethod(popup, "close");
+                    }
+                    settle();
+                    break;
+                }
+                report(footer_opened, "the secondary panel footer opens its canvas linker");
+                bool context_opened = false;
+                for (auto* row : collect(window->contentItem(), QStringLiteral("sceneRow"))) {
+                    if (!row->isVisible() ||
+                        row->property("sceneId").toString() != vertical_scene)
+                        continue;
+                    const auto at = row->mapToScene(QPointF(20, row->height() / 2));
+                    post(QEvent::MouseButtonPress, at, Qt::RightButton, Qt::RightButton);
+                    post(QEvent::MouseButtonRelease, at, Qt::RightButton, Qt::NoButton);
+                    settle();
+                    for (auto* item : collect(window->contentItem(),
+                                              QStringLiteral("stripMenuItem"))) {
+                        if (!item->isVisible() ||
+                            item->property("label").toString() != QLatin1String("Link scene"))
+                            continue;
+                        const auto menu_at = item->mapToScene(QPointF(30, item->height() / 2));
+                        post(QEvent::MouseButtonPress, menu_at, Qt::LeftButton, Qt::LeftButton);
+                        post(QEvent::MouseButtonRelease, menu_at, Qt::LeftButton, Qt::NoButton);
+                        settle();
+                        for (auto* popup : collect(window->contentItem(),
+                                                   QStringLiteral("sceneLinkDialog"))) {
+                            if (!popup->isVisible())
+                                continue;
+                            context_opened =
+                                popup->property("targetCanvasId").toString() == vertical_id &&
+                                popup->property("targetSceneId").toString() == vertical_scene;
+                            QMetaObject::invokeMethod(popup, "close");
+                        }
+                        settle();
+                        break;
+                    }
+                    break;
+                }
+                report(context_opened, "Link scene opens the clicked scene and its canvas");
             } else {
                 report(false, "the link popup exists in the scene graph");
             }
@@ -5365,7 +5964,7 @@ int main(int argc, char** argv) {
             settle();
         }
 
-        // ---- the outputs manager: encodes, and what shares them ------------------------
+        // ---- encodes and shared destinations ------------------------------------------------
         {
             const int encodes_before = document.encodeCount();
             document.addEncode();
@@ -5388,15 +5987,8 @@ int main(int argc, char** argv) {
                 workspace.activate(QStringLiteral("outputs"));
                 settle();
                 const QString other = document.currentCanvas();
-                bool canvasOffered = false;
-                for (auto* field : collect(window->contentItem(), QStringLiteral("encodeCanvasChoice"))) {
-                    if (field->property("encodeId").toString() != enc) continue;
-                    auto choices = field->property("choices");
-                    if (choices.metaType() == QMetaType::fromType<QJSValue>())
-                        choices = choices.value<QJSValue>().toVariant();
-                    canvasOffered = choices.toStringList().contains(other);
-                }
-                report(canvasOffered, "existing output editors offer a newly added canvas");
+                report(document.canvasIds().contains(other),
+                       "Encoder Flow offers the newly added canvas");
                 document.setEncodeCanvas(enc, other);
                 settle();
                 report(em->index(last, 0).data(role_of(em, "canvasId")).toString() == other,
@@ -5410,8 +6002,7 @@ int main(int argc, char** argv) {
             }
             report(document.encodeCount() == encodes_before + 1, "an encode can be added");
 
-            // Reuse, which is the whole of ADR-0029 and had no way in from the UI at all
-            // until the manager window existed.
+            // Multiple destinations reuse one encode (ADR-0029).
             const QString enc_id = document.encodesModel()
                                        ->data(document.encodesModel()->index(encodes_before, 0),
                                               Qt::UserRole + 1)
@@ -5431,40 +6022,6 @@ int main(int argc, char** argv) {
                        QLatin1String("Shared B")),
                    "and each row names the other destinations on its encode");
 
-            workspace.activate(QStringLiteral("outputs"));
-            settle();
-            const auto managers = collect(window->contentItem(), QStringLiteral("outputsManagerDialog"));
-            if (!managers.isEmpty()) {
-                auto* manager = managers.front();
-                const auto sharedId = out_at(outs_before, "outputId").toString();
-                QMetaObject::invokeMethod(manager, "openOutput", Q_ARG(QVariant, QVariant(sharedId)));
-                settle();
-                report(collect(manager, QStringLiteral("encodeBlock")).size() == document.encodeCount(),
-                       "manager shows exactly one settings block per encode regardless of destinations");
-                bool clicked = false;
-                for (auto* button : collect(manager, QStringLiteral("addDestination"))) {
-                    if (!button->isVisible()) continue;
-                    for (auto* parent = button->parentItem(); parent; parent = parent->parentItem()) {
-                        if (!parent->property("contentY").isValid()) continue;
-                        parent->setProperty("contentY", parent->property("contentY").toDouble() +
-                            button->mapToItem(parent, QPointF{}).y() - 40);
-                        settle();
-                        break;
-                    }
-                    const auto at = button->mapToScene(QPointF(button->width()/2, button->height()/2));
-                    post(QEvent::MouseButtonPress, at, Qt::LeftButton, Qt::LeftButton);
-                    post(QEvent::MouseButtonRelease, at, Qt::LeftButton, Qt::NoButton);
-                    settle();
-                    clicked = true;
-                    break;
-                }
-                report(clicked && document.outputsModel()->rowCount() == outs_before + 3 &&
-                           document.encodeCount() == encodes_before + 1,
-                       "Add destination adds one receiver without creating another encode");
-                if (document.outputsModel()->rowCount() == outs_before + 3) { document.undo(); settle(); }
-                QMetaObject::invokeMethod(manager, "close");
-            } else report(false, "manager exists for destination grouping interaction");
-
             document.removeOutput(out_at(outs_before + 1, "outputId").toString());
             settle();
             report(document.encodeCount() == encodes_before + 1,
@@ -5480,64 +6037,6 @@ int main(int argc, char** argv) {
                    "the group's original destination survives with a disconnected video input");
             document.removeOutput(fixtureOutputId);
             settle();
-        }
-
-        // The outputs manager draws the encode graph it is for.
-        {
-            workspace.activate(QStringLiteral("outputs"));
-            settle();
-            QList<QQuickItem*> found =
-                collect(window->contentItem(), QStringLiteral("outputsManagerDialog"));
-            if (found.isEmpty()) {
-                report(false, "the outputs manager exists in the scene graph");
-            } else {
-                QQuickItem* mgr = found.front();
-                QMetaObject::invokeMethod(mgr, "open");
-                settle();
-                report(mgr->isVisible(), "the outputs manager opens from the gear");
-                report(collect(window->contentItem(), QStringLiteral("encodeBlock")).size() ==
-                           document.encodeCount(),
-                       "and draws a block for every encode, which is the GPU's side of it");
-                const auto managerFrames = collect(mgr, QStringLiteral("outputsManagerFrame"));
-                const auto titles = collect(mgr, QStringLiteral("outputsManagerTitle"));
-                const auto corners = collect(mgr, QStringLiteral("outputsManagerResize_%1")
-                    .arg(static_cast<int>(Qt::RightEdge | Qt::BottomEdge)));
-                report(!managerFrames.isEmpty() && !titles.isEmpty() && !corners.isEmpty(),
-                       "output manager exposes title drag and corner resize handles");
-                if (!managerFrames.isEmpty() && !titles.isEmpty() && !corners.isEmpty()) {
-                    auto* frame = managerFrames.front();
-                    const auto original = QRectF(frame->position(), frame->size());
-                    auto drag = [&](QQuickItem* handle, const QPointF& delta) {
-                        const auto start = handle->mapToScene(QPointF(handle->width() / 2,
-                                                                      handle->height() / 2));
-                        post(QEvent::MouseButtonPress, start, Qt::LeftButton, Qt::LeftButton);
-                        post(QEvent::MouseMove, start + delta / 2, Qt::NoButton, Qt::LeftButton);
-                        post(QEvent::MouseMove, start + delta, Qt::NoButton, Qt::LeftButton);
-                        post(QEvent::MouseButtonRelease, start + delta, Qt::LeftButton, Qt::NoButton);
-                        settle();
-                    };
-                    drag(titles.front(), QPointF(-40, 20));
-                    report(frame->position() != original.topLeft() && frame->size() == original.size(),
-                           "dragging the title moves the output manager without resizing it");
-                    drag(corners.front(), QPointF(-80, -60));
-                    report(frame->width() < original.width() && frame->height() < original.height(),
-                           "dragging the corner resizes the actual output manager");
-                    drag(corners.front(), QPointF(-2000, -2000));
-                    report(frame->width() == frame->property("minimumWidth").toDouble() &&
-                               frame->height() == frame->property("minimumHeight").toDouble(),
-                           "resizing stops at the manager's minimum usable size");
-                    frame->setX(original.x());
-                    frame->setY(original.y());
-                    frame->setWidth(original.width());
-                    frame->setHeight(original.height());
-                    settle();
-                }
-                if (parser.isSet(shot_opt))
-                    grab().save(parser.value(shot_opt) + QStringLiteral("/outputs-manager.png"));
-                QMetaObject::invokeMethod(mgr, "close");
-                settle();
-                report(!mgr->isVisible(), "and closes again");
-            }
         }
 
         // Nothing in the whole project may serialise a credential. Asserted here as well as in

@@ -470,7 +470,15 @@ Item {
                                     anchors.right: parent.right
                                     anchors.margins: 8
                                     anchors.top: tileName.bottom
+                                    objectName: "sourceUsageLabel"
                                     text: {
+                                        if (dialog.pickingScene) {
+                                            const canvas = tile.modelData.canvasName;
+                                            return tile.modelData.useCount === 0
+                                                ? qsTr("In %1 scene list").arg(canvas)
+                                                : qsTr("%1 · nested in %2 scene(s)")
+                                                    .arg(canvas).arg(tile.modelData.useCount);
+                                        }
                                         const used = tile.modelData.useCount === 0
                                             ? qsTr("unused")
                                             : qsTr("used by %1").arg(tile.modelData.useCount);
@@ -479,7 +487,7 @@ Item {
                                             : used;
                                     }
                                     font.pixelSize: 9
-                                    color: tile.modelData.useCount === 0
+                                    color: !dialog.pickingScene && tile.modelData.useCount === 0
                                         ? Theme.c.warning : Theme.c.textMuted
                                     opacity: 0.85
                                     elide: Text.ElideRight

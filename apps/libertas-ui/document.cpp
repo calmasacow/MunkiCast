@@ -29,6 +29,7 @@
 #include <lcapture/video.hpp>
 #include <lcomp/filters.hpp>
 #include <lcore/log.hpp>
+#include <set>
 #include <span>
 
 namespace libertas::ui {
@@ -383,10 +384,16 @@ QVariantMap Document::placedRect(const QString& canvasId, const QString& nodeId)
     const ldoc::Node* node = ldoc::find_node(scene->roots, *node_id);
     if (!node)
         return {};
-    auto result = placed_map(project, *canvas, *node).value_or(QVariantMap{});
+    return placed_rect(*scene, *canvas, *node);
+}
+
+QVariantMap Document::placed_rect(const ldoc::Scene& scene, const ldoc::Canvas& canvas,
+                                 const ldoc::Node& node) const {
+    auto result = placed_map(session_->project(), canvas, node).value_or(QVariantMap{});
     if (!result.isEmpty()) {
-        const auto box = parent_space(*scene, node->id, *canvas).mapRect(QRectF(
-            result["x"].toDouble(), result["y"].toDouble(), result["width"].toDouble(), result["height"].toDouble()));
+        const auto box = parent_space(scene, node.id, canvas).mapRect(QRectF(
+            result["x"].toDouble(), result["y"].toDouble(),
+            result["width"].toDouble(), result["height"].toDouble()));
         result["x"] = box.x(); result["y"] = box.y();
         result["width"] = box.width(); result["height"] = box.height();
     }
@@ -638,6 +645,10 @@ bool unfiltered_natural_size(const ldoc::Project& project, const ldoc::Canvas& c
         const ldoc::Source* src = project.source(*source->source);
         if (!src)
             return false;
+        const auto resolved = ldoc::resolve_source(project, *src);
+        if (!resolved)
+            return false;
+        src = &*resolved;
         if (src->type == "source.color") {
             const auto w = number_setting(src->settings, "width");
             const auto h = number_setting(src->settings, "height");
@@ -696,7 +707,8 @@ bool natural_size(const ldoc::Project& project, const ldoc::Canvas& canvas, cons
     std::vector<ldoc::Effect> effects;
     if (const auto* data = std::get_if<ldoc::SourceData>(&node.data); data && data->source)
         if (const auto* source = project.source(*data->source))
-            effects = source->effects;
+            if (const auto resolved = ldoc::resolve_source(project, *source))
+                effects = resolved->effects;
     effects.insert(effects.end(), node.effects.begin(), node.effects.end());
     const auto size = lcomp::filter_size(effects, width, height);
     if (!size)
@@ -961,6 +973,7 @@ void Document::rebuild() {
                     row.visible = n.visible;
                     row.locked = n.locked;
                     row.isGroup = n.is_group();
+                    row.expanded = !collapsed_groups_.contains(row.id);
                     row.effectCount = static_cast<int>(n.effects.size());
                     if (const auto* placed = std::get_if<ldoc::SourceData>(&n.data)) {
                         if (placed->source) {
@@ -997,7 +1010,7 @@ void Document::rebuild() {
                         }
                     }
                     rows.push_back(std::move(row));
-                    if (const auto* kids = n.children())
+                    if (const auto* kids = n.children(); kids && !collapsed_groups_.contains(id_str(n.id)))
                         walk(*kids, depth + 1);
                 }
             };
@@ -1087,8 +1100,17 @@ void Document::rebuild() {
     // the program one: this panel is mostly read while building a scene, and faders that
     // belonged to whatever is on air would be the wrong set at exactly the moment they matter.
     std::vector<MixerStripRow> strips;
-    if (const ldoc::Scene* shown = current_scene()) {
-        ldoc::visit(shown->roots, [&](const ldoc::Node& n) {
+    std::set<ldoc::Id> visited_scenes;
+    const std::function<void(const ldoc::Scene&)> collect_audio = [&](const ldoc::Scene& scene) {
+        // Shared precomps get one set of controls; the same guard also bounds cyclic input.
+        if (!visited_scenes.insert(scene.id).second)
+            return;
+        ldoc::visit(scene.roots, [&](const ldoc::Node& n) {
+            if (const auto* precomp = std::get_if<ldoc::PrecompData>(&n.data)) {
+                if (const auto* nested = p.scene(precomp->scene))
+                    collect_audio(*nested);
+                return;
+            }
             const auto* placed = std::get_if<ldoc::SourceData>(&n.data);
             if (!placed)
                 return;
@@ -1101,7 +1123,7 @@ void Document::rebuild() {
             MixerStripRow row;
             row.id = id_str(n.id);
             row.nodeId = row.id;
-            row.sceneId = id_str(shown->id);
+            row.sceneId = id_str(scene.id);
             row.name = node_display_name(p, n);
             if (placed->audio.bus) {
                 row.busId = id_str(*placed->audio.bus);
@@ -1116,7 +1138,9 @@ void Document::rebuild() {
             row.selected = row.nodeId == selected_node_;
             strips.push_back(std::move(row));
         });
-    }
+    };
+    if (const auto* shown = current_scene())
+        collect_audio(*shown);
     mixer_strips_.set_rows(std::move(strips));
 
     // Scene and canvas names, so the deck and output rows can show what is on air rather than
@@ -1408,7 +1432,9 @@ void Document::selectNodeExtended(const QString& canvasId, const QString& nodeId
         return;
     }
     QStringList order;
-    ldoc::visit(s->roots, [&](const ldoc::Node& n) { order << id_str(n.id); });
+    const auto* model = static_cast<NodeModel*>(nodesFor(key));
+    for (const auto& row : model->rows())
+        order << row.id;
     const qsizetype from = order.indexOf(selection_anchor_);
     const qsizetype to = order.indexOf(nodeId);
     if (from < 0 || to < 0) {
@@ -1526,6 +1552,15 @@ void Document::setCanvasFps(const QString& id, int num, int den) {
 
 // ---- scene links ------------------------------------------------------------------------------
 
+QVariantList Document::sceneLinkCanvases() const {
+    QVariantList out;
+    const auto& canvases = session_->project().canvases;
+    for (std::size_t i = 1; i < canvases.size(); ++i)
+        out.push_back(QVariantMap{{QStringLiteral("id"), id_str(canvases[i].id)},
+                                  {QStringLiteral("name"), qstr(canvases[i].name)}});
+    return out;
+}
+
 int Document::sceneLinkCount(const QString& sceneId) const {
     const auto parsed = parse_id(sceneId);
     if (!parsed)
@@ -1582,12 +1617,16 @@ void Document::commitSceneLinks(const QString& sceneId, const QStringList& mainS
     if (!parsed || p.canvases.empty())
         return;
     const ldoc::Scene* target = p.scene(*parsed);
-    if (!target)
+    if (!target || target->canvas == p.canvases.front().id)
         return;
 
     std::vector<ldoc::Id> wanted;
     for (const QString& s : mainSceneIds) {
-        if (const auto id = parse_id(s))
+        const auto id = parse_id(s);
+        const auto* source = id ? p.scene(*id) : nullptr;
+        if (!source || source->canvas != p.canvases.front().id)
+            return;
+        if (std::find(wanted.begin(), wanted.end(), *id) == wanted.end())
             wanted.push_back(*id);
     }
     const auto is_wanted = [&](const ldoc::Id& id) {
@@ -1616,7 +1655,7 @@ void Document::commitSceneLinks(const QString& sceneId, const QStringList& mainS
         }
     }
 
-    std::size_t at = p.scene_links.size();
+    std::size_t at = p.scene_links.size() - steps.size();
     for (const ldoc::Id& from : wanted) {
         bool already = false;
         for (const ldoc::SceneLink& l : p.scene_links)
@@ -1630,12 +1669,12 @@ void Document::commitSceneLinks(const QString& sceneId, const QStringList& mainS
 
     if (steps.empty())
         return;
-    // One undo step for the whole tick-list, which is what "Link" means: the popup has one
-    // commit point, so undo has one too.
+    // Each link, unlink, or move is one undo step, including all affected relationships.
+    const QString target_name = qstr(target->name);
     run(ldoc::make_batch(std::move(steps), "Link scenes"));
     if (!moved.isEmpty())
         emit notice(QStringLiteral("Moved to \"%1\": %2")
-                        .arg(qstr(target->name), moved.join(QStringLiteral("; "))));
+                        .arg(target_name, moved.join(QStringLiteral("; "))));
 }
 
 // ---- scenes -----------------------------------------------------------------------------------
@@ -1651,10 +1690,19 @@ void Document::activateScene(const QString& id) {
         emit notice(QStringLiteral("This scene's canvas is missing."));
         return;
     }
+    // Re-clicking Main also reasserts its cues after a target was changed independently.
+    const bool needs_cue = std::any_of(project.scene_links.begin(), project.scene_links.end(),
+        [&](const auto& link) {
+            const auto* target = link.from == *parsed ? project.scene(link.to) : nullptr;
+            if (!target) return false;
+            const auto deck = std::find_if(project.decks.begin(), project.decks.end(),
+                [&](const auto& d) { return d.canvas == target->canvas; });
+            return deck == project.decks.end() || deck->program_scene != link.to;
+        });
     std::optional<ldoc::Command> command;
     for (const auto& deck : project.decks) {
         if (deck.canvas != canvas) continue;
-        if (deck.program_scene != parsed)
+        if (deck.program_scene != parsed || needs_cue)
             command = ldoc::SetDeckProgram{deck.id, *parsed};
         selectSceneOn(id_str(canvas), id);
         if (command) run(*command);
@@ -1845,6 +1893,7 @@ struct FieldSpec {
 
 constexpr FieldSpec kMedia[] = {
     {"localFile", "File", "path", "", false, 0, "", ""},
+    {"ignoreAudio", "Ignore Audio", "bool", "", false},
     {"useCache", "Use caching", "bool", "", true},
     // Looping by default is not a preference. `check_emergency_scene` reads this key by name
     // and warns when it is off, and a clip that plays once is a safety net that expires.
@@ -1876,6 +1925,7 @@ constexpr FieldSpec kSlideshow[] = {
 
 constexpr FieldSpec kPlaylist[] = {
     {"files", "Media paths (one per line)", "multiline"},
+    {"ignoreAudio", "Ignore Audio", "bool", "", false},
     {"useCache", "Use caching", "bool", "", true},
     {"loop", "Loop", "bool", "", true},
     {"clearOnEnd", "Show nothing when playback ends", "bool", "", true},
@@ -1964,6 +2014,7 @@ constexpr FieldSpec kCamera[] = {
 
 constexpr FieldSpec kBrowser[] = {
     {"url", "URL", "text", "https://"},
+    {"ignoreAudio", "Ignore Audio", "bool", "", false},
     {"", "A browser engine runs as a worker process of its own and is never loaded into ours "
          "(ADR-0004), so a page that wedges costs this source and nothing else.", "note"},
     {"width", "Width", "int", "", false, 1920, "", "px"},
@@ -1971,7 +2022,16 @@ constexpr FieldSpec kBrowser[] = {
     {"fps", "Frame rate", "int", "", false, 30, "", "fps"},
     {"css", "Custom CSS", "multiline"},
     {"transparentBackground", "Transparent background", "bool", "", true},
-    {"", "The page reloads when shown. Its audio uses a private sound-server output and enters the mixer.", "note"},
+    {"", "The page reloads when shown. Unless Ignore Audio is enabled, its audio uses a private "
+         "sound-server output and enters the mixer.", "note"},
+};
+
+constexpr FieldSpec kClone[] = {
+    {"target", "Clone source", "choice"},
+    {"audio", "Audio", "bool", "", false},
+    {"noFilters", "Bypass input video filters", "bool", "", false},
+    {"", "Shares the input capture. Clone filters, transform and audio routing are independent. "
+         "Missing inputs render transparently. Audio defaults off to avoid doubling the mix.", "note"},
 };
 
 constexpr FieldSpec kAudioInput[] = {
@@ -2119,6 +2179,7 @@ bool video_size(const ldoc::Source& src, double& width, double& height) {
 }
 
 std::span<const FieldSpec> schema_for(std::string_view type) {
+    if (type == "source.clone")        return kClone;
     if (type == "source.media")        return kMedia;
     if (type == "source.slideshow")    return kSlideshow;
     if (type == "source.playlist")     return kPlaylist;
@@ -2228,6 +2289,7 @@ QVariantList Document::sourceTypes() const {
         {"source.slideshow", "Image Slide Show", "\u25A8"},
         {"source.playlist", "Media Playlist (VLC equivalent)", "\u25B6"},
         {"source.image", "Image", "\u25A8"},
+        {"source.clone", "Source Clone", "\u29C9"},
         {"source.text", "Text", "T"},
         {"source.color", "Colour", "\u25A0"},
         {"source.screen", "Screen", "\u25AD"},
@@ -2458,6 +2520,9 @@ bool Document::hasLiveSource() const {
             const auto* source = std::get_if<ldoc::SourceData>(&node.data);
             const ldoc::Source* src =
                 source && source->source ? project.source(*source->source) : nullptr;
+            const auto resolved = src ? ldoc::resolve_source(project, *src) : std::nullopt;
+            if (resolved)
+                src = &*resolved;
             if (src && (is_live_source(src->type) ||
                         lcomp::timer_flag(src->settings, "countdown.enabled")))
                 live = true;
@@ -2496,6 +2561,16 @@ QVariantList Document::sourceSettingsSchema(const QString& type) const {
         }
         const QString choices = QString::fromLatin1(f.choices);
         QStringList options = choices.isEmpty() ? QStringList{} : choices.split(QLatin1Char('|'));
+        if (type == QLatin1String("source.clone") && std::string_view{f.key} == "target") {
+            QVariantMap labels;
+            options.append(QString{});
+            labels[QString{}] = QStringLiteral("None");
+            for (const auto& source : session_->project().sources) {
+                options.append(id_str(source.id));
+                labels[id_str(source.id)] = qstr(source.name);
+            }
+            m["choiceLabels"] = labels;
+        }
         if (type == QLatin1String("source.text") && std::string_view{f.key} == "font") {
             options = QFontDatabase::families();
             if (!options.contains(QStringLiteral("Sans")))
@@ -2640,11 +2715,25 @@ void Document::applySourceSettings(const QString& id, const QString& name,
         }
     }
 
+    if (copy.type == "source.clone") {
+        auto candidate = session_->project();
+        for (auto& source : candidate.sources)
+            if (source.id == copy.id)
+                source = copy;
+        const auto it = copy.settings.find("target");
+        const auto* target = it == copy.settings.end() ? nullptr : std::get_if<std::string>(&it->second);
+        if (target && !target->empty() && !ldoc::resolve_source(candidate, copy)) {
+            emit notice(QStringLiteral("Choose an existing source without a clone cycle."));
+            return;
+        }
+    }
+
     // Nothing was actually changed -- the dialog was opened and accepted. An undo step for that
     // is a step the operator has to press Ctrl+Z through later to reach a real one.
     if (copy == *src)
         return;
-    if (copy.type == "source.v4l2" && !ldoc::has_audio(*src) && ldoc::has_audio(copy)) {
+    if ((copy.type == "source.v4l2" || copy.type == "source.clone") &&
+        !ldoc::has_audio(*src) && ldoc::has_audio(copy)) {
         std::vector<ldoc::Command> steps;
         for (const auto& bus : session_->project().buses) {
             if (bus.kind != ldoc::BusKind::Program)
@@ -3991,6 +4080,36 @@ QString Document::outputAudioEncode(const QString& outputId) const {
     return {};
 }
 
+void Document::setRecordingDirectory(const QString& outputId, const QString& path) {
+    const auto id = parse_id(outputId);
+    const auto& outputs = session_->project().outputs;
+    const auto output = std::find_if(outputs.begin(), outputs.end(),
+        [&](const auto& item) { return id && item.id == *id; });
+    if (output == outputs.end() || output->destination.kind != ldoc::DestinationKind::File)
+        return;
+    QString directory = path.trimmed();
+    if (directory == "~" || directory.startsWith("~/"))
+        directory.replace(0, 1, QDir::homePath());
+    if (!directory.isEmpty()) {
+        if (directory.contains(QChar::Null) || !QDir::isAbsolutePath(directory) ||
+            !QFileInfo(directory).isDir()) {
+            emit notice(QStringLiteral("Choose an existing absolute recording directory."));
+            return;
+        }
+        directory = QDir::cleanPath(directory);
+    }
+    setOutputDestination(outputId, QStringLiteral("file"), directory);
+}
+
+QString Document::recordingDirectory() const {
+    for (const auto& output : session_->project().outputs)
+        if (output.destination.kind == ldoc::DestinationKind::File &&
+            !output.destination.url.empty())
+            return qstr(output.destination.url);
+    return session_->path().empty() ? QDir::homePath()
+                                   : qstr(session_->path().parent_path().string());
+}
+
 QString Document::recordingPathFor(const QString& encodeId) const {
     const auto parsed = parse_id(encodeId);
     if (!parsed)
@@ -3998,19 +4117,15 @@ QString Document::recordingPathFor(const QString& encodeId) const {
     const ldoc::Encode* e = session_->project().encode(*parsed);
     if (!e)
         return {};
-    // Beside the project, which is also where free space is measured (see Telemetry).
-    const std::filesystem::path base =
-        session_->path().empty()
-            ? std::filesystem::path{QDir::homePath().toStdString()}
-            : session_->path().parent_path();
-    // Stamped, because a second take that silently replaced the first would be the kind of
-    // loss nobody notices until the first one is wanted.
-    const QString stamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-hhmmss"));
+    const auto base = std::filesystem::path{recordingDirectory().toStdString()};
+    const QString stamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd-hhmmss-zzz"));
     QString name = qstr(e->name).simplified();
     name.replace(QRegularExpression(QStringLiteral("[^A-Za-z0-9._-]+")), QStringLiteral("-"));
     if (name.isEmpty())
         name = QStringLiteral("recording");
-    return qstr((base / QStringLiteral("%1-%2.mkv").arg(name, stamp).toStdString()).string());
+    // ponytail: MKV is the recording container; expose a format choice when another is needed.
+    return qstr((base / QStringLiteral("%1-%2-%3.mkv")
+                           .arg(name, stamp, id_str(ldoc::Id::generate())).toStdString()).string());
 }
 
 QString Document::encodeCanvasOf(const QString& encodeId) const {
@@ -4680,6 +4795,18 @@ void Document::moveSelectedIntoGroup(const QString& groupId) {
                                std::format("Move {} sources", steps.size())));
 }
 
+void Document::toggleGroupExpanded(const QString& canvasId, const QString& nodeId) {
+    const auto* scene = scene_of_canvas(canvas_key(canvasId));
+    const auto id = parse_id(nodeId);
+    const auto* node = scene && id ? ldoc::find_node(scene->roots, *id) : nullptr;
+    if (!node || !node->is_group())
+        return;
+    if (collapsed_groups_.removeAll(nodeId) == 0)
+        collapsed_groups_ << nodeId;
+    selectNodeOn(canvasId, nodeId);
+    rebuild();
+}
+
 QVariantMap Document::nodeAtRow(int row) const {
     const auto it = nodes_by_canvas_.find(current_canvas_);
     if (it == nodes_by_canvas_.end() || !it->second)
@@ -5005,7 +5132,7 @@ void Document::fitToCanvas(bool stretch) {
     const ldoc::Canvas* canvas = current_canvas();
     if (!canvas || canvas->width <= 0 || canvas->height <= 0)
         return;
-    const QVariantMap rect = placedRect(QString{}, id_str(node->id));
+    const QVariantMap rect = placed_rect(*scene, *canvas, *node);
     const double w = rect.value(QStringLiteral("width")).toDouble();
     const double h = rect.value(QStringLiteral("height")).toDouble();
     if (!(w > 0.0) || !(h > 0.0))
@@ -5030,7 +5157,7 @@ void Document::centerOnCanvas(bool horizontal, bool vertical) {
     const ldoc::Canvas* canvas = current_canvas();
     if (!canvas || canvas->width <= 0 || canvas->height <= 0)
         return;
-    const QVariantMap rect = placedRect(QString{}, id_str(node->id));
+    const QVariantMap rect = placed_rect(*scene, *canvas, *node);
     const double w = rect.value(QStringLiteral("width")).toDouble();
     const double h = rect.value(QStringLiteral("height")).toDouble();
     if (!(w > 0.0) || !(h > 0.0))

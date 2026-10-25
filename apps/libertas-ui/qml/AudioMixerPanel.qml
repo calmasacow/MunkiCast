@@ -247,12 +247,22 @@ Item {
                 // swallowing a fader drag or the mute button.
                 z: -1
                 onClicked: (ev) => {
-                    Document.selectNode(src.nodeId);
+                    if (src.sceneId === Document.selectedScene)
+                        Document.selectNode(src.nodeId);
                     if (ev.button !== Qt.RightButton)
                         return;
                     const at = mapToItem(panel, ev.x, ev.y);
                     stripMenu.popup(at.x, at.y, [
                         { text: qsTr("Filters"), action: () => Document.showFilters(src.nodeId) },
+                        {
+                            text: qsTr("Route audio"),
+                            children: [{text: qsTr("Not routed"), checked: src.busId === "",
+                                action: () => Document.routeNode(src.sceneId, src.nodeId, "")}]
+                                .concat(Document.audioBusChoices().map(bus => ({
+                                    text: bus.name, checked: src.busId === bus.id,
+                                    action: () => Document.routeNode(src.sceneId, src.nodeId, bus.id)
+                                })))
+                        },
                         {
                             text: qsTr("Lock Level"),
                             checked: src.levelLocked,
@@ -408,6 +418,7 @@ Item {
                     Text {
                         anchors.fill: parent
                         visible: !rename.visible
+                        objectName: "mixerChannelName"
                         text: strip.name
                         font.pixelSize: 11
                         font.weight: Font.DemiBold
@@ -429,6 +440,7 @@ Item {
 
                     TextInput {
                         id: rename
+                        objectName: "mixerChannelNameEditor"
 
                         anchors.fill: parent
                         visible: false
@@ -439,14 +451,17 @@ Item {
                         horizontalAlignment: Text.AlignHCenter
                         verticalAlignment: Text.AlignVCenter
 
-                        onAccepted: {
+                        function commit() {
+                            if (!visible)
+                                return;
                             visible = false;
                             if (text !== strip.name)
                                 Document.renameBus(strip.busId, text);
                         }
+                        onAccepted: commit()
                         onActiveFocusChanged: {
                             if (!activeFocus)
-                                visible = false;
+                                commit();
                         }
                         Keys.onEscapePressed: visible = false
                     }

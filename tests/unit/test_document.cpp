@@ -829,4 +829,48 @@ LTEST_CASE(the_emergency_scene_is_per_canvas) {
     CHECK_MSG(is_valid(f.project), "{}", errors_of(f.project));
 }
 
+LTEST_CASE(ignored_source_audio_preserves_routes_without_missing_bus_warnings) {
+    for (const auto* type : {"source.media", "source.playlist", "source.browser"}) {
+        auto project = make_default_project("Video only");
+        Source source;
+        source.id = Id::generate();
+        source.type = type;
+        CHECK(has_audio(source));
+        auto node = make_node(NodeKind::Source, "Video");
+        auto& audio = std::get<SourceData>(node.data).audio;
+        std::get<SourceData>(node.data).source = source.id;
+        audio.bus = Id::generate();
+        audio.sends = {{Id::generate(), 0, false}};
+        Scene scene;
+        scene.id = Id::generate();
+        scene.canvas = project.canvases.front().id;
+        scene.roots = {node};
+        scene.audio_overrides[node.id].bus = Id::generate();
+        project.scenes = {scene};
+        project.sources = {source};
+        const auto bus_warnings = [&] {
+            const auto problems = validate(project);
+            return std::ranges::count_if(problems, [&](const Problem& problem) {
+                return problem.subject == node.id && problem.message.contains("refers to bus");
+            });
+        };
+        CHECK_EQ(bus_warnings(), 2);
+        project.sources.front().settings["ignoreAudio"] = true;
+        CHECK(!has_audio(project.sources.front()));
+        CHECK_EQ(bus_warnings(), 0);
+        const auto ignored_problems = validate(project);
+        CHECK(std::ranges::none_of(ignored_problems, [](const Problem& problem) {
+            return problem.message.contains("routes a source to bus");
+        }));
+        CHECK(project.scenes.front().audio_overrides.at(node.id).bus ==
+              scene.audio_overrides.at(node.id).bus);
+        CHECK(std::get<SourceData>(project.scenes.front().roots.front().data).audio == audio);
+        project.sources.front().settings["ignoreAudio"] = false;
+        CHECK(has_audio(project.sources.front()));
+        CHECK_EQ(bus_warnings(), 2);
+        project.sources.front().settings["ignoreAudio"] = std::string{"true"};
+        CHECK(has_audio(project.sources.front()));
+    }
+}
+
 LTEST_MAIN("document")

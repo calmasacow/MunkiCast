@@ -308,6 +308,31 @@ LTEST_CASE(browser_audio_reaches_pcm_transport) {
     CHECK(tone);
 }
 
+LTEST_CASE(browser_ignore_audio_keeps_video_without_pcm) {
+    auto src = source("source.browser");
+    src.settings["url"] = std::string("file://") + LIBERTAS_IMAGE_FIXTURES + "/browser-tone.html";
+    src.settings["ignoreAudio"] = true;
+    std::mutex mu;
+    std::condition_variable ready;
+    bool picture = false, audio = false;
+    {
+        SourceWorker worker(src, [&](auto frame) {
+            std::lock_guard lock(mu);
+            picture = picture || bool(frame);
+            ready.notify_all();
+        }, [&](auto samples) {
+            std::lock_guard lock(mu);
+            audio = audio || !samples.empty();
+            ready.notify_all();
+        });
+        std::unique_lock lock(mu);
+        ready.wait_for(lock, std::chrono::seconds(8), [&] { return picture; });
+        ready.wait_for(lock, std::chrono::milliseconds(250), [&] { return audio; });
+    }
+    CHECK(picture);
+    CHECK(!audio);
+}
+
 LTEST_CASE(countdown_text_worker_draws_running_and_paused_timer) {
     auto src = source("source.text");
     src.settings["size"] = std::int64_t{20};

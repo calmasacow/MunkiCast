@@ -131,6 +131,13 @@ Item {
                         checked: false,
                         action: () => Document.copyScene(row.sceneId)
                     }];
+                    if (row.canLink) {
+                        rows.push({
+                            text: qsTr("Link scene"),
+                            checked: false,
+                            action: () => linkDialog.open(panel.canvasId, row.sceneId)
+                        });
+                    }
                     if (Document.pasteDescription() !== "") {
                         rows.push({
                             text: Document.pasteDescription(),
@@ -266,7 +273,7 @@ Item {
                         anchors.fill: parent
                         anchors.margins: -3
                         hoverEnabled: true
-                        onClicked: linkDialog.open(row.sceneId, row.name)
+                        onClicked: linkDialog.open(panel.canvasId, row.sceneId)
                     }
 
                     ToolTipText {
@@ -380,6 +387,19 @@ Item {
                 tip: qsTr("Remove scene")
                 enabled: panel.selectedScene !== ""
                 onClicked: Document.removeScene(panel.selectedScene)
+            }
+
+            ToolButton {
+                objectName: "openSceneLinker"
+                visible: panel.canvasId !== ""
+                label: ""
+                tip: qsTr("Link scenes")
+                onClicked: linkDialog.open(panel.canvasId, panel.selectedScene)
+
+                ChainIcon {
+                    anchors.centerIn: parent
+                    color: Theme.c.text
+                }
             }
 
             ToolButton {

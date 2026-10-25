@@ -184,12 +184,52 @@ bool has_audio(std::string_view source_type) {
 }
 
 bool has_audio(const Source& source) {
+    if (source.type == "source.clone") {
+        const auto it = source.settings.find("audio");
+        const auto* enabled = it == source.settings.end() ? nullptr : std::get_if<bool>(&it->second);
+        return enabled && *enabled;
+    }
+    if (source.type == "source.media" || source.type == "source.playlist" ||
+        source.type == "source.browser") {
+        const auto it = source.settings.find("ignoreAudio");
+        if (it != source.settings.end())
+            if (const auto* ignored = std::get_if<bool>(&it->second); ignored && *ignored)
+                return false;
+    }
     if (source.type != "source.v4l2")
         return has_audio(source.type);
     const auto it = source.settings.find("audioDevice");
     const auto* device =
         it == source.settings.end() ? nullptr : std::get_if<std::string>(&it->second);
     return device && !device->empty() && *device != "none";
+}
+
+std::optional<Source> resolve_source(const Project& project, const Source& source, bool audio) {
+    const Source* input = &source;
+    std::vector<const Source*> clones;
+    while (input->type == "source.clone") {
+        // ponytail: clone chains stop at 64; use a dependency graph for deeper compositions.
+        if ((audio && !has_audio(*input)) || clones.size() >= 64 ||
+            clones.size() >= project.sources.size() ||
+            std::ranges::find(clones, input) != clones.end())
+            return std::nullopt;
+        clones.push_back(input);
+        const auto it = input->settings.find("target");
+        const auto* text = it == input->settings.end() ? nullptr : std::get_if<std::string>(&it->second);
+        const auto id = text ? Id::parse(*text) : std::nullopt;
+        input = id ? project.source(*id) : nullptr;
+        if (!input)
+            return std::nullopt;
+    }
+    Source resolved = *input;
+    for (auto it = clones.rbegin(); it != clones.rend(); ++it) {
+        const auto setting = (*it)->settings.find("noFilters");
+        if (!audio && setting != (*it)->settings.end())
+            if (const auto* bypass = std::get_if<bool>(&setting->second); bypass && *bypass)
+                resolved.effects.clear();
+        resolved.effects.insert(resolved.effects.end(), (*it)->effects.begin(), (*it)->effects.end());
+    }
+    return resolved;
 }
 
 std::vector<Problem> check_emergency_scene(const Project& project, const Id& scene_id) {
@@ -494,6 +534,8 @@ private:
                     err(effect.id, "source filter has no type");
             if (s.type.empty())
                 err(s.id, std::format("source '{}' has no type", s.name));
+            if (s.type == "source.clone" && !resolve_source(p_, s))
+                warn(s.id, std::format("source clone '{}' has a missing input or a clone cycle", s.name));
             if (s.asset && !exists_as(*s.asset, "asset"))
                 warn(s.id, std::format("source '{}' refers to asset {}, which is not in the "
                                        "manifest",
@@ -520,8 +562,16 @@ private:
                                       s.name, s.canvas.to_string()));
 
             std::unordered_set<Id> in_scene;
+            std::unordered_set<Id> ignored_audio;
             visit(s.roots, [&](const Node& n) {
                 in_scene.insert(n.id);
+                if (const auto* placed = std::get_if<SourceData>(&n.data)) {
+                    const auto* source = placed->source ? p_.source(*placed->source) : nullptr;
+                    if (source && !has_audio(*source) &&
+                        (source->type == "source.media" || source->type == "source.playlist" ||
+                         source->type == "source.browser"))
+                        ignored_audio.insert(n.id);
+                }
                 if (n.blend.opacity < 0.0 || n.blend.opacity > 1.0)
                     err(n.id, std::format("'{}' has opacity {}", n.name, n.blend.opacity));
                 for (const Effect& e : n.effects) {
@@ -542,6 +592,9 @@ private:
             std::vector<Reference> refs;
             collect_references(s.roots, refs);
             for (const Reference& r : refs) {
+                // Disabled audio keeps its saved routing for re-enabling, without warnings.
+                if (r.kind == RefKind::Bus && ignored_audio.contains(r.from))
+                    continue;
                 const char* kind = nullptr;
                 switch (r.kind) {
                 case RefKind::Source: kind = "source"; break;
@@ -559,9 +612,13 @@ private:
                 // The operator is told what is missing and can fix it; nothing silently renders
                 // wrong. Errors are reserved for documents that cannot be rendered as written.
                 if (kind) {
-                    if (!exists_as(r.id, kind))
-                        warn(r.from, std::format("refers to {} {}, which does not exist",
+                    if (!exists_as(r.id, kind)) {
+                        const auto* node = find_node(s.roots, r.from);
+                        warn(r.from, std::format("scene '{}', source '{}': refers to {} {}, "
+                                                 "which does not exist",
+                                                 s.name, node ? node->name : r.from.to_string(),
                                                  ref_kind_name(r.kind), r.id.to_string()));
+                    }
                 } else {
                     // Node references resolve within the project, not only within this scene: a
                     // Reference may legitimately point at a node in another scene.
@@ -577,7 +634,7 @@ private:
                     warn(s.id, std::format("scene '{}' has audio routing for node {}, which is "
                                            "not in it",
                                            s.name, node_id.to_string()));
-                if (ov.bus && !exists_as(*ov.bus, "bus"))
+                if (ov.bus && !ignored_audio.contains(node_id) && !exists_as(*ov.bus, "bus"))
                     warn(s.id, std::format("scene '{}' routes a source to bus {}, which does not "
                                            "exist",
                                            s.name, ov.bus->to_string()));

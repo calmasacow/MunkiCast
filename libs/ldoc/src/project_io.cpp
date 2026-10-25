@@ -465,7 +465,9 @@ std::expected<OpenResult, std::string> open_project(const fs::path& dir) {
                         Id::nil()});
     }
 
-    for (Problem& p : validate(result.project))
+    auto validation = validate(result.project);
+    result.validation_problem_count = validation.size();
+    for (Problem& p : validation)
         result.problems.push_back(std::move(p));
     return result;
 }

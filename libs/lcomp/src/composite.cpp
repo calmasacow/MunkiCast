@@ -906,6 +906,15 @@ void paint_node(const ldoc::Project& project, const ldoc::Node& node, double par
             refuse(target.picture, node, GapReason::NoSource);
             return;
         }
+        const auto resolved = src->type == "source.clone"
+                                  ? ldoc::resolve_source(project, *src)
+                                  : std::optional<ldoc::Source>{};
+        if (src->type == "source.clone" && !resolved) {
+            refuse(target.picture, node, GapReason::NoSource);
+            return;
+        }
+        if (resolved)
+            src = &*resolved;
         if (audio_only(src->type))
             return;
         if (!video_filters_supported(src->effects)) {

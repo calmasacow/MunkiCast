@@ -17,7 +17,11 @@
 #include "lencode/encoder.hpp"
 
 #include <algorithm>
+#include <cerrno>
 #include <chrono>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <unistd.h>
 #include <cstring>
 #include <format>
 #include <lcore/log.hpp>
@@ -52,6 +56,7 @@ struct Encoder {
     EncoderStats stats;
 
     AVFormatContext* fmt = nullptr;
+    int file_fd = -1;
 
     AVCodecContext* vctx = nullptr;
     AVStream* vst = nullptr;
@@ -75,6 +80,30 @@ struct Encoder {
 
 namespace {
 
+int file_write(void* opaque, const std::uint8_t* data, int size) {
+    const int fd = static_cast<Encoder*>(opaque)->file_fd;
+    int written = 0;
+    while (written < size) {
+        const auto count = ::write(fd, data + written, static_cast<std::size_t>(size - written));
+        if (count < 0 && errno == EINTR)
+            continue;
+        if (count <= 0)
+            return AVERROR(count == 0 ? EIO : errno);
+        written += static_cast<int>(count);
+    }
+    return written;
+}
+
+std::int64_t file_seek(void* opaque, std::int64_t offset, int whence) {
+    const int fd = static_cast<Encoder*>(opaque)->file_fd;
+    if (whence == AVSEEK_SIZE) {
+        struct stat info {};
+        return ::fstat(fd, &info) == 0 ? info.st_size : AVERROR(errno);
+    }
+    const auto result = ::lseek(fd, offset, whence & ~AVSEEK_FORCE);
+    return result < 0 ? AVERROR(errno) : result;
+}
+
 std::string av_err(int e) {
     char b[AV_ERROR_MAX_STRING_SIZE] = {};
     av_strerror(e, b, sizeof b);
@@ -95,7 +124,9 @@ bool drain(Encoder& enc, AVCodecContext* ctx, AVStream* st, std::uint64_t& bytes
         enc.pkt->stream_index = st->index;
         av_packet_rescale_ts(enc.pkt, ctx->time_base, st->time_base);
         bytes += static_cast<std::uint64_t>(enc.pkt->size);
-        const int w = av_interleaved_write_frame(enc.fmt, enc.pkt);
+        int w = av_interleaved_write_frame(enc.fmt, enc.pkt);
+        if (w >= 0 && enc.fmt->pb && enc.fmt->pb->error < 0)
+            w = enc.fmt->pb->error;
         av_packet_unref(enc.pkt);
         if (w < 0) {
             error = std::format("av_interleaved_write_frame: {}", av_err(w));
@@ -220,6 +251,10 @@ AVCodecContext* try_video(const char* name, const RuntimeConfig& cfg, AVFormatCo
 EncoderPtr encoder_open(const RuntimeConfig& cfg, std::string& error) {
     auto enc = EncoderPtr(new Encoder());
     enc->cfg = cfg;
+    if (cfg.path.find('\0') != std::string::npos) {
+        error = "the recording path contains a null character";
+        return nullptr;
+    }
     if (enc->cfg.source_width == 0)
         enc->cfg.source_width = cfg.width;
     if (enc->cfg.source_height == 0)
@@ -272,6 +307,8 @@ EncoderPtr encoder_open(const RuntimeConfig& cfg, std::string& error) {
         return nullptr;
     }
     enc->vst->time_base = enc->vctx->time_base;
+    enc->vst->avg_frame_rate = enc->vctx->framerate;
+    enc->vst->r_frame_rate = enc->vctx->framerate;
     avcodec_parameters_from_context(enc->vst->codecpar, enc->vctx);
 
     enc->vframe = av_frame_alloc();
@@ -363,12 +400,26 @@ EncoderPtr encoder_open(const RuntimeConfig& cfg, std::string& error) {
                  enc->actx->frame_size);
     }
 
-    if ((enc->fmt->oformat->flags & AVFMT_NOFILE) == 0) {
-        if ((r = avio_open(&enc->fmt->pb, cfg.path.c_str(), AVIO_FLAG_WRITE)) < 0) {
-            error = std::format("avio_open({}): {}", cfg.path, av_err(r));
-            return nullptr;
-        }
+    // Create exclusively: neither an existing take nor a symlink may be overwritten.
+    enc->file_fd = ::open(cfg.path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0666);
+    if (enc->file_fd < 0) {
+        error = std::format("Cannot create recording '{}': {}", cfg.path, std::strerror(errno));
+        return nullptr;
     }
+    constexpr int buffer_size = 32768;
+    auto* buffer = static_cast<std::uint8_t*>(av_malloc(buffer_size));
+    if (!buffer) {
+        error = "cannot allocate the recording write buffer";
+        return nullptr;
+    }
+    enc->fmt->pb = avio_alloc_context(buffer, buffer_size, 1, enc.get(), nullptr,
+                                      file_write, file_seek);
+    if (!enc->fmt->pb) {
+        av_free(buffer);
+        error = "cannot allocate the recording file writer";
+        return nullptr;
+    }
+    enc->fmt->flags |= AVFMT_FLAG_CUSTOM_IO;
     // Always write a fragmented container, so an interrupted recording is still a valid file.
     AVDictionary* opts = nullptr;
     av_dict_set(&opts, "movflags", "frag_keyframe+empty_moov+default_base_moof", 0);
@@ -486,7 +537,13 @@ bool encoder_finish(Encoder& enc, std::string& error) {
         if (!drain(enc, enc.actx, enc.ast, enc.stats.audio_bytes, error))
             return false;
     }
-    const int r = av_write_trailer(enc.fmt);
+    int r = av_write_trailer(enc.fmt);
+    enc.header_written = false;
+    avio_flush(enc.fmt->pb);
+    if (r >= 0 && enc.fmt->pb->error < 0)
+        r = enc.fmt->pb->error;
+    if (r >= 0 && enc.file_fd >= 0 && ::fsync(enc.file_fd) < 0)
+        r = AVERROR(errno);
     if (r < 0) {
         error = std::format("av_write_trailer: {}", av_err(r));
         return false;
@@ -569,10 +626,14 @@ void encoder_close(Encoder* enc) {
     if (enc->actx != nullptr)
         avcodec_free_context(&enc->actx);
     if (enc->fmt != nullptr) {
-        if ((enc->fmt->oformat->flags & AVFMT_NOFILE) == 0 && enc->fmt->pb != nullptr)
-            avio_closep(&enc->fmt->pb);
+        if (enc->fmt->pb != nullptr) {
+            av_freep(&enc->fmt->pb->buffer);
+            avio_context_free(&enc->fmt->pb);
+        }
         avformat_free_context(enc->fmt);
     }
+    if (enc->file_fd >= 0)
+        ::close(enc->file_fd);
     delete enc;
 }
 

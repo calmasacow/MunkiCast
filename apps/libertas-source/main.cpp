@@ -601,16 +601,18 @@ class Content : public QObject {
             if (!url.isValid() ||
                 (url.scheme() != "https" && url.scheme() != "http" && url.scheme() != "file"))
                 throw std::runtime_error("browser URL must use http, https or file");
-            const std::string sink = "libertas_browser_" + std::to_string(getpid());
-            std::string audio_error;
-            browser_sink_ = libertas::capture::AudioSink::open(sink, audio_error);
-            if (browser_sink_) {
-                qputenv("PULSE_SINK", QByteArray::fromStdString(sink));
-                browser_audio_ = libertas::capture::AudioCapture::open(
-                    sink + ".monitor", false, [this](auto pcm) { append_audio(pcm); }, audio_error);
+            if (ldoc::has_audio(source)) {
+                const std::string sink = "libertas_browser_" + std::to_string(getpid());
+                std::string audio_error;
+                browser_sink_ = libertas::capture::AudioSink::open(sink, audio_error);
+                if (browser_sink_) {
+                    qputenv("PULSE_SINK", QByteArray::fromStdString(sink));
+                    browser_audio_ = libertas::capture::AudioCapture::open(
+                        sink + ".monitor", false, [this](auto pcm) { append_audio(pcm); }, audio_error);
+                }
+                if (!browser_audio_)
+                    qWarning("browser audio: %s", audio_error.c_str());
             }
-            if (!browser_audio_)
-                qWarning("browser audio: %s", audio_error.c_str());
             web_ = std::make_unique<QWebEngineView>();
             web_->setAttribute(Qt::WA_DontShowOnScreen);
             web_->resize(size_);

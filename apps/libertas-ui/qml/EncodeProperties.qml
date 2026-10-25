@@ -25,6 +25,8 @@ Item {
     property string outputVideoId: ""
     property string outputAudioId: ""
     property var destination: ({})
+    property string chosenPreset: ""
+    property string newPresetName: ""
     property string pendingKey: ""
     onPendingKeyChanged: if (pendingKey === "") destinationKey.clear()
     readonly property bool streamDestination: panel.selectedKind === "output" &&
@@ -159,6 +161,61 @@ Item {
                 spacing: 6
                 visible: panel.selectedKind === "encode"
 
+                ChoiceField {
+                    objectName: "savedEncoderPreset"
+                    width: parent.width
+                    label: qsTr("Saved preset")
+                    labelWidth: 150
+                    choices: [""].concat(Document.encoderPresetNames)
+                    choiceLabels: ({"": qsTr("Choose a preset")})
+                    value: panel.chosenPreset
+                    onCommitted: value => panel.chosenPreset = value
+                }
+                Row {
+                    spacing: 6
+                    DialogButton {
+                        objectName: "applyEncoderPreset"
+                        text: qsTr("Apply preset")
+                        enabled: panel.chosenPreset !== ""
+                        onClicked: Document.applyEncoderPreset(panel.selectedId, panel.chosenPreset)
+                    }
+                    DialogButton {
+                        objectName: "replaceEncoderPreset"
+                        text: qsTr("Replace selected")
+                        enabled: panel.chosenPreset !== "" && panel.chosenPreset !== "Default 16:9" && panel.chosenPreset !== "Default 9:16"
+                        onClicked: Document.saveEncoderPreset(panel.selectedId, panel.chosenPreset, true)
+                    }
+                    DialogButton {
+                        objectName: "removeEncoderPreset"
+                        text: qsTr("Delete preset")
+                        enabled: panel.chosenPreset !== "" && panel.chosenPreset !== "Default 16:9" && panel.chosenPreset !== "Default 9:16"
+                        onClicked: {
+                            if (Document.removeEncoderPreset(panel.chosenPreset)) panel.chosenPreset = "";
+                        }
+                    }
+                }
+                TextLine {
+                    id: presetName
+                    objectName: "newEncoderPresetName"
+                    width: parent.width
+                    label: qsTr("New preset name")
+                    labelWidth: 150
+                    value: panel.newPresetName
+                    commitOnEdit: true
+                    onCommitted: value => panel.newPresetName = value
+                }
+                DialogButton {
+                    objectName: "saveEncoderPreset"
+                    text: qsTr("Save as new preset")
+                    enabled: panel.newPresetName.trim().length > 0
+                    onClicked: {
+                        if (Document.saveEncoderPreset(panel.selectedId, panel.newPresetName)) {
+                            panel.chosenPreset = panel.newPresetName.trim();
+                            panel.newPresetName = "";
+                            presetName.clear();
+                        }
+                    }
+                }
                 ChoiceField {
                     objectName: "encodeCanvasInput"
                     width: parent.width
@@ -571,6 +628,36 @@ Item {
                     labelWidth: 150
                     value: nodeName.value
                     onCommitted: value => Document.renameOutput(panel.selectedId, value)
+                }
+
+                TextLine {
+                    objectName: "recordingDirectory"
+                    width: parent.width
+                    visible: panel.destination.destinationKind === "file"
+                    label: qsTr("Output folder")
+                    labelWidth: 100
+                    value: panel.destination.url || ""
+                    placeholder: { void panel.revision; return Document.recordingDirectory(); }
+                    browsable: true
+                    onCommitted: value => Document.setRecordingDirectory(panel.selectedId, value)
+                    onBrowseRequested: {
+                        const outputId = panel.selectedId;
+                        const path = FileDialog.directory(qsTr("Select recording directory"),
+                            panel.destination.url || Document.recordingDirectory());
+                        if (path !== "")
+                            Document.setRecordingDirectory(outputId, path);
+                        else if (FileDialog.lastError() !== "")
+                            NoticeLog.add(FileDialog.lastError());
+                    }
+                }
+
+                Text {
+                    width: parent.width
+                    visible: panel.destination.destinationKind === "file"
+                    text: qsTr("Recordings use MKV with a unique filename for every take.")
+                    font.pixelSize: 10
+                    color: Theme.c.textMuted
+                    wrapMode: Text.WordWrap
                 }
 
                 ChoiceField {

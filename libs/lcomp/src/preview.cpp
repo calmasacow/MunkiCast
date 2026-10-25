@@ -605,6 +605,14 @@ std::expected<void, std::string> serve_preview(lipc::Channel channel, FrameSourc
             if (kind == Kind::Quit)
                 return {};
 
+            const auto send_record_state = [&](const RecordState& state) {
+                std::vector<std::byte> reply{static_cast<std::byte>(Kind::RecordState),
+                                            static_cast<std::byte>(state.running ? 1 : 0)};
+                for (char c : state.error)
+                    reply.push_back(static_cast<std::byte>(c));
+                return channel.send(reply);
+            };
+
             if (kind == Kind::Record) {
                 RecordState state;
                 if (payload.size() < 28) {
@@ -631,11 +639,7 @@ std::expected<void, std::string> serve_preview(lipc::Channel channel, FrameSourc
                         state = record.control(request, *assembly.project);
                     }
                 }
-                std::vector<std::byte> reply{static_cast<std::byte>(Kind::RecordState)};
-                reply.push_back(static_cast<std::byte>(state.running ? 1 : 0));
-                for (char c : state.error)
-                    reply.push_back(static_cast<std::byte>(c));
-                if (auto sent = channel.send(reply); !sent)
+                if (auto sent = send_record_state(state); !sent)
                     return sent;
                 continue;
             }
@@ -785,13 +789,16 @@ std::expected<void, std::string> serve_preview(lipc::Channel channel, FrameSourc
                 // encoding the downscaled one -- a 1080p file off a 640px preview is not a
                 // recording of anything.
                 if (record.wants && record.frame && record.wants(canvas.id)) {
-                    if (max_edge == 0) {
-                        record.frame(canvas.id, picture);
-                    } else {
-                        Picture full =
-                            render ? render(*assembly.project, canvas.id, 0)
-                                   : composite_canvas(*assembly.project, canvas.id, frames);
-                        record.frame(canvas.id, full);
+                    Picture full;
+                    const Picture* recorded = &picture;
+                    if (max_edge != 0) {
+                        full = render ? render(*assembly.project, canvas.id, 0)
+                                      : composite_canvas(*assembly.project, canvas.id, frames);
+                        recorded = &full;
+                    }
+                    if (const auto state = record.frame(canvas.id, *recorded)) {
+                        if (auto sent = send_record_state(*state); !sent)
+                            return sent;
                     }
                 }
                 if (auto sent = send_frame(channel, canvas.id, picture, slots); !sent)

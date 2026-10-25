@@ -79,6 +79,7 @@ struct NodeRow {
     bool visible = true;
     bool locked = false;
     bool isGroup = false;
+    bool expanded = true;
     int effectCount = 0;
     /// This node's source is a type that can have prepared local copies, so the row draws a
     /// CACHE box. Types that are not file-backed have no box at all rather than a grey one.
@@ -107,6 +108,7 @@ public:
         VisibleRole,
         LockedRole,
         IsGroupRole,
+        ExpandedRole,
         EffectCountRole,
         CacheableRole,
         CacheUsedRole,

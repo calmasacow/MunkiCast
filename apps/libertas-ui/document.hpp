@@ -228,6 +228,7 @@ public:
     /// The node at a row of the current canvas's flattened tree, and whether it is a group:
     /// {id, isGroup}. What the panel needs to turn a pointer position into a drop target
     /// without reaching into model roles by number.
+    Q_INVOKABLE void toggleGroupExpanded(const QString& canvasId, const QString& nodeId);
     Q_INVOKABLE [[nodiscard]] QVariantMap nodeAtRow(int row) const;
     /// The row a node occupies in that flattened tree, or -1. The inverse of `nodeAtRow`,
     /// for drawing the drop line.
@@ -263,6 +264,8 @@ public:
 
     // ---- scene links -------------------------------------------------------------------------
 
+    /// Secondary canvases offered by the scene linker, as {id, name}.
+    Q_INVOKABLE [[nodiscard]] QVariantList sceneLinkCanvases() const;
     /// Every scene on Main, as {id, name, ticked, takenBy}, for the link popup of `sceneId`.
     /// `ticked` is true when that Main scene already brings this scene up; `takenBy` names the
     /// scene it currently brings up on this canvas instead, and is empty when it is free.
@@ -596,6 +599,8 @@ public:
     /// Where a recording of this encode would be written: beside the project when there is
     /// one, in the home directory when there is not, stamped so a second take does not
     /// overwrite the first. Empty when the encode is not in the project.
+    Q_INVOKABLE void setRecordingDirectory(const QString& outputId, const QString& path);
+    Q_INVOKABLE [[nodiscard]] QString recordingDirectory() const;
     Q_INVOKABLE [[nodiscard]] QString recordingPathFor(const QString& encodeId) const;
     /// Which canvas an encode reads. For the graph, which draws that as an edge.
     Q_INVOKABLE [[nodiscard]] QString encodeCanvasOf(const QString& encodeId) const;
@@ -732,6 +737,8 @@ private:
     [[nodiscard]] const ldoc::Node* current_node() const;
     /// The selection, when a transform edit is allowed. A locked node is refused out loud.
     bool prepare_transform(const ldoc::Scene*& scene, const ldoc::Node*& node);
+    QVariantMap placed_rect(const ldoc::Scene& scene, const ldoc::Canvas& canvas,
+                            const ldoc::Node& node) const;
     /// The canvas the shell is currently working against. One canvas until Phase 2 gives the UI
     /// a way to choose; taking the first is honest rather than pretending otherwise.
     [[nodiscard]] const ldoc::Canvas* current_canvas() const;
@@ -793,6 +800,8 @@ private:
     QStringList also_selected_;
     /// Where a shift-click measures from: the last node picked without shift.
     QString selection_anchor_;
+    // Session-only presentation state; source visibility and saved scene data stay intact.
+    QStringList collapsed_groups_;
     /// Empty means "the first canvas". Resolved on every read rather than stored as an id, so
     /// that removing the current canvas cannot leave the shell pointing at nothing.
     QString current_canvas_;

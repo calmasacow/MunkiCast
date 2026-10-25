@@ -43,6 +43,7 @@ Controls.MenuBar {
     }
 
     implicitHeight: 28
+    rightPadding: 64
     background: Rectangle { color: Theme.c.panelHeader }
     delegate: Controls.MenuBarItem {
         id: heading

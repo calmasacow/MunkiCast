@@ -60,6 +60,9 @@ struct OpenResult {
     /// What was wrong, including quarantined scenes and anything `validate` found. Opening
     /// succeeds with problems; it is the caller's job to show them.
     std::vector<Problem> problems;
+    /// Trailing validation snapshot in `problems`. Sessions replace it with live validation;
+    /// load/recovery diagnostics before it remain relevant for the lifetime of the session.
+    std::size_t validation_problem_count = 0;
     /// The project's schema is newer than this build understands, so it was opened without
     /// parsing and must not be written back.
     bool read_only = false;

@@ -111,6 +111,7 @@ class AudioSources {
         std::vector<ldoc::Effect> source_effects;
         std::vector<ldoc::Effect> node_effects;
         FilterPath parents;
+        ldoc::Id source;
     };
 
     std::mutex mu_;
@@ -155,7 +156,7 @@ class AudioSources {
                 monitor_output = monitor_output_;
             }
             std::map<ldoc::Id, Block> inputs, processed, mixed;
-            std::map<ldoc::Id, bool> available;
+            std::map<ldoc::Id, bool> available, processed_ready;
             std::map<ldoc::Id, lcomp::AudioLevel> levels;
             std::set<std::string> used_processors;
             const auto process = [&](Block& block, const std::vector<ldoc::Effect>& effects,
@@ -199,17 +200,18 @@ class AudioSources {
             std::map<Path, std::map<ldoc::Id, Block>> groups;
             std::map<ldoc::Id, std::vector<ldoc::Effect>> group_filters;
             for (const auto& route : routes) {
-                const auto source = route.session->source.id;
+                const auto source = route.source;
+                const auto input_id = route.session->source.id;
                 if (!processed.contains(source)) {
-                    processed[source] = inputs[source];
-                    available[source] = process(processed[source], route.source_effects,
-                                                "source:" + source.to_string()) &&
-                                        available[source];
+                    processed[source] = inputs[input_id];
+                    processed_ready[source] = process(processed[source], route.source_effects,
+                                                       "source:" + source.to_string()) &&
+                                              available[input_id];
                 }
                 Block input = processed[source];
                 const bool ready =
                     process(input, route.node_effects, "node:" + route.node.to_string()) &&
-                    available[source];
+                    processed_ready[source];
                 lcomp::AudioLevel level{route.node, 0, 0, ready};
                 for (std::size_t i = 0; i < input.size(); i += 2) {
                     level.left = std::max(level.left, std::abs(input[i]));
@@ -462,7 +464,11 @@ class AudioSources {
                     }
                 } else if (const auto* data = std::get_if<ldoc::SourceData>(&node.data)) {
                     const auto* source = data->source ? project.source(*data->source) : nullptr;
-                    if (!source || !ldoc::has_audio(*source) ||
+                    const auto source_id = source ? source->id : ldoc::Id::nil();
+                    const bool audio_enabled = source && ldoc::has_audio(*source);
+                    const auto resolved = source ? ldoc::resolve_source(project, *source, true) : std::nullopt;
+                    source = resolved ? &*resolved : nullptr;
+                    if (!audio_enabled || !source || !ldoc::has_audio(*source) ||
                         (source->type != "source.audio-input" &&
                          source->type != "source.audio-output" && source->type != "source.media" &&
                          source->type != "source.playlist" && source->type != "source.blackmagic" &&
@@ -480,7 +486,7 @@ class AudioSources {
                         if (change.sends) routing.sends = *change.sends;
                     }
                     routes.push_back({node.id, session, std::move(routing), source->effects,
-                                      node.effects, inherited});
+                                      node.effects, inherited, source_id});
                 }
                 inherited.resize(previous_depth);
             }

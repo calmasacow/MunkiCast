@@ -583,7 +583,7 @@ int main() {
         return recorder.running() && recorder.canvas() == canvas;
     };
     record.frame = [&recorder](const ldoc::Id& canvas, const lcomp::Picture& picture) {
-        recorder.frame(canvas, picture);
+        return recorder.frame(canvas, picture);
     };
     auto served = lcomp::serve_preview(
         lipc::Channel{lipc::Fd{fd}}, {}, [&renderer] { renderer.done(); },

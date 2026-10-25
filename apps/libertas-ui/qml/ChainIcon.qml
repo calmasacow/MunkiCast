@@ -21,6 +21,7 @@ Item {
     /// Drawn heavier when something is actually linked, so the difference reads at a glance and
     /// not only by hue -- the panel is used by people looking at six other things at once.
     property bool strong: false
+    property bool broken: false
 
     implicitWidth: 16
     implicitHeight: 16
@@ -41,10 +42,10 @@ Item {
             border.color: chain.color
             rotation: -45
             antialiasing: true
-            x: (chain.width - width) / 2 + (index === 0 ? -chain.width * 0.14
-                                                        : chain.width * 0.14)
-            y: (chain.height - height) / 2 + (index === 0 ? -chain.height * 0.14
-                                                          : chain.height * 0.14)
+            x: (chain.width - width) / 2 + (index === 0 ? -chain.width * (chain.broken ? 0.26 : 0.14)
+                                                        : chain.width * (chain.broken ? 0.26 : 0.14))
+            y: (chain.height - height) / 2 + (index === 0 ? -chain.height * (chain.broken ? 0.26 : 0.14)
+                                                          : chain.height * (chain.broken ? 0.26 : 0.14))
         }
     }
 }

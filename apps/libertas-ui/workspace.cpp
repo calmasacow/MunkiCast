@@ -315,6 +315,17 @@ bool Workspace::workspaceIsBuiltin(int index) const {
     return workspaces_.items()[static_cast<std::size_t>(index)].builtin;
 }
 
+void Workspace::openEncode(const QString& outputId) {
+    encode_output_ = outputId;
+    for (std::size_t i = 0; i < workspaces_.size(); ++i) {
+        if (workspaces_.items()[i].name == "Encode") {
+            selectWorkspace(static_cast<int>(i));
+            emit encodeOutputChanged();
+            return;
+        }
+    }
+}
+
 void Workspace::selectWorkspace(int index) {
     if (index < 0 || static_cast<std::size_t>(index) >= workspaces_.size())
         return;
