@@ -677,6 +677,7 @@ LTEST_CASE(media_audio_crosses_worker_mixer_and_meter_transport) {
     std::get<ldoc::SourceData>(node.data).audio.bus = project.buses.front().id;
     project.scenes[0].roots = {node};
     bool source_signal = false, bus_signal = false;
+    float source_peak = 0;
     REQUIRE(link.send_project(project).has_value());
     const auto until = std::chrono::steady_clock::now() + std::chrono::seconds(8);
     while (std::chrono::steady_clock::now() < until && !(source_signal && bus_signal)) {
@@ -684,7 +685,10 @@ LTEST_CASE(media_audio_crosses_worker_mixer_and_meter_transport) {
         REQUIRE(event && event->has_value());
         if ((**event).kind == lcomp::PreviewEvent::Kind::Audio)
             for (const auto& level : (**event).audio) {
-                if (level.node == node.id && level.available && level.left > 0.01f) source_signal = true;
+                if (level.node == node.id && level.available && level.left > 0.01f) {
+                    source_signal = true;
+                    source_peak = level.left;
+                }
                 if (level.node == project.buses.front().id && level.available && level.left > 0.01f) bus_signal = true;
             }
         if ((**event).kind == lcomp::PreviewEvent::Kind::Ack) {
@@ -715,6 +719,35 @@ LTEST_CASE(media_audio_crosses_worker_mixer_and_meter_transport) {
     for (int i = 0; i < 8; ++i) {
         auto event = link.receive(1000);
         if (event && event->has_value() && (**event).kind == lcomp::PreviewEvent::Kind::Ack) break;
+    }
+    for (const double db : {-20.0, -60.0, 0.0}) {
+        auto& routing = std::get<ldoc::SourceData>(project.scenes[0].roots[0].data).audio;
+        routing.gain_db = db;
+        routing.mute = db == 0;
+        REQUIRE(link.send_project(project));
+        const float expected = routing.mute ? 0
+                              : source_peak * static_cast<float>(std::pow(10.0, db / 20));
+        bool followed = false;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(3);
+        while (std::chrono::steady_clock::now() < deadline && !followed) {
+            const auto event = link.receive(1000);
+            REQUIRE(event && event->has_value());
+            if ((**event).kind == lcomp::PreviewEvent::Kind::Audio)
+                for (const auto& level : (**event).audio)
+                    if (level.node == node.id && level.available)
+                        followed = expected == 0 ? level.left == 0 && level.right == 0
+                                   : level.left > expected * 0.5f && level.left < expected * 1.5f;
+            if ((**event).kind == lcomp::PreviewEvent::Kind::Ack && !followed) {
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
+                REQUIRE(link.refresh(64));
+            }
+        }
+        CHECK_MSG(followed, "source meter follows gain {} and mute {}", db, routing.mute);
+        for (int i = 0; i < 8; ++i) {
+            const auto event = link.receive(1000);
+            if (event && event->has_value() && (**event).kind == lcomp::PreviewEvent::Kind::Ack)
+                break;
+        }
     }
     link.quit(); link.close();
     CHECK_EQ(reap(*child, 3000), 0);

@@ -463,7 +463,7 @@ public:
     /// Stops the fader and nothing else. Mute still works.
     Q_INVOKABLE void setBusLevelLocked(const QString& id, bool locked);
 
-    /// Send the selected source node's audio to this bus, or to nothing when the id is empty.
+    /// Route this source in every scene, or disconnect it everywhere when the id is empty.
     /// Unrouted is not the same as muted, and the mixer says which it is.
     Q_INVOKABLE void routeSelectedNode(const QString& busId);
     Q_INVOKABLE void setSelectedNodeGain(double gainDb);

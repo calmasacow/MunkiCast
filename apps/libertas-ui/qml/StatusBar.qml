@@ -83,6 +83,7 @@ Rectangle {
 
         Text {
             anchors.verticalCenter: parent.verticalCenter
+            objectName: "projectProblems"
             visible: Document.problems.length > 0
             text: qsTr("%1 problem(s)").arg(Document.problems.length)
             font.pixelSize: 11
@@ -99,6 +100,7 @@ Rectangle {
 
                 anchors.fill: parent
                 hoverEnabled: true
+                onClicked: Workspace.openPanel("info")
             }
         }
     }
@@ -112,7 +114,8 @@ Rectangle {
         horizontalAlignment: Text.AlignHCenter
         elide: Text.ElideRight
         font.pixelSize: 11
-        text: Workspace.dragging ? Workspace.dropDescription : bar.notice
+        text: Workspace.dragging ? Workspace.dropDescription
+              : bar.notice || Document.problems.find(problem => problem.startsWith("error:")) || ""
         color: Workspace.dragging ? (Workspace.dropValid ? Theme.c.text : Theme.c.warning)
                                   : Theme.c.warning
     }

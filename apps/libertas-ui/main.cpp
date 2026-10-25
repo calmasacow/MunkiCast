@@ -4364,6 +4364,51 @@ int main(int argc, char** argv) {
                        value("busId").toString() == bus &&
                        document.selectedScene() == QString::fromStdString(outer.id.to_string()),
                    "nested audio gain, mute, and routing edit the source without leaving its parent scene");
+
+            auto shared = ldoc::make_node(ldoc::NodeKind::Source, "Shared music placement");
+            auto& shared_data = std::get<ldoc::SourceData>(shared.data);
+            shared_data.source = microphone.id;
+            shared_data.audio.gain_db = -12;
+            shared_data.audio.mute = true;
+            auto group = ldoc::make_node(ldoc::NodeKind::Group, "Shared audio group");
+            std::get<ldoc::GroupData>(group.data).children = {shared};
+            document.runCommand(ldoc::AddNode{middle.id, std::nullopt, 0, group});
+            const auto route_of = [&](const ldoc::Id& scene, const ldoc::Id& id) {
+                const auto* owner_scene = document.projectForBindings().scene(scene);
+                const auto* placed = owner_scene ? ldoc::find_node(owner_scene->roots, id) : nullptr;
+                return placed ? std::get<ldoc::SourceData>(placed->data).audio : ldoc::AudioRouting{};
+            };
+            document.routeNode(owner, node_id, bus);
+            settle();
+            report(route_of(middle.id, shared.id).bus == project.buses.front().id &&
+                       route_of(middle.id, shared.id).gain_db == -12 &&
+                       route_of(middle.id, shared.id).mute,
+                   "routing a source updates its grouped placement in another scene without changing gain or mute");
+            document.undo();
+            report(!route_of(middle.id, shared.id).bus && route_of(inner.id, node.id).bus,
+                   "one undo restores the previous routes in every scene");
+            document.redo();
+            document.selectScene(QString::fromStdString(middle.id.to_string()));
+            document.selectNode(QString::fromStdString(group.id.to_string()));
+            document.addExistingSourceToScene(QString::fromStdString(microphone.id.to_string()));
+            const auto added = ldoc::Id::parse(document.selectedNode().toStdString());
+            report(added && route_of(middle.id, *added).bus == project.buses.front().id,
+                   "new placements inherit the source's existing audio route");
+            document.addSourceNode(QStringLiteral("Rebound shared source"));
+            document.bindSelectedNode(QString::fromStdString(microphone.id.to_string()));
+            const auto rebound = ldoc::Id::parse(document.selectedNode().toStdString());
+            report(rebound && route_of(middle.id, *rebound).bus == project.buses.front().id,
+                   "binding an existing source inherits its audio route too");
+            document.routeSelectedNode(QString{});
+            report(!route_of(inner.id, node.id).bus && !route_of(middle.id, shared.id).bus &&
+                       added && !route_of(middle.id, *added).bus &&
+                       rebound && !route_of(middle.id, *rebound).bus,
+                   "disconnecting a source disconnects every placement in every scene");
+            for (int i = 0; i < 6; ++i)
+                document.undo();
+            document.selectScene(QString::fromStdString(outer.id.to_string()));
+            settle();
+
             document.undo();
             document.undo();
             document.undo();
@@ -4458,6 +4503,30 @@ int main(int argc, char** argv) {
                         sm->index(i, 0).data(role_of(sm, "mute")).toBool();
             }
             report(found, "a strip can be faded and muted without being the selection");
+
+            for (auto* strip : collect(window->contentItem(), QStringLiteral("sourceStrip"))) {
+                if (strip->property("nodeId").toString() != mic_node)
+                    continue;
+                const auto faders = collect(strip, QStringLiteral("mixerFader"));
+                if (faders.isEmpty())
+                    continue;
+                auto* fader = faders.front();
+                auto* body = fader->parentItem();
+                const auto handles = collect(body, QStringLiteral("mixerFaderHandle"));
+                report(!handles.isEmpty() && fader->width() == handles.front()->width(),
+                       "fader click area is exactly the handle width");
+                for (const double x : {2.0, body->width() - 2.0}) {
+                    document.selectNode(QString{});
+                    settle();
+                    const auto at = body->mapToScene(QPointF(x, 2));
+                    post(QEvent::MouseButtonPress, at, Qt::LeftButton, Qt::LeftButton);
+                    post(QEvent::MouseButtonRelease, at, Qt::LeftButton, Qt::NoButton);
+                    settle();
+                    report(document.selectedNode() == mic_node &&
+                               body->property("gainDb").toDouble() == -7.5,
+                           "clicking beside the fader selects the source without changing gain");
+                }
+            }
 
             document.undo();
             document.undo();
@@ -6853,7 +6922,25 @@ int main(int argc, char** argv) {
             //    published path points into the cache, and the document's own does not.
             report(preferences && preferences->setCachingEnabled(true),
                    "caching can be turned on");
-            report(cache->build(false) && await_build(), "a build starts and finishes");
+            const auto unrelatedPath = assetDir.filePath(QStringLiteral("unrelated.png"));
+            report(still.save(unrelatedPath), "unrelated cache fixture saved");
+            document.addNewSourceToScene(QStringLiteral("Unrelated still"),
+                                         QStringLiteral("source.image"));
+            const auto unrelated = document.nodeProperties().value("sourceId").toString();
+            document.applySourceSettings(unrelated, {}, {{"file", unrelatedPath}, {"useCache", true}});
+            settle();
+            report(cache->build(true, document.sourceAssetPaths(source)) && await_build(),
+                   "an item cache request creates its prepared copy");
+            report(cache->itemsTotal() == 1 && cache->preparedPath(unrelatedPath).isEmpty(),
+                   "caching the clicked item leaves other project assets uncached");
+            const auto firstPrepared = cache->preparedPath(assetPath);
+            report(cache->build(true, document.sourceAssetPaths(source)) && await_build() &&
+                       cache->preparedPath(assetPath) != firstPrepared && cache->itemsTotal() == 1 &&
+                       cache->preparedPath(unrelatedPath).isEmpty(),
+                   "an item cache request rebuilds only that item's existing cache");
+            report(!cache->build(true, QStringList{}) && !cache->building(),
+                   "an empty item cache request never builds the entire project");
+            document.removeSourceAndUses(unrelated);
             report(state_of() == QLatin1String("ok") && row_state() == QLatin1String("ok"),
                    "a prepared asset reads as ok, in the cache and on its row");
             const auto prepared = cache->preparedPath(assetPath);

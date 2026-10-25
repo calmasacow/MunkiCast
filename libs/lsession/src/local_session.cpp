@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <format>
+#include <sstream>
 #include <utility>
 
 namespace lsession {
@@ -118,6 +119,39 @@ std::vector<Problem> LocalSession::problems() const {
     std::vector<Problem> out = open_problems_;
     for (Problem& p : ldoc::validate(history_.project()))
         out.push_back(std::move(p));
+    // File availability belongs to this machine, not the document's structural validity.
+    for (const auto& source : project().sources) {
+        const bool list = source.type == "source.playlist" || source.type == "source.slideshow";
+        const char* key = source.type == "source.media" ? "localFile"
+                          : source.type == "source.image" ? "file"
+                          : list ? "files" : nullptr;
+        if (!key)
+            continue;
+        const auto setting = source.settings.find(key);
+        const auto* value = setting == source.settings.end()
+                                ? nullptr : std::get_if<std::string>(&setting->second);
+        if (!value || value->empty()) {
+            out.push_back({ldoc::Severity::Error,
+                           std::format("No media file selected for source '{}'", source.name),
+                           source.id});
+            continue;
+        }
+        const auto check = [&](const std::string& path) {
+            std::error_code ec;
+            if (!std::filesystem::is_regular_file(path, ec))
+                out.push_back({ldoc::Severity::Error,
+                               std::format("Media file missing or inaccessible for source '{}': {}",
+                                           source.name, path), source.id});
+        };
+        if (list) {
+            std::istringstream paths{*value};
+            for (std::string path; std::getline(paths, path);)
+                if (!path.empty())
+                    check(path);
+        } else {
+            check(*value);
+        }
+    }
     return out;
 }
 

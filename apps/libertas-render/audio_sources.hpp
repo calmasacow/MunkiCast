@@ -212,10 +212,11 @@ class AudioSources {
                 const bool ready =
                     process(input, route.node_effects, "node:" + route.node.to_string()) &&
                     processed_ready[source];
+                const float volume = route.audio.mute ? 0 : gain(route.audio.gain_db);
                 lcomp::AudioLevel level{route.node, 0, 0, ready};
                 for (std::size_t i = 0; i < input.size(); i += 2) {
-                    level.left = std::max(level.left, std::abs(input[i]));
-                    level.right = std::max(level.right, std::abs(input[i + 1]));
+                    level.left = std::max(level.left, std::abs(input[i] * volume));
+                    level.right = std::max(level.right, std::abs(input[i + 1] * volume));
                 }
                 levels[route.node] = level;
                 Path path;
@@ -224,7 +225,6 @@ class AudioSources {
                     group_filters[id] = effects;
                 }
                 auto& destinations = groups[path];
-                const float volume = route.audio.mute ? 0 : gain(route.audio.gain_db);
                 if (route.audio.bus)
                     add(destinations[*route.audio.bus], input, volume);
                 for (const auto& send : route.audio.sends)

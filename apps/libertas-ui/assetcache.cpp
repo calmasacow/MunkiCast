@@ -488,6 +488,10 @@ int AssetCache::pendingCount() const {
 }
 
 bool AssetCache::build(bool rebuild) {
+    return build(rebuild, wanted_);
+}
+
+bool AssetCache::build(bool rebuild, QStringList originals) {
     if (building())
         return false;
     const auto base = dir();
@@ -505,7 +509,8 @@ bool AssetCache::build(bool rebuild) {
         QString stem;
     };
     std::vector<Job> jobs;
-    for (const QString& original : wanted_) {
+    originals.removeDuplicates();
+    for (const QString& original : originals) {
         if (original.isEmpty())
             continue;
         const auto state = stateOf(original).value(QStringLiteral("state")).toString();

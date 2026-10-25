@@ -2322,6 +2322,18 @@ struct Placement {
     std::size_t index = 0;
 };
 
+// ponytail: placements carry the shared route; use a source field if unplaced sources need one.
+const ldoc::AudioRouting* source_audio(const ldoc::Project& project, const ldoc::Id& source) {
+    const ldoc::AudioRouting* result = nullptr;
+    for (const auto& scene : project.scenes)
+        ldoc::visit(scene.roots, [&](const ldoc::Node& node) {
+            const auto* placed = std::get_if<ldoc::SourceData>(&node.data);
+            if (!result && placed && placed->source == source)
+                result = &placed->audio;
+        });
+    return result;
+}
+
 } // namespace
 
 void Document::addNewSourceToScene(const QString& name, const QString& type, bool visible) {
@@ -2381,7 +2393,9 @@ void Document::addExistingSourceToScene(const QString& sourceId, bool visible) {
 
     ldoc::Node node = ldoc::make_node(ldoc::NodeKind::Source, existing->name);
     node.visible = visible;
-    if (existing->type == "source.v4l2" && ldoc::has_audio(*existing))
+    if (const auto* audio = source_audio(session_->project(), existing->id))
+        std::get<ldoc::SourceData>(node.data).audio.bus = audio->bus;
+    else if (existing->type == "source.v4l2" && ldoc::has_audio(*existing))
         for (const auto& bus : session_->project().buses)
             if (bus.kind == ldoc::BusKind::Program) {
                 std::get<ldoc::SourceData>(node.data).audio.bus = bus.id;
@@ -3095,8 +3109,16 @@ void Document::bindSelectedNode(const QString& sourceId) {
         emit notice(QStringLiteral("That is not a source, so nothing can be bound to it."));
         return;
     }
-    run(ldoc::SetNodeSource{s->id, n->id,
-                            sourceId.isEmpty() ? std::nullopt : parse_id(sourceId)});
+    const auto source = sourceId.isEmpty() ? std::nullopt : parse_id(sourceId);
+    std::vector<ldoc::Command> steps{ldoc::SetNodeSource{s->id, n->id, source}};
+    if (const auto* audio = source ? source_audio(session_->project(), *source) : nullptr) {
+        auto routing = std::get<ldoc::SourceData>(n->data).audio;
+        if (routing.bus != audio->bus) {
+            routing.bus = audio->bus;
+            steps.push_back(ldoc::SetNodeAudio{s->id, n->id, std::move(routing)});
+        }
+    }
+    run(ldoc::make_batch(std::move(steps), "Bind source"));
 }
 
 // ---- buses ------------------------------------------------------------------------------------
@@ -3298,15 +3320,44 @@ void Document::setNodeLevelLocked(const QString& sceneId, const QString& nodeId,
 }
 
 void Document::routeNode(const QString& sceneId, const QString& nodeId, const QString& busId) {
-    edit_node_audio(sceneId, nodeId, [&](ldoc::AudioRouting& a) {
-        a.bus = busId.isEmpty() ? std::nullopt : parse_id(busId);
-    });
+    const auto scene_id = parse_id(sceneId);
+    const auto node_id = parse_id(nodeId);
+    const auto bus = busId.isEmpty() ? std::nullopt : parse_id(busId);
+    const auto& project = session_->project();
+    if (!busId.isEmpty() && (!bus || !project.bus(*bus))) {
+        emit notice(QStringLiteral("Choose an existing audio bus."));
+        return;
+    }
+    const auto* scene = scene_id ? project.scene(*scene_id) : nullptr;
+    const auto* node = scene && node_id ? ldoc::find_node(scene->roots, *node_id) : nullptr;
+    if (!node)
+        return;
+    const auto* selected = std::get_if<ldoc::SourceData>(&node->data);
+    if (!selected) {
+        emit notice(QStringLiteral("Only a source has audio of its own."));
+        return;
+    }
+    std::vector<ldoc::Command> steps;
+    for (const auto& owner : project.scenes)
+        ldoc::visit(owner.roots, [&](const ldoc::Node& placed_node) {
+            const auto* placed = std::get_if<ldoc::SourceData>(&placed_node.data);
+            if (!placed || (selected->source ? placed->source != selected->source
+                                             : placed_node.id != node->id) ||
+                placed->audio.bus == bus)
+                return;
+            auto routing = placed->audio;
+            routing.bus = bus;
+            steps.push_back(ldoc::SetNodeAudio{owner.id, placed_node.id, std::move(routing)});
+        });
+    if (!steps.empty())
+        run(ldoc::make_batch(std::move(steps), "Route source in all scenes"));
 }
 
 void Document::routeSelectedNode(const QString& busId) {
-    edit_selected_audio([&](ldoc::AudioRouting& a) {
-        a.bus = busId.isEmpty() ? std::nullopt : parse_id(busId);
-    });
+    const auto* scene = current_scene();
+    const auto* node = current_node();
+    if (scene && node)
+        routeNode(id_str(scene->id), id_str(node->id), busId);
 }
 
 void Document::setSelectedNodeGain(double gainDb) {

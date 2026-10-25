@@ -297,6 +297,14 @@ Item {
                         action: () => Document.copySelectedNodes()
                     }];
                     rows.push(transformMenu.menu());
+                    if (row.cacheable) {
+                        const paths = Document.sourceAssetPaths(row.sourceId);
+                        rows.push({
+                            text: qsTr("Create / rebuild cache"),
+                            enabled: !AssetCache.building && paths.length > 0,
+                            action: () => AssetCache.build(true, paths)
+                        });
+                    }
                     // Rename, which was double-click and F2 only. A right-click is where
                     // people look for it.
                     // Delete, where a right-click menu is expected to have it, and acting

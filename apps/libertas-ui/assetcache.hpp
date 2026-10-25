@@ -170,6 +170,8 @@ class AssetCache : public QObject {
     /// otherwise only missing, stale and failed ones are done. False when nothing needs doing
     /// or a build is already running.
     Q_INVOKABLE bool build(bool rebuild);
+    /// Prepare only these files. An empty list never expands to the whole project.
+    Q_INVOKABLE bool build(bool rebuild, QStringList originals);
     /// Asks the running build to stop. The asset in flight is abandoned and its `.part` file
     /// removed; assets already prepared stay prepared.
     Q_INVOKABLE void cancel();

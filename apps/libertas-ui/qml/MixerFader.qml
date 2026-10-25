@@ -147,7 +147,10 @@ Item {
         id: mouse
 
         objectName: "mixerFader"
-        anchors.fill: parent
+        anchors.horizontalCenter: parent.horizontalCenter
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        width: knob.width
         hoverEnabled: true
 
         onPressed: (ev) => {

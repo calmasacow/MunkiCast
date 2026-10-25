@@ -86,6 +86,33 @@ LTEST_CASE(an_in_memory_session_can_be_edited_without_a_home) {
     CHECK(saved.error().find("location") != std::string::npos);
 }
 
+LTEST_CASE(missing_media_reports_source_and_path_and_clears_when_restored) {
+    ScratchDir scratch{"missing-media"};
+    const auto file = scratch.project();
+    auto project = starter();
+    for (const auto& [type, key] : {std::pair{"source.media", "localFile"},
+                                    std::pair{"source.image", "file"},
+                                    std::pair{"source.playlist", "files"},
+                                    std::pair{"source.slideshow", "files"}}) {
+        ldoc::Source source;
+        source.id = Id::generate();
+        source.type = type;
+        source.name = "Missing clip";
+        source.settings[key] = file.string();
+        project.sources = {source};
+        auto session = LocalSession::in_memory(project);
+        const auto problems = session->problems();
+        CHECK(std::ranges::any_of(problems, [&](const auto& problem) {
+            return problem.severity == ldoc::Severity::Error && problem.subject == source.id &&
+                   problem.message.find(source.name) != std::string::npos &&
+                   problem.message.find(file.string()) != std::string::npos;
+        }));
+        REQUIRE(lc::write_atomic(file, "media placeholder"));
+        CHECK(session->problems().empty());
+        fs::remove(file);
+    }
+}
+
 LTEST_CASE(listeners_are_told_what_was_applied) {
     // The rule the whole boundary rests on: a caller updates from the notification, never from
     // the return value of run(). So the notification has to carry enough to update from.
@@ -295,6 +322,9 @@ LTEST_CASE(open_validation_refreshes_after_audio_is_ignored_or_routes_are_repair
     source.id = Id::generate();
     source.name = "Video";
     source.type = "source.media";
+    const auto media = sd.project().parent_path() / "clip.mkv";
+    REQUIRE(lc::write_atomic(media, "media placeholder"));
+    source.settings["localFile"] = media.string();
     project.sources.push_back(source);
     auto& node = project.scenes.front().roots.front();
     auto& data = std::get<ldoc::SourceData>(node.data);
