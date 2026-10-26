@@ -1,6 +1,7 @@
 # Default FFmpeg 9.1 build
 
-The existing `build-make` application and system FFmpeg 9.0.2 are preserved.
+System FFmpeg 9.0.2 is preserved. Both `build/linux` and the legacy `build-make`
+application now include browser docks and use the local FFmpeg build.
 The default application uses FFmpeg's **9.1 development branch**, pinned to
 [`47b92841e33b67c1699394415641b34d1157d8d7`](https://github.com/FFmpeg/FFmpeg/commit/47b92841e33b67c1699394415641b34d1157d8d7).
 This is not a stable 9.1 release. Nothing under `/usr` is replaced.
@@ -11,11 +12,9 @@ From the repository root, after saving and closing the currently running applica
 ./build/linux/apps/libertas-ui/libertas-ui
 ```
 
-Rollback: close that application and launch the original:
-
-```sh
-./build-make/apps/libertas-ui/libertas-ui
-```
+The old `build-make` tree was archived locally as
+`build-make-before-browser-docks-20261026`. Restore it to its original `build-make`
+path with the application closed if that exact old build is needed.
 
 The default build links the local libraries and prepends their executable directory for
 cache workers and probes. No project format, encoder settings, preview logic, or frame
@@ -111,7 +110,7 @@ and generating inputs are excluded, flushing is included. The measurements cover
 conversion and encoding throughput, not full-scene rendering or preview smoothness.
 
 ```sh
-build-make/tools/encode-spike/libertas-encode-bench \
+build/linux-system-ffmpeg/tools/encode-spike/libertas-encode-bench \
   build/ffmpeg-comparison/project.json build/ffmpeg-comparison/baseline
 build/linux-ffmpeg-9.1/tools/encode-spike/libertas-encode-bench \
   build/ffmpeg-comparison/project.json build/ffmpeg-comparison/updated

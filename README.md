@@ -114,6 +114,14 @@ for rollback; `linux-ffmpeg-9.1` remains a compatibility alias.
 
 [Custom browser docks](docs/browser-docks.md) are available under **Docks > Custom Browser Docks…**.
 
+When using the older `build-make` launch path, rebuild that same directory before restarting:
+
+```sh
+cmake -S . -B build-make
+cmake --build build-make --target libertas-ui -j8
+./build-make/apps/libertas-ui/libertas-ui
+```
+
 Without `--project` the shell opens an unsaved document. `--check` drives the whole shell
 headlessly — loading the real QML, running the real gestures, grabbing frames and asserting what
 was drawn — and forces the offscreen platform, so it cannot reach a display even by accident.
