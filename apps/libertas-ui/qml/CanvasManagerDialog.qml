@@ -54,7 +54,10 @@ Item {
     Rectangle {
         id: frame
 
-        anchors.centerIn: parent
+        x: (parent.width - width) / 2
+        y: (parent.height - height) / 2
+        objectName: "canvasManagerFrame"
+        DialogGeometry { minimumWidth: 440; minimumHeight: 360 }
         width: Math.min(parent.width - 48, 560)
         height: Math.min(parent.height - 48, 520)
         color: Theme.c.panelBackground

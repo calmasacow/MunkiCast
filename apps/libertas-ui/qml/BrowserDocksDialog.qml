@@ -11,9 +11,18 @@ Controls.Dialog {
     id: dialog
     objectName: "browserDocksDialog"
     title: qsTr("Custom Browser Docks")
-    anchors.centerIn: parent
+    x: (parent.width - width) / 2
+    y: (parent.height - height) / 2
     width: Math.min(700, parent.width - 40)
     height: Math.min(500, parent.height - 40)
+    background: Rectangle {
+        color: Theme.c.panelBackground
+        border.color: Theme.c.accent
+        DialogGeometry {
+            parent: dialog.background.parent
+            target: dialog; minimumWidth: 440; minimumHeight: 360
+        }
+    }
     modal: true
     standardButtons: Controls.Dialog.Close
     property string editingId: ""

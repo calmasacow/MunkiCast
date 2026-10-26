@@ -9,11 +9,12 @@ Window {
     id: dialog
     objectName: "stingerDialog"
     title: qsTr("Add Stinger Transition")
-    width: 620; height: 285
-    minimumWidth: 500; minimumHeight: 285
+    width: 620; height: 317
+    minimumWidth: 500; minimumHeight: 317
     color: Theme.c.window
     modality: Qt.ApplicationModal
-    flags: Qt.Dialog | Qt.WindowTitleHint | Qt.WindowCloseButtonHint
+    flags: Qt.Dialog | Qt.FramelessWindowHint
+    DialogGeometry { target: dialog; title: dialog.title }
     property string deckId: ""
     property string stingerName: "Stinger"
     property string filePath: ""
@@ -23,6 +24,7 @@ Window {
     Column {
         anchors.fill: parent
         anchors.margins: 16
+        anchors.topMargin: 48
         spacing: 12
         TextLine {
             width: parent.width; label: qsTr("Name"); labelWidth: 120

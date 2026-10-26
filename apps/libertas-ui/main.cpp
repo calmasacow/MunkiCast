@@ -600,6 +600,50 @@ int main(int argc, char** argv) {
             QTimer::singleShot(ms, &loop, &QEventLoop::quit);
             loop.exec();
         };
+        const auto check_dialog_geometry = [&](QObject* target, QQuickItem* root,
+                                                double min_width, double min_height) {
+            const QRectF original(target->property("x").toDouble(),
+                                  target->property("y").toDouble(),
+                                  target->property("width").toDouble(),
+                                  target->property("height").toDouble());
+            const auto moves = collect(root, QStringLiteral("dialogMoveHandle"));
+            const auto sizes = collect(root, QStringLiteral("dialogResizeHandle"));
+            report(moves.size() == 1 && sizes.size() == 1,
+                   "dialog exposes move and resize handles");
+            const auto drag = [&](QQuickItem* handle, QPointF delta) {
+                const auto from = handle->mapToScene(QPointF(handle->width() / 2,
+                                                             handle->height() / 2));
+                post(QEvent::MouseButtonPress, from, Qt::LeftButton, Qt::LeftButton);
+                post(QEvent::MouseMove, from + delta, Qt::NoButton, Qt::LeftButton);
+                post(QEvent::MouseButtonRelease, from + delta, Qt::LeftButton, Qt::NoButton);
+                settle();
+            };
+            if (moves.size() == 1 && sizes.size() == 1) {
+                drag(moves.front(), QPointF(-12, -12));
+                report(qAbs(target->property("x").toDouble() - original.x() + 12) < 1 &&
+                           qAbs(target->property("y").toDouble() - original.y() + 12) < 1,
+                       "dragging dialog heading moves the dialog");
+                drag(sizes.front(), QPointF(-40, -40));
+                report(qAbs(target->property("width").toDouble() - original.width() + 40) < 1 &&
+                           qAbs(target->property("height").toDouble() - original.height() + 40) < 1,
+                       "dragging dialog corner resizes the dialog");
+                drag(sizes.front(), QPointF(-2000, -2000));
+                report(target->property("width").toDouble() == min_width &&
+                           target->property("height").toDouble() == min_height,
+                       "dialog resize preserves minimum usable dimensions");
+                drag(moves.front(), QPointF(-2000, -2000));
+                report(target->property("x").toDouble() == 0 &&
+                           target->property("y").toDouble() == 0,
+                       "dialog movement stays inside the workspace");
+            }
+            target->setProperty("width", original.width());
+            target->setProperty("height", original.height());
+            target->setProperty("x", original.x());
+            target->setProperty("y", original.y());
+            settle();
+        };
+
+
         const auto visible_status = [&] {
             QString text;
             for (QQuickItem* item :
@@ -2137,6 +2181,20 @@ int main(int argc, char** argv) {
         }
 
         {
+            auto* dialog = window->findChild<QObject*>(QStringLiteral("browserDocksDialog"));
+            if (dialog) {
+                QMetaObject::invokeMethod(dialog, "open");
+                settle();
+                auto* background = qvariant_cast<QQuickItem*>(dialog->property("background"));
+                report(background && background->parentItem(), "browser editor has a popup frame");
+                if (background && background->parentItem())
+                    check_dialog_geometry(dialog, background->parentItem(), 440, 360);
+                QMetaObject::invokeMethod(dialog, "close");
+                settle();
+            }
+        }
+
+        {
             document.addNewSourceToScene(QStringLiteral("Filter editor check"),
                                          QStringLiteral("source.color"));
             const auto node = document.selectedNode();
@@ -2167,6 +2225,10 @@ int main(int argc, char** argv) {
                    "Filters opens one shared editor");
             if (dialogs.size() == 1 && dialogs.front()->isVisible()) {
                 auto* dialog = dialogs.front();
+                const auto filter_frames = collect(dialog, QStringLiteral("filtersFrame"));
+                report(filter_frames.size() == 1, "filter editor exposes its movable frame");
+                if (filter_frames.size() == 1)
+                    check_dialog_geometry(filter_frames.front(), filter_frames.front(), 620, 440);
                 const auto canvasCount = document.projectForBindings().canvases.size();
                 const auto previewKey = dialog->property("previewCanvas").toString();
                 for (int i = 0; i < 100 && !preview.hasFrame(previewKey); ++i)

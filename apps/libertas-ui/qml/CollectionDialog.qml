@@ -78,7 +78,10 @@ Item {
     Rectangle { anchors.fill: parent; color: Theme.c.window; opacity: 0.65 }
     MouseArea { anchors.fill: parent; onClicked: dialog.close(); onWheel: wheel => wheel.accepted = true }
     Rectangle {
-        anchors.centerIn: parent
+        x: (parent.width - width) / 2
+        y: (parent.height - height) / 2
+        objectName: "collectionFrame"
+        DialogGeometry { minimumWidth: 480; minimumHeight: 400 }
         width: Math.min(parent.width - 48, 680)
         height: Math.min(parent.height - 48, dialog.mode === "report" ? 540 : dialog.isImport ? 500 : 440)
         color: Theme.c.panelBackground

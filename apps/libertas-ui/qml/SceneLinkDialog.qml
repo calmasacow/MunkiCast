@@ -202,7 +202,10 @@ Item {
     Rectangle {
         id: frame
 
-        anchors.centerIn: parent
+        x: (parent.width - width) / 2
+        y: (parent.height - height) / 2
+        objectName: "sceneLinkFrame"
+        DialogGeometry { minimumWidth: 560; minimumHeight: 440; dragWidth: parent.width * 0.48 }
         width: Math.min(parent.width - 48, 736)
         height: Math.min(parent.height - 48, 672)
         color: Theme.c.panelBackground

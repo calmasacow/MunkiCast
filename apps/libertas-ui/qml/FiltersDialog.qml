@@ -61,7 +61,10 @@ Item {
         id: frame
         width: Math.min(parent.width - 32, 1050)
         height: Math.min(parent.height - 32, 800)
-        anchors.centerIn: parent
+        x: (parent.width - width) / 2
+        y: (parent.height - height) / 2
+        objectName: "filtersFrame"
+        DialogGeometry { minimumWidth: 620; minimumHeight: 440 }
         color: Theme.c.panelBackground; border.color: Theme.c.accent
         Text { x: 16; y: 12; text: qsTr("Filters — %1").arg(dialog.details.name || ""); color: Theme.c.text; font.pixelSize: 16 }
         Text { x: 16; y: 38; text: qsTr("Changes apply to every use of this source. Undo restores edits."); color: Theme.c.textMuted; font.pixelSize: 11 }

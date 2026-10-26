@@ -55,7 +55,10 @@ Item {
     }
 
     Rectangle {
-        anchors.centerIn: parent
+        x: (parent.width - width) / 2
+        y: (parent.height - height) / 2
+        objectName: "cacheStateFrame"
+        DialogGeometry { resizable: false }
         width: Math.min(parent.width - 80, 420)
         height: body.height + bar.height + 28
         color: Theme.c.panelBackground

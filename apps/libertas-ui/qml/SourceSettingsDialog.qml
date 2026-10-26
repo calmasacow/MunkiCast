@@ -126,7 +126,9 @@ Item {
         id: frame
 
         objectName: "sourceSettingsFrame"
-        anchors.centerIn: parent
+        x: (parent.width - width) / 2
+        y: (parent.height - height) / 2
+        DialogGeometry { minimumWidth: 480; minimumHeight: 400 }
         width: Math.min(parent.width - 48, 760)
         height: Math.min(parent.height - 48, 660)
         color: Theme.c.panelBackground

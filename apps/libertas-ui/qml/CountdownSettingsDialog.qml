@@ -14,10 +14,11 @@ Window {
     id: dialog
     objectName: "countdownSettings"
     title: qsTr("Timer")
-    width: 500; height: 700
-    minimumWidth: 420; minimumHeight: 480
+    width: 500; height: 732
+    minimumWidth: 420; minimumHeight: 512
     color: Theme.c.window
-    flags: Qt.Dialog | Qt.WindowTitleHint | Qt.WindowCloseButtonHint
+    flags: Qt.Dialog | Qt.FramelessWindowHint
+    DialogGeometry { target: dialog; title: dialog.title }
 
     property string sourceId: ""
     /// The timer as it is in the document, which is what Cancel goes back to.
@@ -87,6 +88,7 @@ Window {
         anchors.top: parent.top
         anchors.bottom: footer.top
         anchors.margins: 12
+        anchors.topMargin: 44
         contentWidth: width
         contentHeight: body.height
         clip: true

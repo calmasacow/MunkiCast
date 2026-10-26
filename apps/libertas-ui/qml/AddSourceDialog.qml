@@ -140,7 +140,10 @@ Item {
     Rectangle {
         id: frame
 
-        anchors.centerIn: parent
+        x: (parent.width - width) / 2
+        y: (parent.height - height) / 2
+        objectName: "addSourceFrame"
+        DialogGeometry { minimumWidth: 620; minimumHeight: 400; dragLeft: typeColumn.width }
         width: Math.min(parent.width - 48, 1040)
         height: Math.min(parent.height - 48, 620)
         color: Theme.c.panelBackground

@@ -94,6 +94,7 @@ qt_add_qml_module(libertas-ui
         qml/StingerDialog.qml
         qml/ControlsPanel.qml
         qml/DialogButton.qml
+        qml/DialogGeometry.qml
         qml/DragGhost.qml
         qml/DropOverlay.qml
         qml/FavouritesPanel.qml

@@ -10,11 +10,12 @@ Window {
     id: dialog
     objectName: "preferencesDialog"
     title: qsTr("Preferences")
-    width: 560; height: 430
-    minimumWidth: 480; minimumHeight: 430
+    width: 560; height: 462
+    minimumWidth: 480; minimumHeight: 462
     color: Theme.c.window
     modality: Qt.ApplicationModal
-    flags: Qt.Dialog | Qt.WindowTitleHint | Qt.WindowCloseButtonHint
+    flags: Qt.Dialog | Qt.FramelessWindowHint
+    DialogGeometry { target: dialog; title: dialog.title }
     property bool automatic: true
     property int budgetMib: 2048
     property string cacheDir: ""
@@ -30,6 +31,7 @@ Window {
     Column {
         anchors.fill: parent
         anchors.margins: 16
+        anchors.topMargin: 48
         spacing: 12
         Text {
             text: qsTr("GPU memory")
