@@ -240,6 +240,25 @@ LTEST_CASE(browser_worker_renders_local_html) {
     CHECK(std::abs(int(pixels[background + 2]) - 160) <= 2);
 }
 
+LTEST_CASE(browser_worker_obeys_background_transparency_and_preserves_content_alpha) {
+    for (bool transparent : {true, false}) {
+        auto src = source("source.browser");
+        src.settings["url"] = std::string("file://") + LIBERTAS_IMAGE_FIXTURES + "/browser-alpha.html";
+        src.settings["ignoreAudio"] = true;
+        src.settings["transparentBackground"] = transparent;
+        auto frames = capture(src);
+        REQUIRE(!frames.empty());
+        const auto& pixels = frames.front().pixels;
+        CHECK_EQ(pixels[3], 255);
+        CHECK(std::abs(int(pixels[0]) - 220) <= 2);
+        const auto background = (20 * 64 + 40) * 4;
+        CHECK_EQ(pixels[background + 3], transparent ? 0 : 255);
+        const auto translucent = (8 * 64 + 24) * 4;
+        CHECK(std::abs(int(pixels[translucent + 3]) - (transparent ? 128 : 255)) <= 1);
+        CHECK(std::abs(int(pixels[translucent + 2]) - (transparent ? 255 : 128)) <= 2);
+    }
+}
+
 LTEST_CASE(unavailable_blackmagic_worker_exits_without_inventing_frames) {
     auto src = source("source.blackmagic");
     src.settings["deviceIndex"] = std::int64_t{999};

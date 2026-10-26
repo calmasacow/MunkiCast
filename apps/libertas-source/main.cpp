@@ -614,6 +614,7 @@ class Content : public QObject {
                     qWarning("browser audio: %s", audio_error.c_str());
             }
             web_ = std::make_unique<QWebEngineView>();
+            web_->setAttribute(Qt::WA_TranslucentBackground, flag("transparentBackground", true));
             web_->setAttribute(Qt::WA_DontShowOnScreen);
             web_->resize(size_);
             web_->page()->setBackgroundColor(flag("transparentBackground", true) ? Qt::transparent
