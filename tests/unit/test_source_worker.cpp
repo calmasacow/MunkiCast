@@ -227,6 +227,25 @@ LTEST_CASE(media_worker_retains_native_alpha_pixels_for_compositor_scaling) {
     }
 }
 
+LTEST_CASE(portrait_alpha_video_decodes_without_corrupting_frame_storage) {
+    auto src = source("source.media");
+    src.settings["localFile"] = std::string(LIBERTAS_IMAGE_FIXTURES) + "/alpha-portrait.webm";
+    src.settings["ignoreAudio"] = true;
+    const auto frames = capture(src, 8);
+    REQUIRE(frames.size() >= 8);
+    for (const auto& frame : frames) {
+        CHECK_EQ(frame.width, 1080);
+        CHECK_EQ(frame.height, 1920);
+        CHECK_EQ(frame.stride, 1080u * 4u);
+        const auto alpha = [&](int x, int y) {
+            return frame.pixels[static_cast<std::size_t>(y) * frame.stride +
+                                static_cast<std::size_t>(x) * 4 + 3];
+        };
+        CHECK_EQ(alpha(1079, 1919), 0);
+        CHECK(alpha(540, 960) > 100 && alpha(540, 960) < 160);
+    }
+}
+
 LTEST_CASE(browser_worker_renders_local_html) {
     auto src = source("source.browser");
     src.settings["url"] = std::string("file://") + LIBERTAS_IMAGE_FIXTURES + "/browser.html";

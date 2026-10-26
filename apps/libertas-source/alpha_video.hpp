@@ -54,18 +54,22 @@ class AlphaVideo {
                     if (w < 1 || h < 1 || w > 8192 || h > 8192 ||
                         static_cast<std::int64_t>(w) * h * 4 > 128 * 1024 * 1024)
                         throw std::runtime_error("alpha video dimensions exceed image budget");
-                    pending_ = QImage(w, h, QImage::Format_RGBA8888);
-                    if (pending_.isNull())
+                    // swscale SIMD writes whole pixel blocks; keep row ends inside the allocation.
+                    QImage converted((w + 15) & ~15, h, QImage::Format_RGBA8888);
+                    if (converted.isNull())
                         throw std::runtime_error("alpha video allocation failed");
                     convert_ = sws_getCachedContext(
                         convert_, w, h, static_cast<AVPixelFormat>(frame_->format), w, h,
                         AV_PIX_FMT_RGBA, SWS_BILINEAR, nullptr, nullptr, nullptr);
                     if (!convert_)
                         throw std::runtime_error("alpha video conversion unavailable");
-                    uint8_t* dst[] = {pending_.bits()};
-                    int stride[] = {static_cast<int>(pending_.bytesPerLine())};
+                    uint8_t* dst[] = {converted.bits()};
+                    int stride[] = {static_cast<int>(converted.bytesPerLine())};
                     if (sws_scale(convert_, frame_->data, frame_->linesize, 0, h, dst, stride) != h)
                         throw std::runtime_error("alpha video conversion failed");
+                    pending_ = converted.width() == w ? converted : converted.copy(0, 0, w, h);
+                    if (pending_.isNull())
+                        throw std::runtime_error("alpha video allocation failed");
                     const auto* stream = input_->streams[stream_];
                     const auto start =
                         stream->start_time == AV_NOPTS_VALUE ? 0 : stream->start_time;
