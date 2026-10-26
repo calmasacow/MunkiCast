@@ -19,6 +19,8 @@
 #include <QCommandLineOption>
 #include <QCommandLineParser>
 #include <QApplication>
+#include <QtWebEngineQuick/qtwebenginequickglobal.h>
+#include <QtWebEngineQuick/qquickwebengineprofile.h>
 #include <QMouseEvent>
 #include <QObject>
 #include <QQmlApplicationEngine>
@@ -41,6 +43,10 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QJSValue>
+#include <QQmlExpression>
+#include <QQmlContext>
+#include <QElapsedTimer>
+#include <QDir>
 #include <QUrl>
 
 #include <algorithm>
@@ -101,6 +107,10 @@ int fail(const char* msg) {
 } // namespace
 
 int main(int argc, char** argv) {
+#ifdef LIBERTAS_FFMPEG_BIN_DIR
+    // Cache workers and probes must use the same FFmpeg as the linked recorder.
+    qputenv("PATH", QByteArray(LIBERTAS_FFMPEG_BIN_DIR) + ':' + qgetenv("PATH"));
+#endif
     // Read before QApplication: the platform plugin is chosen during its construction, long
     // before QCommandLineParser gets a look at argv. QApplication, rather than QGuiApplication,
     // because the colour field opens QColorDialog and a widget dialog needs it.
@@ -112,6 +122,7 @@ int main(int argc, char** argv) {
     if (!check)
         QQuickWindow::setGraphicsApi(QSGRendererInterface::Vulkan);
 
+    QtWebEngineQuick::initialize();
     QApplication app(argc, argv);
     QGuiApplication::setApplicationName(QStringLiteral("libertas"));
     QGuiApplication::setOrganizationName(QStringLiteral("Libertas-Studio"));
@@ -142,6 +153,11 @@ int main(int argc, char** argv) {
         QStringList{QStringLiteral("check-shots")},
         QStringLiteral("With --check, write the grabbed frames into this directory."),
         QStringLiteral("dir")};
+    const QCommandLineOption browser_check_opt{
+        QStringList{QStringLiteral("check-browser-url")},
+        QStringLiteral("With --check, test only a browser dock using this URL."),
+        QStringLiteral("url")};
+    parser.addOption(browser_check_opt);
     parser.addOption(layout_opt);
     parser.addOption(project_opt);
     parser.addOption(check_opt);
@@ -198,6 +214,12 @@ int main(int argc, char** argv) {
             ? parser.value(project_opt)
             : QString::fromStdString(home_dir().string()));
 
+    auto* browser_profile = QQuickWebEngineProfile::defaultProfile();
+    if (!check) {
+        browser_profile->setStorageName(QStringLiteral("browser-docks"));
+        browser_profile->setOffTheRecord(false);
+        browser_profile->setPersistentCookiesPolicy(QQuickWebEngineProfile::ForcePersistentCookies);
+    }
     QQmlApplicationEngine engine;
 
     // Touching them here forces construction, so the notice signals are connected before any QML
@@ -312,6 +334,153 @@ int main(int argc, char** argv) {
         report(QGuiApplication::platformName() == QLatin1String("offscreen"),
                "--check runs on the offscreen platform, so nothing reaches a display");
 
+        // Walked over childItems(), not findChildren(). A Repeater gives its delegates a visual
+        // parent but no QObject parent -- they belong to the delegate model -- so findChildren()
+        // on the window returns none of them and would have reported an empty scene graph for a
+        // window that was drawing correctly.
+        const auto collect = [](QQuickItem* from, const QString& name) {
+            QList<QQuickItem*> found;
+            QList<QQuickItem*> stack{from};
+            while (!stack.isEmpty()) {
+                QQuickItem* item = stack.takeLast();
+                if (item->objectName() == name)
+                    found.append(item);
+                stack.append(item->childItems());
+            }
+            return found;
+        };
+
+        // Exercise the actual menu, editor and embedded Chromium view. The regular check uses
+        // an in-memory page; --check-browser-url opts into a real network smoke test.
+        {
+            const auto wait_until = [](const auto& ready, int timeout_ms = 10000) {
+                QElapsedTimer timer;
+                timer.start();
+                while (!ready() && timer.elapsed() < timeout_ms) {
+                    QCoreApplication::processEvents(QEventLoop::AllEvents, 50);
+                    QThread::msleep(10);
+                }
+                return ready();
+            };
+            report(wait_until([&] { return workspace.panelAt(0).value("w").toDouble() > 0; }),
+                   "browser dock checks wait for the workspace viewport");
+            const bool remote = parser.isSet(browser_check_opt);
+            const QString test_url = remote ? parser.value(browser_check_opt)
+                                           : QStringLiteral("http://127.0.0.1:1/");
+            auto* action = window->findChild<QObject*>(QStringLiteral("menuBrowserDocks"));
+            report(action && QMetaObject::invokeMethod(action, "triggered"),
+                   "Docks > Custom Browser Docks opens the editor");
+            QCoreApplication::processEvents();
+            auto* dialog = window->findChild<QObject*>(QStringLiteral("browserDocksDialog"));
+            auto* name = window->findChild<QObject*>(QStringLiteral("browserDockName"));
+            auto* url = window->findChild<QObject*>(QStringLiteral("browserDockUrl"));
+            auto* save = window->findChild<QObject*>(QStringLiteral("saveBrowserDock"));
+            report(dialog && dialog->property("visible").toBool() && name && url && save,
+                   "browser dock editor exposes name, URL and Add dock controls");
+            report(!workspace.saveBrowserDock({}, {}, test_url) &&
+                       !workspace.saveBrowserDock({}, QStringLiteral("Check"), QStringLiteral("file:///etc/passwd")),
+                   "browser docks reject empty names and non-web URLs");
+            if (name && url && save) {
+                name->setProperty("text", QStringLiteral("Browser check"));
+                url->setProperty("text", test_url);
+                QMetaObject::invokeMethod(save, "clicked");
+            }
+            if (dialog)
+                QMetaObject::invokeMethod(dialog, "close");
+            report(workspace.browserDocks().size() == 1, "Add dock creates a named browser dock");
+            if (!workspace.browserDocks().isEmpty()) {
+                const auto id = workspace.browserDocks().front().toMap().value("id").toString();
+                report(workspace.layoutHasPanel(id) && workspace.title(id) == QLatin1String("Browser check"),
+                       "new browser dock opens as an ordinary workspace tab");
+                QQuickItem* web = nullptr;
+                report(wait_until([&] {
+                    const auto views = collect(window->contentItem(), QStringLiteral("browserDockWebView"));
+                    if (!views.empty()) web = views.front();
+                    return web != nullptr;
+                }), "browser dock instantiates an embedded WebEngineView");
+                if (web) {
+                    if (!remote) {
+                        QQmlExpression page(qmlContext(web), web, QStringLiteral(
+                            "loadHtml(\"<html><head><title>Dock check</title></head>"
+                            "<body style='background:#234;color:white'><h1>Browser dock</h1>"
+                            "<button id='test' onclick='document.title=12345'>Test interaction</button>"
+                            "</body></html>\")"));
+                        page.evaluate();
+                        report(!page.hasError(), "browser dock accepts a local test page");
+                    }
+                    report(wait_until([&] {
+                        return !web->property("loading").toBool() &&
+                               (remote ? !web->property("title").toString().isEmpty()
+                                       : web->property("title").toString() == QLatin1String("Dock check"));
+                    }, remote ? 45000 : 10000), "embedded browser loads the test page");
+                    if (!remote) {
+                        QQmlExpression click(qmlContext(web), web, QStringLiteral(
+                            "runJavaScript(\"document.getElementById('test').click()\")"));
+                        click.evaluate();
+                        report(wait_until([&] {
+                            return web->property("title").toString() == QLatin1String("12345");
+                        }), "embedded browser executes interactive page JavaScript");
+                    } else {
+                        auto* panel = web->parentItem() ? web->parentItem()->parentItem() : nullptr;
+                        report(panel && panel->property("loadError").toString().isEmpty(),
+                               "network browser dock reports no load error");
+                        std::fprintf(stderr, "  browser title: %s\n",
+                                     qPrintable(web->property("title").toString()));
+                    }
+                    if (parser.isSet(shot_opt)) {
+                        QDir().mkpath(parser.value(shot_opt));
+                        window->grabWindow().save(parser.value(shot_opt) +
+                                                  QStringLiteral("/browser-dock.png"));
+                    }
+                    workspace.activate(QStringLiteral("program"));
+                    QCoreApplication::processEvents();
+                    const auto hidden_views = collect(window->contentItem(), QStringLiteral("browserDockWebView"));
+                    report(std::find(hidden_views.begin(), hidden_views.end(), web) != hidden_views.end(),
+                           "browser view survives switching away from its tab");
+                    workspace.activate(id);
+                }
+                report(!workspace.saveBrowserDock({}, QStringLiteral("browser CHECK"), test_url),
+                       "browser dock names are unique without case sensitivity");
+                report(workspace.saveBrowserDock(id, QStringLiteral("Renamed check"), test_url),
+                       "browser dock name and URL can be edited");
+                workspace.closePanel(id);
+                report(workspace.closedPanels().contains(id), "closed browser docks can be reopened");
+                workspace.openPanel(id);
+                workspace.saveNow();
+                {
+                    libertas::ui::Workspace restored(layout_path);
+                    restored.setViewport(1600, 800);
+                    report(restored.browserDockUrl(id) == test_url &&
+                               restored.title(id) == QLatin1String("Renamed check") &&
+                               restored.layoutHasPanel(id), "browser dock definitions and layout survive restart");
+                }
+                workspace.addWorkspace(QStringLiteral("Browser check workspace"));
+                report(workspace.removeBrowserDock(id) && !workspace.layoutHasPanel(id),
+                       "removing a browser dock closes its panel");
+                workspace.selectWorkspace(0);
+                workspace.undo();
+                report(!workspace.layoutHasPanel(id), "deleted browser docks stay removed across workspaces and undo");
+                workspace.removeWorkspace(workspace.workspaceCount() - 1);
+                workspace.saveNow();
+                libertas::ui::Workspace restored(layout_path);
+                report(restored.browserDocks().isEmpty() && !restored.layoutHasPanel(id),
+                       "browser dock removal survives restart");
+            }
+            {
+                QTemporaryDir failed_save_dir;
+                QFile blocker(failed_save_dir.filePath(QStringLiteral("blocked")));
+                report(blocker.open(QIODevice::WriteOnly), "browser save failure fixture is writable");
+                blocker.close();
+                libertas::ui::Workspace blocked(
+                    (failed_save_dir.path() + QStringLiteral("/blocked/layout.toml")).toStdString());
+                report(!blocked.saveBrowserDock({}, QStringLiteral("Cannot save"), test_url) &&
+                           blocked.browserDocks().isEmpty() && !blocked.browserDockError().isEmpty(),
+                       "failed browser dock saves report an error without changing the dock list");
+            }
+            if (remote)
+                return rc;
+        }
+
         {
             const auto& fresh = document.projectForBindings();
             report(fresh.canvases.size() == 1 && fresh.encodes.size() == 1 && fresh.outputs.size() == 1,
@@ -354,21 +523,6 @@ int main(int argc, char** argv) {
         // updated, because the dependency meant to refresh them was a bare statement with no
         // side effect, and the QML compiler had removed it. Every number was right and the window
         // was blank.
-        // Walked over childItems(), not findChildren(). A Repeater gives its delegates a visual
-        // parent but no QObject parent -- they belong to the delegate model -- so findChildren()
-        // on the window returns none of them and would have reported an empty scene graph for a
-        // window that was drawing correctly.
-        const auto collect = [](QQuickItem* from, const QString& name) {
-            QList<QQuickItem*> found;
-            QList<QQuickItem*> stack{from};
-            while (!stack.isEmpty()) {
-                QQuickItem* item = stack.takeLast();
-                if (item->objectName() == name)
-                    found.append(item);
-                stack.append(item->childItems());
-            }
-            return found;
-        };
         // Synthetic pointer events, delivered to the window so the QML handlers run. Shared
         // by every gesture check: proving a function works proves nothing about the pointer
         // that is supposed to reach it.

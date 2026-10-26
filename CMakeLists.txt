@@ -34,6 +34,32 @@ option(LIBERTAS_TSAN       "Enable ThreadSanitizer"              OFF)
 option(LIBERTAS_BUILD_TOOLS "Build spikes and dev tools"         ON)
 option(LIBERTAS_BUILD_TESTS "Build tests"                        ON)
 set(LIBERTAS_DEPS "auto" CACHE STRING "Dependency strategy: system|vcpkg|auto")
+option(LIBERTAS_USE_SYSTEM_FFMPEG "Use system FFmpeg instead of the pinned local build" OFF)
+
+# FindPkgConfig caches results across environment changes. Switching engines must re-probe.
+if(NOT "${LIBERTAS_CONFIGURED_SYSTEM_FFMPEG}" STREQUAL "${LIBERTAS_USE_SYSTEM_FFMPEG}")
+    get_cmake_property(pkg_cache_variables CACHE_VARIABLES)
+    foreach(variable IN LISTS pkg_cache_variables)
+        if(variable MATCHES "^(__pkg_config_checked_|pkgcfg_lib_)")
+            unset(${variable} CACHE)
+        endif()
+    endforeach()
+    set(LIBERTAS_CONFIGURED_SYSTEM_FFMPEG "${LIBERTAS_USE_SYSTEM_FFMPEG}"
+        CACHE INTERNAL "Last configured FFmpeg selection")
+endif()
+
+if(NOT LIBERTAS_USE_SYSTEM_FFMPEG)
+    set(LIBERTAS_FFMPEG_PREFIX "${CMAKE_SOURCE_DIR}/build/ffmpeg-9.1/prefix")
+    if(NOT EXISTS "${LIBERTAS_FFMPEG_PREFIX}/lib/pkgconfig/libavcodec.pc" OR
+       NOT EXISTS "${LIBERTAS_FFMPEG_PREFIX}/bin/ffmpeg")
+        message(FATAL_ERROR
+            "Local FFmpeg 9.1 is missing. See docs/ffmpeg-9.1.md for setup, or configure "
+            "with -DLIBERTAS_USE_SYSTEM_FFMPEG=ON to use system FFmpeg.")
+    endif()
+    set(ENV{PKG_CONFIG_PATH}
+        "${LIBERTAS_FFMPEG_PREFIX}/lib/pkgconfig:$ENV{PKG_CONFIG_PATH}")
+    list(APPEND CMAKE_BUILD_RPATH "${LIBERTAS_FFMPEG_PREFIX}/lib")
+endif()
 
 include(LibertasFlags)
 
@@ -44,6 +70,13 @@ endif()
 
 if(LIBERTAS_BUILD_TESTS)
     enable_testing()
+    if(NOT LIBERTAS_USE_SYSTEM_FFMPEG)
+        add_test(NAME ffmpeg_selection COMMAND "${CMAKE_COMMAND}"
+            -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
+            -DCHECK_DIR=${CMAKE_BINARY_DIR}/ffmpeg-selection-check
+            -DGENERATOR=${CMAKE_GENERATOR}
+            -P "${CMAKE_SOURCE_DIR}/tests/check_ffmpeg_selection.cmake")
+    endif()
 endif()
 
 add_subdirectory(libs/lcore)

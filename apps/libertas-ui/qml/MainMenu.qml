@@ -22,7 +22,7 @@ Controls.MenuBar {
                 if (ids.indexOf(id) < 0) ids.push(id);
             }
         }
-        return ids.filter(id => id.indexOf(":") >= 0);
+        return ids.filter(id => /^(program|scenes|sources):/.test(id));
     }
     function showPanel(id) {
         Workspace.openPanel(id);
@@ -30,6 +30,7 @@ Controls.MenuBar {
     }
 
     PreferencesDialog { id: preferences }
+    BrowserDocksDialog { id: browserDocks; parent: bar.mainWindow.contentItem }
 
     // Parented to the window's content item, as FiltersDialog is: an overlay inside the menu
     // bar would be clipped to 28 pixels of height.
@@ -197,7 +198,28 @@ Controls.MenuBar {
         Entry { objectName: "menuRecallLayout"; text: qsTr("Recall Saved Layout"); onTriggered: Workspace.recallLayout() }
         Entry { text: qsTr("Reset Docks"); onTriggered: Workspace.resetLayout() }
         Divider {}
-        Pending { text: qsTr("Custom Browser Docks") }
+        Entry {
+            objectName: "menuBrowserDocks"
+            text: qsTr("Custom Browser Docks…")
+            onTriggered: browserDocks.open()
+        }
+        Menu {
+            id: browserMenu
+            title: qsTr("Browser Docks")
+            enabled: Workspace.browserDocks.length > 0
+            Instantiator {
+                model: Workspace.browserDocks
+                delegate: Entry {
+                    required property var modelData
+                    text: modelData.name
+                    checkable: true
+                    checked: { const revision = Workspace.revision; return Workspace.layoutHasPanel(modelData.id); }
+                    onTriggered: checked ? bar.showPanel(modelData.id) : Workspace.closePanel(modelData.id)
+                }
+                onObjectAdded: (index, object) => browserMenu.insertItem(index, object)
+                onObjectRemoved: (index, object) => browserMenu.removeItem(object)
+            }
+        }
         Instantiator {
             model: ["audio-mixer", "broadcast-stats", "program", "outputs", "properties",
                     "canvas", "favourites", "scenes", "sources", "controls", "info", "log", "shortcuts"]
@@ -208,7 +230,7 @@ Controls.MenuBar {
                 checked: { const revision = Workspace.revision; return Workspace.layoutHasPanel(modelData); }
                 onTriggered: checked ? bar.showPanel(modelData) : Workspace.closePanel(modelData)
             }
-            onObjectAdded: (index, object) => docks.insertItem(index + 5, object)
+            onObjectAdded: (index, object) => docks.insertItem(index + 7, object)
             onObjectRemoved: (index, object) => docks.removeItem(object)
         }
         Divider {}

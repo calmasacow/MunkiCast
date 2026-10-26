@@ -92,15 +92,18 @@ sudo pacman -S --needed qt6-base qt6-declarative qt6-wayland qt6-multimedia qt6-
                         jsoncpp tomlplusplus
 ```
 
+The default build uses the pinned, project-local **FFmpeg 9.1 development build**.
+Set it up first using [the dependency instructions](docs/ffmpeg-9.1.md).
+
 ```sh
 cmake --preset linux
 cmake --build --preset linux
 ctest --preset linux
 ```
 
-Presets: `linux`, `linux-debug`, `linux-ci` (warnings are errors), `linux-asan`, `linux-tsan`.
-Without `ninja`, configure manually with `-G "Unix Makefiles"` — the reference machine has no
-ninja, so this path is kept working.
+Presets use Unix Makefiles: `linux`, `linux-debug`, `linux-ci` (warnings are errors),
+`linux-asan`, `linux-tsan`. `linux-system-ffmpeg` builds separately against system FFmpeg
+for rollback; `linux-ffmpeg-9.1` remains a compatibility alias.
 
 ## Running it
 
@@ -108,6 +111,8 @@ ninja, so this path is kept working.
 ./build/linux/apps/libertas-ui/libertas-ui --project ~/Shows/MyShow.libertas
 ./build/linux/apps/libertas/libertas probe
 ```
+
+[Custom browser docks](docs/browser-docks.md) are available under **Docks > Custom Browser Docks…**.
 
 Without `--project` the shell opens an unsaved document. `--check` drives the whole shell
 headlessly — loading the real QML, running the real gestures, grabbing frames and asserting what

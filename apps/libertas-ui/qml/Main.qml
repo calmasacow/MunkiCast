@@ -312,12 +312,39 @@ Window {
         // divider drag re-evaluates geometry without tearing down and rebuilding every delegate
         // sixty times a second.
         Repeater {
+            id: panelFrames
             model: Workspace.panels
 
             delegate: PanelFrame {
                 surface: workArea
             }
 
+        }
+
+        // Browsers belong to the window, so layout resets, docking and tab switches keep
+        // JavaScript state and connections alive. Only their position follows the dock frames.
+        // ponytail: editing definitions rebuilds views; use an incremental model if needed.
+        Repeater {
+            model: Workspace.browserDocks
+            delegate: BrowserDockPanel {
+                id: browserDock
+                required property var modelData
+                panelId: modelData.id
+                readonly property PanelFrame dockFrame: {
+                    const revision = Workspace.revision;
+                    for (let i = 0; i < panelFrames.count; ++i) {
+                        const frame = panelFrames.itemAt(i) as PanelFrame;
+                        if (frame && frame.activeId === browserDock.panelId)
+                            return frame;
+                    }
+                    return null;
+                }
+                visible: dockFrame !== null
+                x: dockFrame ? dockFrame.x + 1 : 0
+                y: dockFrame ? dockFrame.y + dockFrame.bodyTop : 0
+                width: dockFrame ? Math.max(0, dockFrame.width - 2) : 0
+                height: dockFrame ? Math.max(0, dockFrame.height - dockFrame.bodyTop - 1) : 0
+            }
         }
 
         DropOverlay {

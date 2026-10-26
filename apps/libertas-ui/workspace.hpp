@@ -18,6 +18,7 @@
 #include <QStringList>
 #include <QTimer>
 #include <QVariantMap>
+#include <QVariantList>
 
 #include <filesystem>
 #include <optional>
@@ -49,6 +50,8 @@ class Workspace : public QObject {
 
     Q_PROPERTY(QAbstractItemModel* panels READ panelsModel CONSTANT)
     Q_PROPERTY(QAbstractItemModel* dividers READ dividersModel CONSTANT)
+    Q_PROPERTY(QVariantList browserDocks READ browserDocks NOTIFY browserDocksChanged)
+    Q_PROPERTY(QString browserDockError READ browserDockError NOTIFY browserDockErrorChanged)
     Q_PROPERTY(int revision READ revision NOTIFY layoutChanged)
     Q_PROPERTY(int panelCount READ panelCount NOTIFY layoutChanged)
     Q_PROPERTY(int dividerCount READ dividerCount NOTIFY layoutChanged)
@@ -183,6 +186,12 @@ public:
     /// Whether the active workspace currently holds this panel.
     Q_INVOKABLE [[nodiscard]] bool layoutHasPanel(const QString& panel) const;
 
+    [[nodiscard]] QVariantList browserDocks() const { return browser_docks_; }
+    [[nodiscard]] QString browserDockError() const { return browser_dock_error_; }
+    Q_INVOKABLE bool saveBrowserDock(const QString& id, const QString& name, const QString& url);
+    Q_INVOKABLE bool removeBrowserDock(const QString& id);
+    Q_INVOKABLE [[nodiscard]] QString browserDockUrl(const QString& id) const;
+
     // --- saved workspaces ---
     [[nodiscard]] QAbstractItemModel* workspacesModel() { return &workspace_tabs_; }
     [[nodiscard]] int workspaceCount() const;
@@ -217,6 +226,8 @@ public:
     Q_INVOKABLE void saveLayoutNow();
 
 signals:
+    void browserDocksChanged();
+    void browserDockErrorChanged();
     void layoutChanged();
     void workspacesChanged();
     void encodeOutputChanged();
@@ -226,6 +237,11 @@ signals:
     void notice(const QString& text);
 
 private:
+    QVariantList browser_docks_;
+    QString browser_dock_error_;
+    [[nodiscard]] QString browser_docks_path() const;
+    bool write_browser_docks(const QVariantList& docks);
+    void prune_browser_docks();
     QString encode_output_;
     struct Drag {
         QString panel;

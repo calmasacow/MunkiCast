@@ -20,3 +20,6 @@ target_link_libraries(encode-spike PRIVATE
     libertas::lencode
     PkgConfig::FFMPEG
 )
+
+add_executable(libertas-encode-bench benchmark.cpp)
+target_link_libraries(libertas-encode-bench PRIVATE libertas::lencode libertas::lcore PkgConfig::FFMPEG)

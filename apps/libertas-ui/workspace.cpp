@@ -6,6 +6,15 @@
 #include "llayout/serialize.hpp"
 
 #include <QVariantList>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+#include <QSaveFile>
+#include <QUrl>
+#include <QUuid>
 
 #include <algorithm>
 #include <array>
@@ -86,6 +95,38 @@ Workspace::Workspace(std::filesystem::path config_path, QObject* parent)
     save_timer_.setInterval(600);
     connect(&save_timer_, &QTimer::timeout, this, &Workspace::saveNow);
 
+    QFile docks_file(browser_docks_path());
+    if (docks_file.exists()) {
+        QJsonParseError error;
+        const bool opened = docks_file.open(QIODevice::ReadOnly);
+        const auto json = QJsonDocument::fromJson(opened ? docks_file.readAll() : QByteArray{}, &error);
+        if (!opened || error.error != QJsonParseError::NoError || !json.isArray()) {
+            browser_dock_error_ = QStringLiteral("Could not read custom browser docks: %1")
+                                      .arg(opened ? error.errorString() : docks_file.errorString());
+        } else {
+            QSet<QString> ids;
+            QSet<QString> names;
+            for (const auto& value : json.array()) {
+                const auto row = value.toObject().toVariantMap();
+                const auto id = row.value("id").toString();
+                const auto name = row.value("name").toString().trimmed();
+                const QUrl url(row.value("url").toString(), QUrl::StrictMode);
+                if (!id.startsWith(QLatin1String("browser:")) ||
+                    QUuid(id.mid(8)).isNull() || name.isEmpty() || ids.contains(id) ||
+                    names.contains(name.toCaseFolded()) || !url.isValid() || url.host().isEmpty() ||
+                    (url.scheme() != QLatin1String("https") && url.scheme() != QLatin1String("http"))) {
+                    browser_dock_error_ = QStringLiteral("Custom browser docks contain an invalid entry.");
+                    browser_docks_.clear();
+                    break;
+                }
+                ids.insert(id);
+                names.insert(name.toCaseFolded());
+                browser_docks_.append(row);
+            }
+        }
+    }
+    // A removed dock must not return through an old saved layout.
+    prune_browser_docks();
     refresh_models();
     refresh_workspace_tabs();
     validate_focus();
@@ -142,6 +183,7 @@ void Workspace::refresh_models() {
 }
 
 void Workspace::touch() {
+    prune_browser_docks();
     ++revision_;
     refresh_models();
     validate_focus();
@@ -516,10 +558,20 @@ QStringList Workspace::closedPanels() const {
                 out << id;
         }
     }
+    for (const auto& dock : browser_docks_) {
+        const auto id = dock.toMap().value("id").toString();
+        if (!layout().has_panel(to_std(id)))
+            out << id;
+    }
     return out;
 }
 
 QString Workspace::title(const QString& panel) const {
+    for (const auto& dock : browser_docks_) {
+        const auto row = dock.toMap();
+        if (row.value("id").toString() == panel)
+            return row.value("name").toString();
+    }
     // "Scenes: Vertical". Which canvas a scene list belongs to is the one thing a second
     // scene list has to say, and saying it in the tab is the only place it is always visible
     // -- a panel can be the only one in its group, with no neighbour to contrast against.
@@ -890,7 +942,8 @@ void Workspace::closePanel(const QString& panel) {
 }
 
 void Workspace::openPanel(const QString& panel) {
-    if (panel.isEmpty() || layout().has_panel(to_std(panel)))
+    if ((panel.startsWith(QLatin1String("browser:")) && browserDockUrl(panel).isEmpty()) ||
+        panel.isEmpty() || layout().has_panel(to_std(panel)))
         return;
 
     llayout::Layout next = history_.current();
@@ -915,6 +968,112 @@ void Workspace::openPanel(const QString& panel) {
     }
     if (history_.commit(std::move(next)))
         touch();
+}
+
+QString Workspace::browser_docks_path() const {
+    return QString::fromStdString(config_path_.string()) + QStringLiteral(".browser-docks.json");
+}
+
+QString Workspace::browserDockUrl(const QString& id) const {
+    for (const auto& dock : browser_docks_) {
+        const auto row = dock.toMap();
+        if (row.value("id").toString() == id)
+            return row.value("url").toString();
+    }
+    return {};
+}
+
+bool Workspace::write_browser_docks(const QVariantList& docks) {
+    QSaveFile file(browser_docks_path());
+    const auto bytes = QJsonDocument(QJsonArray::fromVariantList(docks)).toJson();
+    if (!QDir().mkpath(QFileInfo(file).absolutePath()) || !file.open(QIODevice::WriteOnly) ||
+        file.write(bytes) != bytes.size() || !file.commit()) {
+        browser_dock_error_ = QStringLiteral("Could not save custom browser docks: %1")
+                                  .arg(file.errorString());
+        emit browserDockErrorChanged();
+        return false;
+    }
+    browser_docks_ = docks;
+    browser_dock_error_.clear();
+    emit browserDockErrorChanged();
+    emit browserDocksChanged();
+    return true;
+}
+
+bool Workspace::saveBrowserDock(const QString& id, const QString& name, const QString& address) {
+    const auto label = name.trimmed();
+    const QUrl url(address.trimmed(), QUrl::StrictMode);
+    QString error;
+    if (label.isEmpty())
+        error = QStringLiteral("Enter a dock name.");
+    else if (!url.isValid() || url.host().isEmpty() ||
+             (url.scheme() != QLatin1String("https") && url.scheme() != QLatin1String("http")))
+        error = QStringLiteral("Enter a complete http:// or https:// URL.");
+    else if (!id.isEmpty() && browserDockUrl(id).isEmpty())
+        error = QStringLiteral("That browser dock no longer exists.");
+    for (const auto& dock : browser_docks_) {
+        const auto row = dock.toMap();
+        if (row.value("id").toString() != id &&
+            row.value("name").toString().compare(label, Qt::CaseInsensitive) == 0)
+            error = QStringLiteral("A browser dock already has that name.");
+    }
+    if (!error.isEmpty()) {
+        browser_dock_error_ = error;
+        emit browserDockErrorChanged();
+        return false;
+    }
+    const QString key = id.isEmpty() ? QStringLiteral("browser:") +
+                                          QUuid::createUuid().toString(QUuid::WithoutBraces) : id;
+    const QVariantMap row{{"id", key}, {"name", label}, {"url", url.toString(QUrl::FullyEncoded)}};
+    auto docks = browser_docks_;
+    bool replaced = false;
+    for (auto& dock : docks) {
+        if (dock.toMap().value("id").toString() == key) {
+            dock = row;
+            replaced = true;
+            break;
+        }
+    }
+    if (!replaced)
+        docks.append(row);
+    if (!write_browser_docks(docks))
+        return false;
+    touch();
+    openPanel(key);
+    activate(key);
+    return true;
+}
+
+void Workspace::prune_browser_docks() {
+    auto next = history_.current();
+    bool changed = false;
+    for (const auto& panel : next.panels()) {
+        const auto id = QString::fromStdString(panel);
+        if (id.startsWith(QLatin1String("browser:")) && browserDockUrl(id).isEmpty())
+            changed = next.close_panel(panel) || changed;
+    }
+    if (changed)
+        history_.reset(std::move(next));
+}
+
+bool Workspace::removeBrowserDock(const QString& id) {
+    auto docks = browser_docks_;
+    const auto removed = docks.removeIf([&id](const QVariant& dock) {
+        return dock.toMap().value("id").toString() == id;
+    });
+    if (removed == 0 || !write_browser_docks(docks))
+        return false;
+    cancelDrag();
+    endDividerDrag();
+    sync_active();
+    for (std::size_t i = 0; i < workspaces_.size(); ++i) {
+        auto next = workspaces_.items()[i].layout;
+        if (next.close_panel(to_std(id)))
+            static_cast<void>(workspaces_.set_layout(i, std::move(next)));
+    }
+    history_.reset(workspaces_.active_layout());
+    touch();
+    return true;
 }
 
 // ---- history and persistence ---------------------------------------------------------------

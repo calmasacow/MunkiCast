@@ -5,8 +5,11 @@
     {
       "name": "base",
       "hidden": true,
-      "generator": "Ninja",
+      "generator": "Unix Makefiles",
       "binaryDir": "${sourceDir}/build/${presetName}",
+      "environment": {
+        "PATH": "${sourceDir}/build/ffmpeg-9.1/prefix/bin:$penv{PATH}"
+      },
       "cacheVariables": {
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
         "LIBERTAS_DEPS": "system"
@@ -17,6 +20,18 @@
       "displayName": "Linux (Arch/Omarchy bedrock)",
       "inherits": "base",
       "cacheVariables": { "CMAKE_BUILD_TYPE": "RelWithDebInfo" }
+    },
+    {
+      "name": "linux-ffmpeg-9.1",
+      "displayName": "Linux FFmpeg 9.1 (compatibility preset)",
+      "inherits": "linux-ci"
+    },
+    {
+      "name": "linux-system-ffmpeg",
+      "displayName": "Linux with system FFmpeg (rollback)",
+      "inherits": "linux",
+      "cacheVariables": { "LIBERTAS_USE_SYSTEM_FFMPEG": "ON" },
+      "environment": { "PATH": "$penv{PATH}" }
     },
     {
       "name": "linux-debug",
@@ -56,6 +71,8 @@
   ],
   "buildPresets": [
     { "name": "linux", "configurePreset": "linux" },
+    { "name": "linux-ffmpeg-9.1", "configurePreset": "linux-ffmpeg-9.1" },
+    { "name": "linux-system-ffmpeg", "configurePreset": "linux-system-ffmpeg" },
     { "name": "linux-debug", "configurePreset": "linux-debug" },
     { "name": "linux-ci", "configurePreset": "linux-ci" },
     { "name": "linux-asan", "configurePreset": "linux-asan" },
@@ -67,6 +84,17 @@
       "configurePreset": "linux",
       "output": { "outputOnFailure": true },
       "execution": { "noTestsAction": "error", "stopOnFailure": false }
+    },
+    {
+      "name": "linux-ffmpeg-9.1",
+      "configurePreset": "linux-ffmpeg-9.1",
+      "output": { "outputOnFailure": true },
+      "execution": { "noTestsAction": "error", "stopOnFailure": false }
+    },
+    {
+      "name": "linux-system-ffmpeg",
+      "configurePreset": "linux-system-ffmpeg",
+      "output": { "outputOnFailure": true }
     },
     {
       "name": "linux-ci",

@@ -32,6 +32,7 @@ Rectangle {
     y: rectY
     width: rectW
     height: rectH
+    readonly property real bodyTop: strip.y + strip.height + 1
     readonly property bool focused: frame.tabs !== undefined &&
                                     frame.tabs.indexOf(Workspace.focusedPanel) >= 0
 
@@ -62,6 +63,7 @@ Rectangle {
     }
 
     PanelBody {
+        visible: !frame.activeId.startsWith("browser:")
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: strip.bottom

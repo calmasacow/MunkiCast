@@ -12,7 +12,7 @@
 # desktop portal's OpenFile, and this machine's portal config sends that to Omanta. Qt's own
 # dialog is not used. Widgets is here for QColorDialog, which the colour field opens. That
 # dialog already has the picker and the custom-colour slots, so they are not rebuilt here.
-find_package(Qt6 6.5 REQUIRED COMPONENTS Core DBus Gui Qml Quick QuickControls2 QuickShapes Widgets)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Core DBus Gui Qml Quick QuickControls2 QuickShapes Widgets WebEngineQuick)
 
 qt_standard_project_setup(REQUIRES 6.5)
 
@@ -65,6 +65,8 @@ qt_add_qml_module(libertas-ui
         qml/FiltersDialog.qml
         qml/FilterSetting.qml
         qml/AudioMixerPanel.qml
+        qml/BrowserDockPanel.qml
+        qml/BrowserDocksDialog.qml
         qml/BroadcastStatsPanel.qml
         qml/CanvasManagerDialog.qml
         qml/CollectionDialog.qml
@@ -140,12 +142,17 @@ target_link_libraries(libertas-ui PRIVATE
     Qt6::Quick
     Qt6::QuickShapes
     Qt6::Widgets
+    Qt6::WebEngineQuick
 )
 
 # The shell spawns this. A path baked in at build time is the one the self-check runs, rather
 # than whatever happens to be first on PATH.
 target_compile_definitions(libertas-ui PRIVATE
     LIBERTAS_RENDER_EXE="$<TARGET_FILE:libertas-render>")
+if(NOT LIBERTAS_USE_SYSTEM_FFMPEG)
+    target_compile_definitions(libertas-ui PRIVATE
+        LIBERTAS_FFMPEG_BIN_DIR="${LIBERTAS_FFMPEG_PREFIX}/bin")
+endif()
 add_dependencies(libertas-ui libertas-render)
 
 # Qt's generated sources (moc, qrc, the QML type registration) are not ours to keep warning-free,
@@ -173,7 +180,8 @@ if(LIBERTAS_BUILD_TESTS)
         # type into, and loading fcitx leaks 1.7 KB through D-Bus on every run. Not loading it is
         # better than suppressing it.
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_IM_MODULE=none;QT_LOGGING_RULES=qt.qpa.*=false;LSAN_OPTIONS=suppressions=${CMAKE_SOURCE_DIR}/tests/lsan.suppressions:print_suppressions=0"
-        TIMEOUT 150
+        # Includes Chromium startup and the embedded browser interaction checks.
+        TIMEOUT 180
         # Excluded from the TSan preset by this label.
         #
         # Not a judgement about this test: Qt here is a distribution build with no TSan, and
