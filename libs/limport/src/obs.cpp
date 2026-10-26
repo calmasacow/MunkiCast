@@ -483,10 +483,11 @@ struct Converter {
                 s, "css", "body { background-color: rgba(0,0,0,0); margin: 0; overflow: hidden; }");
             p["fps"] = static_cast<std::int64_t>(integer(s, "fps", 30, 1, 60));
             p["transparentBackground"] = true;
+            p["shutdownWhenHidden"] = flag(s, "shutdown");
             e.size = {static_cast<double>(integer(s, "width", 800, 1, 4096)),
                       static_cast<double>(integer(s, "height", 600, 1, 4096))};
             warn(e,
-                 "browser reloads when shown; OBS browser APIs and session state are not imported");
+                 "OBS browser APIs and saved browser session state are not imported");
         } else if (e.type == "ffmpeg_source" || e.type == "vlc_source" || e.type == "slideshow") {
             audio = e.type != "slideshow";
             out.type = e.type == "slideshow"    ? "source.slideshow"

@@ -248,7 +248,7 @@ struct Exporter {
             settings["url"] = text("url");
             settings["css"] = text("css");
             settings["fps"] = Json::Int64(number("fps", 30));
-            settings["shutdown"] = true;
+            settings["shutdown"] = flag("shutdownWhenHidden", false);
             warn(src.name, "browser session state and audio monitoring require review");
         } else if (src.type == "source.media") {
             type = "ffmpeg_source";

@@ -2022,8 +2022,9 @@ constexpr FieldSpec kBrowser[] = {
     {"fps", "Frame rate", "int", "", false, 30, "", "fps"},
     {"css", "Custom CSS", "multiline"},
     {"transparentBackground", "Transparent background", "bool", "", true},
-    {"", "The page reloads when shown. Unless Ignore Audio is enabled, its audio uses a private "
-         "sound-server output and enters the mixer.", "note"},
+    {"shutdownWhenHidden", "Shut down source when not visible", "bool", "", false},
+    {"", "The page stays loaded while hidden unless shutdown is enabled. Unless Ignore Audio is "
+         "enabled, its audio uses a private sound-server output and enters the mixer.", "note"},
 };
 
 constexpr FieldSpec kClone[] = {

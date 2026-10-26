@@ -13,6 +13,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
+#include <fstream>
 #include <lcapture/audio.hpp>
 #include <ldoc/project_io.hpp>
 #include <mutex>
@@ -124,6 +125,79 @@ lcomp::PreviewFrame commit(lcomp::PreviewLink& link, const ldoc::Project& projec
 }
 
 } // namespace
+
+LTEST_CASE(browser_scene_switch_preserves_page_unless_shutdown_is_enabled) {
+    for (bool shutdown : {false, true}) {
+        auto ends = lipc::Channel::pair();
+        REQUIRE(ends);
+        auto child = lcomp::spawn_renderer(LIBERTAS_RENDER, std::move(ends->second).take_socket());
+        REQUIRE(child);
+        lcomp::PreviewLink link{std::move(ends->first)};
+        REQUIRE(link.take_hello(5000));
+        auto browser = colour_source(0, 0, 0);
+        browser.type = "source.browser";
+        browser.settings.erase("color");
+        browser.settings["width"] = std::int64_t{64};
+        browser.settings["height"] = std::int64_t{32};
+        browser.settings["ignoreAudio"] = true;
+        browser.settings["url"] = std::string("file://") + LIBERTAS_IMAGE_FIXTURES +
+                                  "/browser-lifecycle.html";
+        // Absence must preserve the page for existing projects as well as new sources.
+        if (shutdown) browser.settings["shutdownWhenHidden"] = true;
+        ldoc::Scene scene;
+        scene.id = ldoc::Id::generate();
+        scene.roots = {bound_to(browser)};
+        scene.roots[0].layout.size = {64, 32};
+        auto project = show(scene, {browser});
+        project.canvases[0].width = 64;
+        project.canvases[0].height = 32;
+        const auto colour = [&] {
+            const auto frame = commit(link, project);
+            if (frame.status != lcomp::PictureStatus::Complete || frame.pixels.size() < 4)
+                return 0;
+            const auto [b, g, r, a] = pixel(frame, 2, 2);
+            (void)b; (void)a;
+            return g > 240 ? 2 : r > 240 ? 1 : 0;
+        };
+        bool loaded = false;
+        for (int i = 0; i < 200 && !loaded; ++i) {
+            loaded = colour() == 2;
+            std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        }
+        const auto worker_pid = [&] {
+            // Children belong to the worker thread that spawned them, not the main thread.
+            for (const auto& task : std::filesystem::directory_iterator(
+                     "/proc/" + std::to_string(*child) + "/task")) {
+                std::ifstream children(task.path() / "children");
+                pid_t pid = 0;
+                if (children >> pid) return pid;
+            }
+            return pid_t{0};
+        };
+        const auto initial_worker = worker_pid();
+        project.scenes[0].roots.clear();
+        commit(link, project);
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        commit(link, project);
+        const auto hidden_worker = worker_pid();
+        project.scenes[0].roots = scene.roots;
+        int returned = 0;
+        for (int i = 0; i < 200 && returned == 0; ++i) {
+            returned = colour();
+            std::this_thread::sleep_for(std::chrono::milliseconds(30));
+        }
+        const auto returned_worker = worker_pid();
+        link.quit();
+        CHECK_EQ(reap(*child, 5000), 0);
+        REQUIRE(loaded);
+        REQUIRE(initial_worker > 0);
+        CHECK_EQ(hidden_worker, shutdown ? 0 : initial_worker);
+        CHECK(returned_worker > 0);
+        CHECK_EQ(returned_worker == initial_worker, !shutdown);
+        // A restarted Chromium page may finish its timer before producing its first frame.
+        CHECK(shutdown ? returned != 0 : returned == 2);
+    }
+}
 
 LTEST_CASE(record_writes_playable_rescaled_video_with_correct_colours_and_routed_audio) {
     auto ends = lipc::Channel::pair();

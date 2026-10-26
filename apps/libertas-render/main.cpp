@@ -238,7 +238,9 @@ class Renderer {
             session.visible = worker_wanted_.contains(item.first);
             session.active.store(session.visible);
             session.worker->set_active(session.visible);
-            return !session.visible && !retained_media(session.source);
+            return !session.visible && !retained_media(session.source) &&
+                   !(session.source.type == "source.browser" &&
+                     !lcomp::timer_flag(session.source.settings, "shutdownWhenHidden", false));
         });
         worker_wanted_.clear();
         for (const auto& [id, snapshot] : video_held_) {
