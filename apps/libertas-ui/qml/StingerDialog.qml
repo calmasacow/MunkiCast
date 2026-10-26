@@ -8,7 +8,7 @@ import Libertas
 Window {
     id: dialog
     objectName: "stingerDialog"
-    title: qsTr("Add Stinger Transition")
+    title: sourceId === "" ? qsTr("Add Stinger Transition") : qsTr("Edit Stinger Transition")
     width: 620; height: 317
     minimumWidth: 500; minimumHeight: 317
     color: Theme.c.window
@@ -16,11 +16,21 @@ Window {
     flags: Qt.Dialog | Qt.FramelessWindowHint
     DialogGeometry { target: dialog; title: dialog.title }
     property string deckId: ""
+    property string sourceId: ""
     property string stingerName: "Stinger"
     property string filePath: ""
     property int durationMs: 1000
     property int cutMs: 500
-    function open(id) { deckId = id; show(); requestActivate(); }
+    function open(id, editing = false) {
+        deckId = id;
+        const settings = editing ? Document.stingerSettings(id) : ({});
+        sourceId = settings.sourceId || "";
+        stingerName = settings.name || "Stinger";
+        filePath = settings.file || "";
+        durationMs = settings.durationMs === undefined ? 1000 : settings.durationMs;
+        cutMs = settings.cutMs === undefined ? 500 : settings.cutMs;
+        show(); requestActivate();
+    }
     Column {
         anchors.fill: parent
         anchors.margins: 16
@@ -62,11 +72,20 @@ Window {
         Row {
             spacing: 8
             DialogButton {
-                text: qsTr("Add stinger"); primary: true
+                text: dialog.sourceId === "" ? qsTr("Add stinger") : qsTr("Save changes"); primary: true
                 objectName: "acceptStinger"
                 onClicked: {
-                    if (Document.addStinger(dialog.deckId, dialog.stingerName, dialog.filePath,
-                                            dialog.cutMs, dialog.durationMs)) dialog.close();
+                    if (Document.saveStinger(dialog.deckId, dialog.stingerName, dialog.filePath,
+                                             dialog.cutMs, dialog.durationMs, dialog.sourceId)) dialog.close();
+                }
+            }
+            DialogButton {
+                visible: dialog.sourceId !== ""
+                text: qsTr("Delete stinger")
+                objectName: "deleteStingerEntry"
+                onClicked: {
+                    Document.removeSourceAndUses(dialog.sourceId);
+                    dialog.close();
                 }
             }
             DialogButton { text: qsTr("Cancel"); onClicked: dialog.close() }

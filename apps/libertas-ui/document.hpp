@@ -495,8 +495,8 @@ public:
     [[nodiscard]] QVariantList transitions() const;
     Q_INVOKABLE QVariantMap stingerSettings(const QString& deckId) const;
     Q_INVOKABLE void setStingerTiming(const QString& deckId, int cutMs, int durationMs);
-    Q_INVOKABLE bool addStinger(const QString& deckId, const QString& name, const QString& path,
-                                int cutMs, int durationMs);
+    Q_INVOKABLE bool saveStinger(const QString& deckId, const QString& name, const QString& path,
+                                 int cutMs, int durationMs, const QString& sourceId);
     Q_PROPERTY(QVariantList destinationKinds READ destinationKinds CONSTANT)
     [[nodiscard]] QVariantList destinationKinds() const;
     Q_PROPERTY(QVariantList codecs READ codecs CONSTANT)

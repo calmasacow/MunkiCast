@@ -7063,6 +7063,85 @@ int main(int argc, char** argv) {
                     settle();
                     report(!dialog->isVisible() && document.transitions().back().toMap().value("title").toString() == "UI stinger check",
                            "stinger dialog creates selectable file-backed transition");
+                    const auto stinger_deck = dialog->property("deckId").toString();
+                    const auto original_stinger = document.stingerSettings(stinger_deck);
+                    const auto stinger_id = original_stinger.value("sourceId").toString();
+                    const auto source_count = document.projectForBindings().sources.size();
+                    const auto click_control = [&](const QString& name) {
+                        for (auto* candidate : collect(window->contentItem(), name)) {
+                            if (!candidate->isEnabled()) continue;
+                            for (auto* parent = candidate->parentItem(); parent; parent = parent->parentItem()) {
+                                if (!parent->property("contentY").isValid()) continue;
+                                const auto maximum = std::max(0.0, parent->property("contentHeight").toDouble() - parent->height());
+                                parent->setProperty("contentY", std::clamp(
+                                    parent->property("contentY").toDouble() +
+                                    candidate->mapToItem(parent, QPointF(0, 0)).y() - parent->height() / 2,
+                                    0.0, maximum));
+                                break;
+                            }
+                            settle();
+                            const auto control_point = candidate->mapToScene(QPointF(20, 12));
+                            post(QEvent::MouseButtonPress, control_point, Qt::LeftButton, Qt::LeftButton);
+                            post(QEvent::MouseButtonRelease, control_point, Qt::LeftButton, Qt::NoButton);
+                            settle();
+                            return true;
+                        }
+                        return false;
+                    };
+                    const auto click_dialog = [&](const QString& name) {
+                        const auto buttons = collect(dialog->contentItem(), name);
+                        if (buttons.isEmpty()) return false;
+                        const auto dialog_point = buttons.front()->mapToScene(QPointF(30, 12));
+                        QMouseEvent press(QEvent::MouseButtonPress, dialog_point, dialog_point, Qt::LeftButton,
+                                           Qt::LeftButton, Qt::NoModifier);
+                        QMouseEvent release(QEvent::MouseButtonRelease, dialog_point, dialog_point, Qt::LeftButton,
+                                             Qt::NoButton, Qt::NoModifier);
+                        QCoreApplication::sendEvent(dialog, &press);
+                        QCoreApplication::sendEvent(dialog, &release);
+                        settle();
+                        return true;
+                    };
+                    report(click_control("editStinger") && dialog->isVisible() &&
+                               dialog->property("sourceId").toString() == stinger_id &&
+                               dialog->property("stingerName").toString() == "UI stinger check" &&
+                               dialog->property("cutMs").toInt() == 400,
+                           "Controls Edit opens the selected stinger with its saved fields");
+                    dialog->setProperty("cutMs", 2000);
+                    report(click_dialog("acceptStinger") && dialog->isVisible() &&
+                               document.stingerSettings(stinger_deck) == original_stinger,
+                           "invalid stinger timing preserves the saved entry and keeps its editor open");
+                    dialog->setProperty("stingerName", "Edited stinger");
+                    dialog->setProperty("cutMs", 500);
+                    dialog->setProperty("durationMs", 1200);
+                    const auto portrait_clip = clip.parent_path() / "alpha-portrait.webm";
+                    dialog->setProperty("filePath", QString::fromStdString(portrait_clip.string()));
+                    report(click_dialog("acceptStinger") && !dialog->isVisible() &&
+                               document.stingerSettings(stinger_deck).value("name").toString() == "Edited stinger" &&
+                               document.stingerSettings(stinger_deck).value("file").toString() == QString::fromStdString(portrait_clip.string()) &&
+                               document.stingerSettings(stinger_deck).value("sourceId").toString() == stinger_id &&
+                               document.projectForBindings().sources.size() == source_count,
+                           "Save edits name, file and timing without creating another stinger");
+                    document.undo();
+                    report(document.stingerSettings(stinger_deck) == original_stinger,
+                           "stinger editing undoes in one step");
+                    document.redo();
+                    document.addCanvas("Shared stinger check", true);
+                    const auto shared_deck = QString::fromStdString(document.projectForBindings().decks.back().id.to_string());
+                    document.setDeckTransition(shared_deck, "transition.stinger:" + stinger_id, -1);
+                    settle();
+                    report(click_control("deleteStinger") &&
+                               document.stingerSettings(stinger_deck).isEmpty() &&
+                               document.stingerSettings(shared_deck).isEmpty() &&
+                               document.projectForBindings().sources.size() == source_count - 1,
+                           "Controls Delete removes the entry and resets every canvas using it");
+                    document.undo();
+                    settle();
+                    report(document.stingerSettings(stinger_deck).value("sourceId").toString() == stinger_id &&
+                               document.stingerSettings(shared_deck).value("sourceId").toString() == stinger_id,
+                           "one Undo restores the deleted stinger and both canvas selections");
+                    report(click_control("editStinger") && click_dialog("deleteStingerEntry") &&
+                               !dialog->isVisible() && document.stingerSettings(stinger_deck).isEmpty(),
+                           "the stinger editor also offers Delete and closes after removal");
                     dialog->close();
                 }
             }

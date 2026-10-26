@@ -2816,6 +2816,13 @@ void Document::removeSourceAndUses(const QString& id) {
         return;
 
     std::vector<ldoc::Command> steps;
+    const auto transition = "transition.stinger:" + parsed->to_string();
+    for (const auto& deck : p.decks) {
+        if (deck.transition != transition) continue;
+        auto next = deck;
+        next.transition = "transition.cut";
+        steps.push_back(ldoc::SetDeck{std::move(next)});
+    }
     for (const ldoc::Scene& s : p.scenes) {
         std::vector<ldoc::Id> doomed;
         ldoc::visit(s.roots, [&](const ldoc::Node& n) {
@@ -3449,7 +3456,8 @@ QVariantMap Document::stingerSettings(const QString& deckId) const {
         const auto source_id = ldoc::Id::parse(deck.transition.substr(19));
         const auto* source = source_id ? session_->project().source(*source_id) : nullptr;
         if (!source) return {};
-        return {{"sourceId", id_str(source->id)}, {"file", qstr(lcomp::timer_text(source->settings, "localFile"))},
+        return {{"sourceId", id_str(source->id)}, {"name", qstr(source->name)},
+                {"file", qstr(lcomp::timer_text(source->settings, "localFile"))},
                 {"cutMs", QVariant::fromValue(lcomp::timer_number(source->settings, "stingerCutMs", 500))},
                 {"durationMs", QVariant::fromValue(lcomp::timer_number(source->settings, "stingerDurationMs", 1000))}};
     }
@@ -3470,8 +3478,8 @@ void Document::setStingerTiming(const QString& deckId, int cutMs, int durationMs
     run(ldoc::SetSource{std::move(copy)});
 }
 
-bool Document::addStinger(const QString& deckId, const QString& name, const QString& path,
-                           int cutMs, int durationMs) {
+bool Document::saveStinger(const QString& deckId, const QString& name, const QString& path,
+                            int cutMs, int durationMs, const QString& sourceId) {
     const auto id = parse_id(deckId);
     const auto& project = session_->project();
     const auto deck = std::ranges::find(project.decks, id.value_or(ldoc::Id{}), &ldoc::Deck::id);
@@ -3481,6 +3489,22 @@ bool Document::addStinger(const QString& deckId, const QString& name, const QStr
         durationMs <= 0 || durationMs > 600000 || cutMs < 0 || cutMs > durationMs) {
         emit notice(QStringLiteral("Choose a readable media file and a cut point within its duration."));
         return false;
+    }
+    const auto parsed_source = parse_id(sourceId);
+    const auto* existing = parsed_source ? project.source(*parsed_source) : nullptr;
+    if (!sourceId.isEmpty() && (!existing || existing->type != "source.media" ||
+                               !lcomp::timer_flag(existing->settings, "transitionStinger"))) {
+        emit notice(QStringLiteral("The stinger to edit no longer exists."));
+        return false;
+    }
+    if (existing) {
+        auto source = *existing;
+        source.name = to_std(name.trimmed());
+        source.settings["localFile"] = file.absoluteFilePath().toStdString();
+        source.settings["stingerCutMs"] = static_cast<std::int64_t>(cutMs);
+        source.settings["stingerDurationMs"] = static_cast<std::int64_t>(durationMs);
+        run(ldoc::SetSource{std::move(source)});
+        return true;
     }
     ldoc::Source source;
     source.id = ldoc::Id::generate();

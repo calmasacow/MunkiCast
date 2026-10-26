@@ -61,7 +61,9 @@ Item {
                     required property bool studioMode
                     required property string transition
                     required property int transitionMs
-                    readonly property var stinger: { const revision = Document.revision; return Document.stingerSettings(deckId); }
+                    readonly property var stinger: Document.revision >= 0 &&
+                                                   deck.transition.startsWith("transition.stinger:")
+                        ? Document.stingerSettings(deckId) : ({})
                     required property bool hasEmergencyScene
 
                     objectName: "deckBlock"
@@ -238,39 +240,41 @@ Item {
                             }
                         }
 
-                        DialogButton {
-                            text: qsTr("Add stinger…")
-                            objectName: "addStinger"
-                            onClicked: stingerSetup.open(deck.deckId)
+                        Flow {
+                            width: parent.width
+                            spacing: 8
+                            DialogButton {
+                                text: qsTr("Add stinger…")
+                                objectName: "addStinger"
+                                onClicked: stingerSetup.open(deck.deckId)
+                            }
+                            DialogButton {
+                                text: qsTr("Edit…"); minimumWidth: 60
+                                objectName: "editStinger"
+                                enabled: !!deck.stinger.sourceId
+                                onClicked: stingerSetup.open(deck.deckId, true)
+                            }
+                            DialogButton {
+                                text: qsTr("Delete"); minimumWidth: 60
+                                objectName: "deleteStinger"
+                                enabled: !!deck.stinger.sourceId
+                                onClicked: Document.removeSourceAndUses(deck.stinger.sourceId)
+                            }
                         }
 
                         ChoiceField {
                             width: parent.width
                             label: qsTr("Transition")
-                            choices: {
-                                const out = [];
+                            objectName: "deckTransition"
+                            choices: Document.transitions.map(t => t.id)
+                            choiceLabels: {
+                                const labels = {};
                                 for (const t of Document.transitions)
-                                    out.push(t.implemented ? t.title : t.title + " (no renderer)");
-                                return out;
+                                    labels[t.id] = t.implemented ? t.title : t.title + " (no renderer)";
+                                return labels;
                             }
-                            value: {
-                                for (const t of Document.transitions) {
-                                    if (t.id === deck.transition)
-                                        return t.implemented
-                                            ? t.title : t.title + " (no renderer)";
-                                }
-                                return deck.transition;
-                            }
-                            onCommitted: (newValue) => {
-                                for (const t of Document.transitions) {
-                                    const shown = t.implemented
-                                        ? t.title : t.title + " (no renderer)";
-                                    if (shown === newValue) {
-                                        Document.setDeckTransition(deck.deckId, t.id, -1);
-                                        return;
-                                    }
-                                }
-                            }
+                            value: deck.transition
+                            onCommitted: value => Document.setDeckTransition(deck.deckId, value, -1)
                         }
 
                         NumberField {
