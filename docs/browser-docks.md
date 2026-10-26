@@ -17,6 +17,10 @@ the browser dock list recreates the browser views. Cookies and website storage p
 normal application runs. User-initiated popup windows support website login flows. Web pages
 receive no OBS scripting API or access to studio controls.
 
+Chromium uses software rendering, matching browser-source workers. This avoids NVIDIA
+GPU memory faults from Chromium sharing the UI's Vulkan rendering path; the studio
+renderer and encoder retain their existing acceleration.
+
 Definitions are saved atomically beside the layout file, with the suffix
 `.browser-docks.json`; panel arrangements use the existing layout persistence. Qt WebEngine
 Quick is required to build the UI.
@@ -33,3 +37,14 @@ To test a real page separately:
 
 The standard build uses local FFmpeg 9.1 by default; `./tools/run-ffmpeg-9.1.sh` also launches it.
 Checks use temporary dock definitions and browser storage, leaving normal settings untouched.
+
+The native GPU regression check opens an isolated Wayland/Vulkan window for two minutes,
+animates browser canvas content, checks heartbeat progress and looks for NVIDIA faults:
+
+```sh
+python3 tests/check_browser_dock_vulkan.py \
+  build/linux/apps/libertas-ui/libertas-ui build/browser-vulkan-check
+```
+
+Use a fresh output directory. This check requires kernel journal access and a Wayland session;
+it exercises the native rendering path that the offscreen UI check cannot cover.

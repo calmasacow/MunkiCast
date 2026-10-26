@@ -122,6 +122,10 @@ int main(int argc, char** argv) {
     if (!check)
         QQuickWindow::setGraphicsApi(QSGRendererInterface::Vulkan);
 
+    // Chromium GPU interop with the Vulkan scene graph triggers NVIDIA Xid 31 faults.
+    // Match browser-source workers: software Chromium, with the studio renderer unchanged.
+    qputenv("QTWEBENGINE_CHROMIUM_FLAGS",
+            qgetenv("QTWEBENGINE_CHROMIUM_FLAGS") + " --disable-gpu");
     QtWebEngineQuick::initialize();
     QApplication app(argc, argv);
     QGuiApplication::setApplicationName(QStringLiteral("libertas"));
