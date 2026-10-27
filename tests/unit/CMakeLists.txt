@@ -47,7 +47,9 @@ pkg_check_modules(RECORD_TEST_FFMPEG REQUIRED IMPORTED_TARGET
     libavcodec libavformat libavutil libswscale)
 libertas_unit_test(test_preview         libertas::lcomp libertas::lcapture PkgConfig::RECORD_TEST_FFMPEG)
 libertas_unit_test(test_encode          libertas::lencode PkgConfig::RECORD_TEST_FFMPEG)
+find_program(RTMP_TEST_FFMPEG NAMES ffmpeg REQUIRED)
 target_compile_definitions(test_preview PRIVATE
+    LIBERTAS_TEST_FFMPEG="${RTMP_TEST_FFMPEG}"
     LIBERTAS_VST_FIXTURE="$<TARGET_FILE:vst_fixture>"
     LIBERTAS_RENDER="$<TARGET_FILE:libertas-render>"
     LIBERTAS_IMAGE_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/images")
@@ -88,3 +90,11 @@ libertas_unit_test(test_session          libertas::lsession)
 libertas_unit_test(test_theme            libertas::ltheme libertas::lcore)
 libertas_unit_test(test_workspaces       libertas::llayout libertas::lcore)
 libertas_unit_test(test_ulid             libertas::lcore)
+
+find_package(Qt6 REQUIRED COMPONENTS Gui Network Qml)
+libertas_unit_test(test_connectors Qt6::Gui Qt6::Network Qt6::Qml)
+target_sources(test_connectors PRIVATE ../../apps/libertas-ui/connectors.cpp)
+target_include_directories(test_connectors PRIVATE ../../apps/libertas-ui)
+set_target_properties(test_connectors PROPERTIES AUTOMOC ON)
+qt_add_resources(test_connectors connector_catalog_test PREFIX "/connectors"
+    BASE ../../apps/libertas-ui FILES ../../apps/libertas-ui/data/obs-services.json)

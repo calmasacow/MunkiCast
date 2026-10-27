@@ -11,8 +11,10 @@ Item {
     objectName: "broadcastBar"
     implicitHeight: info.height + 20
     property string recordTarget: ""
+    property var streamTarget: ({})
     function refresh() {
         bar.recordTarget = Document.recordingEncodeId();
+        bar.streamTarget = Document.streamingTarget();
         Telemetry.setDiskPath(Document.recordingDirectory());
     }
     Component.onCompleted: refresh()
@@ -99,9 +101,19 @@ Item {
         ToolButton {
             width: 96
             height: 28
-            label: qsTr("Go Live!")
-            enabled: false
-            tip: qsTr("Streaming is not connected yet")
+            objectName: "goLiveButton"
+            label: Preview.streaming ? qsTr("Stop Live")
+                   : Preview.streamingPending ? qsTr("Connecting…") : qsTr("Go Live!")
+            active: Preview.streaming
+            activeColor: Theme.c.error
+            enabled: !Preview.streamingPending && !Preview.recordingPending
+                     && (Preview.streaming || !!bar.streamTarget.outputId)
+            tip: Preview.streaming ? qsTr("Stop the live stream")
+                 : bar.streamTarget.reason || ""
+            onClicked: {
+                if (Preview.streaming) Preview.stopStreaming();
+                else Preview.startStreaming(bar.streamTarget.outputId);
+            }
         }
 
         // The Recording node names the bitstreams this action writes.
@@ -112,7 +124,8 @@ Item {
             label: Preview.recording ? qsTr("Stop") : qsTr("Record")
             active: Preview.recording
             activeColor: Theme.c.error
-            enabled: !Preview.recordingPending && (Preview.recording || bar.recordTarget !== "")
+            enabled: !Preview.streamingPending && !Preview.recordingPending
+                     && (Preview.recording || bar.recordTarget !== "")
             tip: Preview.recording
                  ? qsTr("Stop recording and close %1").arg(Preview.recordingPath)
                  : bar.recordTarget !== ""

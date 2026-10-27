@@ -131,12 +131,13 @@ class Renderer {
     }
 
     lcomp::Picture render(const ldoc::Project& original, const ldoc::Id& canvas,
-                          std::uint32_t max_edge) {
+                          std::uint32_t max_edge, lcomp::Picture* full_output) {
         const auto& project = effective_ ? *effective_ : original;
         std::erase_if(videos_, [&](auto& item) {
             const auto* source = project.source(item.second->source.id);
             if (!source || source->type != "source.v4l2" ||
-                !same_video_mode(item.second->source, *source)) {
+                !same_video_mode(item.second->source, *source) ||
+                (item.second->capture && item.second->capture->signal_changed())) {
                 video_held_.erase(item.first);
                 return true;
             }
@@ -179,7 +180,7 @@ class Renderer {
         next_animated_ = next_animated_ || lcomp::animated_plan(plan);
         if (gpu) {
             std::string error;
-            auto result = gpu->render(plan, max_edge, error);
+            auto result = gpu->render(plan, max_edge, error, full_output);
             if (result)
                 return std::move(*result);
             // Work still in flight cannot have its resources or capture leases recycled.
@@ -194,7 +195,10 @@ class Renderer {
                 return source_frame(source, false);
             });
         }
-        return lcomp::preview_size(lcomp::execute_cpu(plan), max_edge);
+        auto picture = lcomp::execute_cpu(plan);
+        if (full_output)
+            *full_output = picture;
+        return lcomp::preview_size(std::move(picture), max_edge);
     }
 
     bool fresh() const {
@@ -266,6 +270,23 @@ class Renderer {
         std::erase_if(sessions_,
                       [this](const auto& entry) { return !wanted_.contains(entry.first); });
         wanted_.clear();
+    }
+
+    std::vector<lcomp::CaptureState> capture_stats() {
+        std::vector<lcomp::CaptureState> states;
+        const auto now = std::chrono::steady_clock::now();
+        for (const auto& [id, session] : videos_) {
+            std::lock_guard lock(session->mu);
+            auto error = session->error;
+            if (session->capture && (!session->last ||
+                now - session->arrival > std::chrono::seconds(1)))
+                error = "No capture frames arriving";
+            states.push_back({session->source.id,
+                session->capture ? static_cast<std::uint32_t>(
+                    session->capture->negotiated_fps() * 1000) : 0,
+                error.empty() ? session->received : 0, std::move(error)});
+        }
+        return states;
     }
 
   private:
@@ -346,6 +367,9 @@ class Renderer {
 
     struct VideoSession {
         ldoc::Source source;
+        std::string error;
+        std::chrono::steady_clock::time_point window{}, arrival{};
+        std::uint32_t arrivals = 0, received = 0;
         bool visible = false;
         std::mutex mu;
         std::shared_ptr<const libertas::capture::VideoFrame> last;
@@ -404,11 +428,24 @@ class Renderer {
             session->capture = libertas::capture::VideoCapture::open(setting(source, "device"),
                 setting(source, "resolution"), setting(source, "frameRate"), setting(source, "colourRange"), error,
                 capture_options(source));
+            session->error = error;
             if (!session->capture) lc::warn("cannot capture {}: {}", setting(source, "device"), error);
             else {
                 auto* ptr = session.get();
                 session->capture->start([ptr](auto frame) {
                     std::lock_guard lock(ptr->mu);
+                    if (frame) {
+                        const auto now = std::chrono::steady_clock::now();
+                        if (ptr->window == std::chrono::steady_clock::time_point{}) ptr->window = now;
+                        else ++ptr->arrivals;
+                        const double elapsed = std::chrono::duration<double>(now - ptr->window).count();
+                        if (elapsed >= 1.0) {
+                            ptr->received = static_cast<std::uint32_t>(ptr->arrivals * 1000 / elapsed);
+                            ptr->arrivals = 0;
+                            ptr->window = now;
+                        }
+                        ptr->arrival = now;
+                    }
                     ptr->last = std::move(frame);
                     ++ptr->sequence;
                 });
@@ -584,16 +621,19 @@ int main() {
     record.wants = [&recorder](const ldoc::Id& canvas) {
         return recorder.running() && recorder.canvas() == canvas;
     };
-    record.frame = [&recorder](const ldoc::Id& canvas, const lcomp::Picture& picture) {
-        return recorder.frame(canvas, picture);
+    record.frame = [&recorder](const ldoc::Id& canvas, const lcomp::Picture& picture,
+                               std::chrono::steady_clock::time_point frame_time) {
+        return recorder.frame(canvas, picture, frame_time);
     };
     auto served = lcomp::serve_preview(
         lipc::Channel{lipc::Fd{fd}}, {}, [&renderer] { renderer.done(); },
         [&renderer] { return renderer.fresh(); },
-        [&renderer](const ldoc::Project& p, const ldoc::Id& id, std::uint32_t edge) {
-            return renderer.render(p, id, edge);
-        }, [&audio, &renderer](const ldoc::Project& p) { return audio.meters(renderer.prepare(p)); },
-        {}, std::move(record));
+        [&renderer](const ldoc::Project& p, const ldoc::Id& id, std::uint32_t edge,
+                    lcomp::Picture* full_output) {
+            return renderer.render(p, id, edge, full_output);
+        },
+        [&audio, &renderer](const ldoc::Project& p) { return audio.meters(renderer.prepare(p)); },
+        {}, std::move(record), [&renderer] { return renderer.capture_stats(); });
     if (!served) {
         std::fprintf(stderr, "libertas-render: %s\n", served.error().c_str());
         return 1;

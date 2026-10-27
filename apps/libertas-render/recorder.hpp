@@ -14,11 +14,7 @@
 #include <cmath>
 #include <string>
 
-/// Writing one encode to one file.
-///
-/// One at a time, deliberately. The encoder ladder picks a real device (ADR-0006) and two
-/// recordings would contend for it; the shape that wants several is several encodes going to
-/// several destinations, which is the streaming path and is not built yet.
+/// One shared encode feeding independently controlled recording and RTMP destinations.
 ///
 /// Video and audio are stamped off one clock -- the wall clock at the first frame -- because
 /// ADR-0017 does not care which clock the muxer is given, only that there is exactly one.
@@ -40,30 +36,57 @@ class Recorder {
     lcomp::RecordState control(const lcomp::RecordRequest& request,
                                const ldoc::Project& project) {
         if (!request.start) {
-            return {false, stop()};
+            std::string error;
+            auto& target = request.output.is_nil() ? recording_output_ : streaming_output_;
+            if ((request.encode.is_nil() && request.output.is_nil()) ||
+                (target && !(request.output.is_nil() ? streaming_output_ : recording_output_))) {
+                error = stop();
+            } else if (target && encoder_) {
+                libertas::encode::encoder_remove_output(*encoder_, *target, error);
+                target.reset();
+            }
+            return status(running(), error);
         }
-        if (encoder_)
-            return {true, "A recording is already running; stop it before starting another."};
 
         const ldoc::Encode* encode = project.encode(request.encode);
         if (!encode)
-            return {false, "that encode is not in this project"};
+            return status(running(), "that encode is not in this project");
         const ldoc::Canvas* canvas = project.canvas(encode->canvas);
         if (!canvas)
-            return {false, std::format("encode '{}' has no canvas to record", encode->name)};
+            return status(running(), std::format("encode '{}' has no canvas to record", encode->name));
 
-        // A file destination owns its audio route, including an intentionally silent route.
-        // Legacy callers without a file output retain the first connected audio route.
-        const ldoc::AudioEncode* audio = nullptr;
-        for (const ldoc::Output& o : project.outputs) {
-            if (o.encode == encode->id && o.destination.kind == ldoc::DestinationKind::File) {
-                audio = o.audio_encode ? project.audio_encode(*o.audio_encode) : nullptr;
+        const ldoc::Output* destination = nullptr;
+        for (const auto& o : project.outputs) {
+            if ((!request.output.is_nil() && o.id == request.output) ||
+                (request.output.is_nil() && o.encode == encode->id &&
+                 o.destination.kind == ldoc::DestinationKind::File)) {
+                destination = &o;
                 break;
             }
-            if (!audio && o.encode == encode->id && o.audio_encode) {
-                audio = project.audio_encode(*o.audio_encode);
-            }
         }
+        const bool streaming = !request.output.is_nil();
+        if (streaming &&
+            (!destination || !destination->enabled || destination->encode != encode->id ||
+             (destination->destination.kind != ldoc::DestinationKind::Rtmp &&
+              destination->destination.kind != ldoc::DestinationKind::Rtmps)))
+            return status(running(), "Choose an armed RTMP or RTMPS destination.");
+        const bool network =
+            request.path.starts_with("rtmp://") || request.path.starts_with("rtmps://");
+        if (network != streaming)
+            return status(running(), "The output address does not match its destination.");
+        const ldoc::AudioEncode* audio = destination && destination->audio_encode
+                                             ? project.audio_encode(*destination->audio_encode)
+                                             : nullptr;
+        // Legacy recording callers without a file destination use the first audio route.
+        if (!destination && !streaming)
+            for (const auto& o : project.outputs)
+                if (o.encode == encode->id && o.audio_encode) {
+                    audio = project.audio_encode(*o.audio_encode);
+                    break;
+                }
+        if (streaming && (encode->encoder.codec != "h264" || !audio || audio->codec != "aac" ||
+                          !project.bus(audio->bus)))
+            return status(running(), "Basic RTMP needs H.264 video and a connected AAC audio encoder.");
         ldoc::AudioEncode silent;
         silent.bitrate_kbps = 0;
 
@@ -74,6 +97,17 @@ class Recorder {
             cfg.audio_bitrate = 0;
         }
 
+        auto& target = streaming ? streaming_output_ : recording_output_;
+        if (target) return status(running(), "That destination is already running.");
+        const auto audio_id = audio ? audio->id : ldoc::Id::nil();
+        if (encoder_) {
+            if (encode->id != encode_ || audio_id != audio_encode_)
+                return status(true, "Concurrent destinations must share their video and audio encodes.");
+            std::string error;
+            target = libertas::encode::encoder_add_output(*encoder_, request.path, error);
+            if (target && streaming) streaming_id_ = request.output;
+            return status(true, error);
+        }
         std::string error;
         encoder_ = libertas::encode::encoder_open(cfg, error);
         if (!encoder_) {
@@ -81,48 +115,91 @@ class Recorder {
             audio_.tap(ldoc::Id::nil());
             return {false, error.empty() ? std::string{"the encoder would not open"} : error};
         }
+        target = 0;
+        encode_ = encode->id;
+        audio_encode_ = audio_id;
+        if (streaming) streaming_id_ = request.output;
         canvas_ = canvas->id;
         width_ = cfg.source_width;
         height_ = cfg.source_height;
         frame_rate_ = static_cast<double>(cfg.fps_num) / cfg.fps_den;
         video_origin_ = -1;
         last_video_slot_ = -1;
+        frames_ = missed_ = encode_lag_ = encode_blocked_slots_ = 0;
         started_ = std::chrono::steady_clock::now();
         audio_.tap(audio ? audio->bus : ldoc::Id::nil());
-        lc::info("recording {} to {}", encode->name, request.path);
-        return {true, {}};
+        lc::info("{} {}", streaming ? "streaming" : "recording", encode->name);
+        return status(true, {});
     }
 
     /// One composited frame; report a failed recording back over the preview channel.
-    std::optional<lcomp::RecordState> frame(const ldoc::Id& canvas,
-                                           const lcomp::Picture& picture) {
+    std::optional<lcomp::RecordState> frame(const ldoc::Id& canvas, const lcomp::Picture& picture,
+                                            std::chrono::steady_clock::time_point frame_time) {
         if (!encoder_ || canvas != canvas_)
             return std::nullopt;
         std::string error;
         if (picture.width != static_cast<std::int32_t>(width_) ||
             picture.height != static_cast<std::int32_t>(height_)) {
-            error = "Recording stopped because the canvas size changed.";
+            error = "Output stopped because the canvas size changed.";
         } else if (const auto* pixels = picture.read_from()) {
-            const auto pts = std::chrono::duration_cast<std::chrono::nanoseconds>(
-                std::chrono::steady_clock::now() - started_).count();
-            // Match encoder timestamp rounding; millisecond preview ticks may arrive early.
+            const auto pts =
+                std::chrono::duration_cast<std::chrono::nanoseconds>(frame_time - started_).count();
+            // Match the encoder time base; early ticks must not submit duplicate timestamps.
             if (video_origin_ < 0) video_origin_ = pts;
             const auto slot = std::llround(static_cast<double>(pts - video_origin_) * frame_rate_ / 1e9);
             if (slot > last_video_slot_) {
-                if (libertas::encode::encoder_video(*encoder_, pixels, picture.stride, pts, error))
+                const auto gap = static_cast<std::uint64_t>(slot - last_video_slot_ - 1);
+                missed_ += gap;
+                encode_lag_ += std::min(gap, encode_blocked_slots_);
+                const auto encode_started = std::chrono::steady_clock::now();
+                if (libertas::encode::encoder_video(*encoder_, pixels, picture.stride, pts,
+                                                    error)) {
                     last_video_slot_ = slot;
+                    ++frames_;
+                }
+                if (error.empty())
+                    pump_audio(pts, error);
+                const auto finished = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                          std::chrono::steady_clock::now() - started_)
+                                          .count();
+                const auto end_slot =
+                    std::llround(static_cast<double>(finished - video_origin_) * frame_rate_ / 1e9);
+                const auto encode_started_ns =
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(encode_started - started_)
+                        .count();
+                const auto encode_slot = std::llround(
+                    static_cast<double>(encode_started_ns - video_origin_) * frame_rate_ / 1e9);
+                encode_blocked_slots_ = static_cast<std::uint64_t>(
+                    std::max<std::int64_t>(0, end_slot - encode_slot - 1));
             }
-            if (error.empty()) pump_audio(pts, error);
         } else {
-            error = "Recording stopped because the rendered frame is unavailable.";
+            error = "Output stopped because the rendered frame is unavailable.";
         }
-        if (error.empty())
-            return std::nullopt;
+        if (!error.empty()) {
+            const auto finish_error = stop();
+            if (!finish_error.empty()) error += " " + finish_error;
+            auto state = status(false, error);
+            state.control_reply = false;
+            return state;
+        }
+        for (auto* output : {&recording_output_, &streaming_output_}) {
+            if (*output && !libertas::encode::encoder_output_active(*encoder_, **output)) {
+                const auto failure = libertas::encode::encoder_output_error(*encoder_, **output);
+                if (!error.empty()) error += " ";
+                error += failure;
+                output->reset();
+            }
+        }
+        if (error.empty() || recording_output_ || streaming_output_) {
+            auto state = status(true, error);
+            state.control_reply = false;
+            return state;
+        }
         const auto finish_error = stop();
         if (!finish_error.empty())
             error += " " + finish_error;
         lc::error("{}", error);
-        return lcomp::RecordState{false, std::move(error)};
+        return status(false, error);
     }
 
     /// Flush even after failure, then release the file and audio route.
@@ -138,12 +215,19 @@ class Recorder {
             error += finish_error;
         }
         encoder_.reset();
+        recording_output_.reset();
+        streaming_output_.reset();
         canvas_ = ldoc::Id::nil();
         audio_.tap(ldoc::Id::nil());
         return error;
     }
 
   private:
+    lcomp::RecordState status(bool running, const std::string& error) const {
+        return {running, error, frames_, missed_, encode_lag_,
+                recording_output_.has_value(), streaming_output_.has_value()};
+    }
+
     void pump_audio(std::int64_t pts_ns, std::string& error) {
         auto samples = audio_.drain_tap();
         if (samples.empty())
@@ -154,10 +238,14 @@ class Recorder {
 
     AudioSources& audio_;
     libertas::encode::EncoderPtr encoder_;
+    std::optional<std::size_t> recording_output_, streaming_output_;
+    ldoc::Id encode_ = ldoc::Id::nil(), audio_encode_ = ldoc::Id::nil();
+    ldoc::Id streaming_id_ = ldoc::Id::nil();
     ldoc::Id canvas_ = ldoc::Id::nil();
     std::uint32_t width_ = 0;
     std::uint32_t height_ = 0;
     std::chrono::steady_clock::time_point started_{};
+    std::uint64_t frames_ = 0, missed_ = 0, encode_lag_ = 0, encode_blocked_slots_ = 0;
     double frame_rate_ = 0;
     std::int64_t video_origin_ = -1;
     std::int64_t last_video_slot_ = -1;

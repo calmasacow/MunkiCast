@@ -3,6 +3,7 @@
 #pragma once
 
 #include "documentmodels.hpp"
+#include "connectors.hpp"
 
 #include "lsession/local_session.hpp"
 
@@ -497,6 +498,10 @@ public:
     Q_INVOKABLE void setStingerTiming(const QString& deckId, int cutMs, int durationMs);
     Q_INVOKABLE bool saveStinger(const QString& deckId, const QString& name, const QString& path,
                                  int cutMs, int durationMs, const QString& sourceId);
+    Q_PROPERTY(Connectors* connectors READ connectors CONSTANT)
+    Connectors* connectors() { return &connectors_; }
+    Q_INVOKABLE void setOutputService(const QString& id, const QString& service);
+    Q_INVOKABLE void connectOutputAccount(const QString& id);
     Q_PROPERTY(QVariantList destinationKinds READ destinationKinds CONSTANT)
     [[nodiscard]] QVariantList destinationKinds() const;
     Q_PROPERTY(QVariantList codecs READ codecs CONSTANT)
@@ -548,6 +553,7 @@ public:
                                        const QString& targetKind, const QString& targetId,
                                        const QString& targetPort);
     Q_INVOKABLE QString recordingEncodeId() const;
+    Q_INVOKABLE QVariantMap streamingTarget() const;
     Q_INVOKABLE void removeEncode(const QString& id);
     Q_INVOKABLE QVariantMap encodeSettings(const QString& id) const;
     Q_INVOKABLE void setEncodeBitrate(const QString& id, int kbps);
@@ -715,6 +721,7 @@ signals:
   void canvasChanged();
   /// Something to say in the status bar: a refused command, a failed save, a recovered journal.
   void notice(const QString& text);
+  void outputKeySaveFinished(const QString& outputId, bool saved);
   /// The sources list should start renaming this node.
   void renameRequested(const QString& nodeId);
 
@@ -767,6 +774,7 @@ private:
         const QString& key, const QVariant& value);
     void edit_canvas(const QString& id, const std::function<void(ldoc::Canvas&)>& change);
 
+    Connectors connectors_{this};
     std::unique_ptr<lsession::Session> session_;
     /// One per canvas, keyed by id, created on demand and owned by this object. Kept after a
     /// canvas goes rather than deleted: a panel can outlive its canvas by a frame, and an

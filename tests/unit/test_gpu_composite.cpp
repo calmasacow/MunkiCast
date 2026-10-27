@@ -58,6 +58,31 @@ libertas::rhi::VkCtxPtr device() {
 }
 } // namespace
 
+LTEST_CASE(one_composition_exports_matching_full_size_and_preview_frames) {
+    auto d = device();
+    std::string error;
+    auto gpu = libertas::rhi::GpuCompositor::create(*d, error);
+    REQUIRE_MSG(gpu, "{}", error);
+    auto project = show(48, 32);
+    std::vector<std::uint8_t> pixels(48 * 32 * 4);
+    for (int channel = 0; channel < 3; ++channel) {
+        for (std::size_t i = 0; i < pixels.size(); i += 4) {
+            pixels[i] = pixels[i + 1] = pixels[i + 2] = 0;
+            pixels[i + static_cast<std::size_t>(channel)] = pixels[i + 3] = 255;
+        }
+        const auto plan =
+            lcomp::plan_canvas(project, project.canvases[0].id, [&](const ldoc::Source&) {
+                return lcomp::CapturedPicture{48, 32, pixels.data(), pixels.size()};
+            });
+        lcomp::Picture full;
+        const auto preview = gpu->render(plan, 12, error, &full);
+        REQUIRE_MSG(preview, "{}", error);
+        const auto expected = lcomp::execute_cpu(plan);
+        compare(expected, full);
+        compare(lcomp::preview_size(expected, 12), *preview);
+    }
+}
+
 LTEST_CASE(native_media_frames_preserve_output_box_letterboxing_crop_and_filters) {
     auto d = device();
     std::string error;

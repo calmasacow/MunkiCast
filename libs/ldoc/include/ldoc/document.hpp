@@ -230,6 +230,9 @@ struct Destination {
     /// The name of a credential, never the credential.
     std::string credential_ref;
 
+    /// Catalog service or custom transport ID; empty in older projects.
+    std::string service;
+
     friend bool operator==(const Destination&, const Destination&) = default;
 };
 

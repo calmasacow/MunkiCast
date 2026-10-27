@@ -13,7 +13,8 @@ class GpuCompositor {
     static std::unique_ptr<GpuCompositor> create(VkCtx& device, std::string& error);
     ~GpuCompositor();
     [[nodiscard]] std::optional<lcomp::Picture> render(const lcomp::DrawPlan& plan,
-                                                       std::uint32_t max_edge, std::string& error);
+                                                       std::uint32_t max_edge, std::string& error,
+                                                       lcomp::Picture* full_output = nullptr);
 
   private:
     GpuCompositor();

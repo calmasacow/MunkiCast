@@ -217,7 +217,7 @@ struct GpuCompositor::Impl {
     std::vector<std::unique_ptr<Buffer>> uploads;
     std::map<VkImage, std::unique_ptr<Image>> foreign;
     std::vector<Image*> acquired;
-    std::unique_ptr<Buffer> readback;
+    std::unique_ptr<Buffer> readback, full_readback;
     std::size_t image_at = 0, upload_at = 0;
     // Images the compositor may hold. Half of the device-local heap's budget at startup, which
     // leaves room for the encoder, Qt and other programs; 512 MiB where the driver cannot say.
@@ -335,6 +335,7 @@ struct GpuCompositor::Impl {
         images.clear();
         uploads.clear();
         readback.reset();
+        full_readback.reset();
         histories.clear();
         retired.clear();
         recycled.clear();
@@ -949,15 +950,19 @@ struct GpuCompositor::Impl {
         return *result;
     }
 
-    lcomp::Picture render(const lcomp::DrawPlan& plan, std::uint32_t max_edge) {
+    lcomp::Picture render(const lcomp::DrawPlan& plan, std::uint32_t max_edge,
+                          lcomp::Picture* full_output) {
         const auto begin = std::chrono::steady_clock::now();
         lcomp::Picture out;
         out.width = plan.width;
         out.height = plan.height;
         out.status = plan.status;
         out.gaps = plan.gaps;
-        if (plan.status == lcomp::PictureStatus::Unsupported)
+        if (plan.status == lcomp::PictureStatus::Unsupported) {
+            if (full_output)
+                *full_output = out;
             return out;
+        }
         std::vector<const lcomp::DrawOp*> media;
         std::vector<std::shared_ptr<const void>> source_owners;
         const auto visit = [&](auto&& self, const lcomp::DrawPlan& current) -> void {
@@ -1023,26 +1028,35 @@ struct GpuCompositor::Impl {
             out.gaps.insert(out.gaps.end(), runtime_gaps.begin(), runtime_gaps.end());
             out.status = lcomp::PictureStatus::Partial;
         }
-        const auto edge = static_cast<std::uint32_t>(std::max(plan.width, plan.height));
-        if (max_edge && max_edge < edge) {
-            out.width = std::max(
-                1, static_cast<int>(static_cast<std::uint64_t>(plan.width) * max_edge / edge));
-            out.height = std::max(
-                1, static_cast<int>(static_cast<std::uint64_t>(plan.height) * max_edge / edge));
+        // Export both sizes from this composition before releasing captured-frame leases.
+        const auto export_picture = [&](lcomp::Picture& picture, std::uint32_t max_size,
+                                        std::unique_ptr<Buffer>& destination) {
+            const auto edge = static_cast<std::uint32_t>(std::max(plan.width, plan.height));
+            if (max_size && max_size < edge) {
+                picture.width = std::max(
+                    1, static_cast<int>(static_cast<std::uint64_t>(plan.width) * max_size / edge));
+                picture.height = std::max(
+                    1, static_cast<int>(static_cast<std::uint64_t>(plan.height) * max_size / edge));
+            }
+            Image& reduced = target(picture.width, picture.height, VK_FORMAT_R8G8B8A8_UNORM);
+            barrier(reduced, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
+            dispatch(reduced, canvas, preview, {}, picture.width, picture.height);
+            picture.stride = static_cast<std::uint32_t>(picture.width) * 4;
+            const auto size =
+                static_cast<std::size_t>(picture.stride) * static_cast<std::size_t>(picture.height);
+            buffer(destination, size);
+            VkBufferImageCopy copy{};
+            copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+            copy.imageExtent = {static_cast<std::uint32_t>(picture.width),
+                                static_cast<std::uint32_t>(picture.height), 1};
+            vkCmdCopyImageToBuffer(cmd, reduced.image, VK_IMAGE_LAYOUT_GENERAL, destination->buffer,
+                                   1, &copy);
+        };
+        if (full_output) {
+            *full_output = out;
+            export_picture(*full_output, 0, full_readback);
         }
-        Image& reduced = target(out.width, out.height, VK_FORMAT_R8G8B8A8_UNORM);
-        barrier(reduced, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
-        dispatch(reduced, canvas, preview, {}, out.width, out.height);
-        out.stride = static_cast<std::uint32_t>(out.width) * 4;
-        const auto bytes =
-            static_cast<std::size_t>(out.stride) * static_cast<std::size_t>(out.height);
-        buffer(readback, bytes);
-        VkBufferImageCopy copy{};
-        copy.imageSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
-        copy.imageExtent = {static_cast<std::uint32_t>(out.width),
-                            static_cast<std::uint32_t>(out.height), 1};
-        vkCmdCopyImageToBuffer(cmd, reduced.image, VK_IMAGE_LAYOUT_GENERAL, readback->buffer, 1,
-                               &copy);
+        export_picture(out, max_edge, readback);
         if (timestamps)
             stamp(VK_PIPELINE_STAGE_TRANSFER_BIT, 2);
         for (auto* image : acquired)
@@ -1086,8 +1100,15 @@ struct GpuCompositor::Impl {
                     ms(ticks[2] - ticks[1]), dispatches);
             }
         }
-        out.pixels.resize(bytes);
-        std::memcpy(out.pixels.data(), readback->mapped, bytes);
+        const auto copy_picture = [](lcomp::Picture& picture, const Buffer& source) {
+            const auto size =
+                static_cast<std::size_t>(picture.stride) * static_cast<std::size_t>(picture.height);
+            picture.pixels.resize(size);
+            std::memcpy(picture.pixels.data(), source.mapped, size);
+        };
+        copy_picture(out, *readback);
+        if (full_output)
+            copy_picture(*full_output, *full_readback);
         std::uint64_t spare_bytes = 0;
         for (std::size_t i = image_at; i < images.size(); ++i)
             if (images[i])
@@ -1134,9 +1155,10 @@ std::unique_ptr<GpuCompositor> GpuCompositor::create(VkCtx& device, std::string&
 }
 
 std::optional<lcomp::Picture> GpuCompositor::render(const lcomp::DrawPlan& plan,
-                                                    std::uint32_t max_edge, std::string& error) {
+                                                    std::uint32_t max_edge, std::string& error,
+                                                    lcomp::Picture* full_output) {
     try {
-        return impl_->render(plan, max_edge);
+        return impl_->render(plan, max_edge, full_output);
     } catch (const std::exception& e) {
         error = e.what();
         return std::nullopt;

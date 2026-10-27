@@ -2,7 +2,7 @@
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # The render process. It publishes a preview of each canvas, captures the screens that preview
-# names, and writes a recording of one canvas to a file. Streaming output is still to come.
+# names, and records or streams one canvas to a configured destination.
 # ADR-0005 puts the encoder here, and puts the GPU here, which is why the device lives in this
 # process rather than in lcomp. ADR-0040 is why the preview is a separate process rather than a
 # function the UI calls.

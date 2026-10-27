@@ -329,6 +329,7 @@ Jv enc(const Destination& d) {
     // The *name* of a credential. See the comment on Destination: there is deliberately nowhere
     // here to put the secret itself.
     o["credential_ref"] = d.credential_ref;
+    if (!d.service.empty()) o["service"] = d.service;
     return o;
 }
 
@@ -969,6 +970,7 @@ Output dec_output(Rd& rd, const Jv& v, std::string_view path) {
                                            o.destination.kind);
         o.destination.url = rd.text(*d, "url", path);
         o.destination.credential_ref = rd.text(*d, "credential_ref", path);
+        if (d->isMember("service")) o.destination.service = rd.text(*d, "service", path);
     }
     // Absent before version 4, where audio was four string keys inside the video encode; the
     // migration fills it in.

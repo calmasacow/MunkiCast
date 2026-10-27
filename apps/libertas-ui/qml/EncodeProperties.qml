@@ -27,10 +27,34 @@ Item {
     property var destination: ({})
     property string chosenPreset: ""
     property string newPresetName: ""
-    property string pendingKey: ""
+    property var pendingKeys: ({})
+    property var savingKeys: ({})
+    property var savedKeys: ({})
+    readonly property string pendingKey: panel.pendingKeys[panel.selectedId] || ""
+    function setPendingKey(id, value) {
+        const keys = Object.assign({}, panel.pendingKeys);
+        if (value === "") delete keys[id];
+        else keys[id] = value;
+        panel.pendingKeys = keys;
+    }
+    function savePendingKey() {
+        const id = panel.selectedId;
+        if (panel.pendingKey === "" || panel.savingKeys[id] ||
+            panel.savedKeys[id] === panel.pendingKey) return;
+        const saving = Object.assign({}, panel.savingKeys);
+        saving[id] = true;
+        panel.savingKeys = saving;
+        Document.saveOutputKey(id, panel.pendingKey);
+    }
     onPendingKeyChanged: if (pendingKey === "") destinationKey.clear()
     readonly property bool streamDestination: panel.selectedKind === "output" &&
         panel.destination.destinationKind !== "file" && panel.destination.destinationKind !== "replay"
+    readonly property var connector: Document.destinationKinds.find(
+        entry => entry.id === panel.destination.service) || ({})
+    readonly property var servers: panel.connector.servers || []
+    readonly property bool usesKey: panel.streamDestination && panel.destination.destinationKind !== "srt"
+    readonly property bool accountBusy: Document.connectors.busy && Document.connectors.target === panel.selectedId
+    property string youtubeStream: ""
     readonly property var extra: panel.encode.extra || ({})
     readonly property string implementation: panel.encode.implementation || ""
 
@@ -40,8 +64,8 @@ Item {
     property var canvasLabels: ({})
     readonly property bool rescaled: (panel.encode.width || 0) > 0
     property bool customResolution: false
-    onSelectedIdChanged: { pendingKey = ""; customResolution = false; refresh(); }
-    onSelectedKindChanged: { pendingKey = ""; refresh(); }
+    onSelectedIdChanged: { customResolution = false; youtubeStream = ""; refresh(); }
+    onSelectedKindChanged: refresh()
     Component.onCompleted: refresh()
 
     function refresh() {
@@ -67,6 +91,16 @@ Item {
     Connections {
         target: Document
         function onChanged() { panel.revision++; panel.refresh(); }
+        function onOutputKeySaveFinished(id, saved) {
+            const saving = Object.assign({}, panel.savingKeys);
+            delete saving[id];
+            panel.savingKeys = saving;
+            if (saved) {
+                const keys = Object.assign({}, panel.savedKeys);
+                keys[id] = panel.pendingKeys[id];
+                panel.savedKeys = keys;
+            }
+        }
     }
 
     function setExtra(key, value) {
@@ -661,10 +695,10 @@ Item {
                 }
 
                 ChoiceField {
-                    objectName: "encodeDestinationProtocol"
+                    objectName: "encodeDestinationType"
                     width: parent.width
                     visible: panel.streamDestination
-                    label: qsTr("Protocol")
+                    label: qsTr("Destination type")
                     labelWidth: 150
                     choices: Document.destinationKinds.map(k => k.id)
                     choiceLabels: {
@@ -672,46 +706,140 @@ Item {
                         for (const kind of Document.destinationKinds) labels[kind.id] = kind.title;
                         return labels;
                     }
-                    value: panel.destination.destinationKind || "rtmp"
-                    onCommitted: value => Document.setOutputDestination(
-                        panel.selectedId, value, panel.destination.url || "")
+                    value: panel.destination.service || "rtmp"
+                    onCommitted: value => {
+                        panel.setPendingKey(panel.selectedId, "");
+                        const saved = Object.assign({}, panel.savedKeys);
+                        delete saved[panel.selectedId];
+                        panel.savedKeys = saved;
+                        Document.setOutputService(panel.selectedId, value);
+                    }
+                }
+
+                ChoiceField {
+                    objectName: "encodeDestinationServer"
+                    width: parent.width
+                    visible: panel.streamDestination && panel.servers.length > 0
+                    label: qsTr("Server")
+                    labelWidth: 150
+                    choices: panel.servers.map(server => server.id)
+                    choiceLabels: {
+                        const labels = {};
+                        for (const server of panel.servers) labels[server.id] = server.title;
+                        return labels;
+                    }
+                    value: panel.destination.url || ""
+                    onCommitted: value => Document.setOutputDestination(panel.selectedId,
+                        value.startsWith("rtmps://") ? "rtmps" : "rtmp", value)
+                }
+
+                TextLine {
+                    objectName: "oauthClientId"
+                    width: parent.width
+                    visible: panel.streamDestination && !!panel.connector.oauth
+                    label: qsTr("OAuth client ID")
+                    labelWidth: 150
+                    value: {
+                        void Document.connectors.busy;
+                        return Document.connectors.clientId(panel.destination.service || "");
+                    }
+                    placeholder: qsTr("Register Libertas with the provider")
+                    onCommitted: value => Document.connectors.setClientId(panel.destination.service, value)
+                }
+
+                TextLine {
+                    width: parent.width
+                    visible: panel.streamDestination && panel.destination.service === "youtube"
+                    label: qsTr("OAuth client secret")
+                    labelWidth: 150
+                    echoMode: TextInput.Password
+                    placeholder: qsTr("Desktop client secret; kept in memory")
+                    onCommitted: value => Document.connectors.setGoogleSecret(value)
+                }
+
+                DialogButton {
+                    objectName: "connectDestinationAccount"
+                    visible: panel.streamDestination && !!panel.connector.oauth
+                    text: panel.accountBusy ? qsTr("Cancel connection") : qsTr("Connect account…")
+                    enabled: !Document.connectors.busy || panel.accountBusy
+                    onClicked: {
+                        if (panel.accountBusy) Document.connectors.cancel();
+                        else Document.connectOutputAccount(panel.selectedId);
+                    }
+                }
+
+                Text {
+                    width: parent.width
+                    visible: panel.streamDestination && !!panel.connector.oauth &&
+                             Document.connectors.target === panel.selectedId
+                    text: Document.connectors.status
+                    color: Theme.c.textMuted
+                    font.pixelSize: 10
+                    wrapMode: Text.WordWrap
+                }
+
+                ChoiceField {
+                    objectName: "youtubeStream"
+                    width: parent.width
+                    visible: panel.accountBusy && Document.connectors.streams.length > 0
+                    label: qsTr("YouTube stream")
+                    labelWidth: 150
+                    choices: Document.connectors.streams.map(stream => stream.id)
+                    choiceLabels: {
+                        const labels = {};
+                        for (const stream of Document.connectors.streams) labels[stream.id] = stream.title;
+                        return labels;
+                    }
+                    value: panel.youtubeStream
+                    onCommitted: value => {
+                        panel.youtubeStream = value;
+                        Document.connectors.chooseStream(value);
+                    }
+                }
+
+                DialogButton {
+                    visible: panel.streamDestination && !!panel.connector.keyLink
+                    text: qsTr("Get stream key…")
+                    onClicked: Qt.openUrlExternally(panel.connector.keyLink)
                 }
 
                 TextLine {
                     objectName: "encodeDestinationUrl"
                     width: parent.width
-                    visible: panel.streamDestination
-                    label: qsTr("URL")
+                    visible: panel.streamDestination && panel.servers.length === 0
+                    label: panel.destination.destinationKind === "whip" ? qsTr("WHIP endpoint") : qsTr("Server URL")
                     labelWidth: 150
                     value: panel.destination.url || ""
                     onCommitted: value => Document.setOutputDestination(
-                        panel.selectedId, panel.destination.destinationKind, value)
+                        panel.selectedId, panel.destination.service === "rtmp"
+                            ? (value.startsWith("rtmps://") ? "rtmps" : "rtmp")
+                            : panel.destination.destinationKind, value)
                 }
 
                 TextLine {
                     id: destinationKey
                     objectName: "encodeDestinationKey"
                     width: parent.width
-                    visible: panel.streamDestination
-                    label: qsTr("Key")
+                    visible: panel.usesKey
+                    label: panel.destination.destinationKind === "whip" ? qsTr("Bearer token") : qsTr("Stream key")
                     labelWidth: 150
                     echoMode: TextInput.Password
                     placeholder: panel.destination.credentialRef
-                        ? qsTr("Saved reference - enter replacement key") : qsTr("Stream key")
+                        ? qsTr("Saved in keyring - enter replacement key") : qsTr("Stream key")
                     value: panel.pendingKey
                     commitOnEdit: true
-                    onCommitted: value => panel.pendingKey = value
+                    enabled: !panel.savingKeys[panel.selectedId]
+                    onCommitted: value => panel.setPendingKey(panel.selectedId, value)
+                    onEditingFinished: panel.savePendingKey()
                 }
 
                 DialogButton {
                     objectName: "encodeSaveDestinationKey"
-                    visible: panel.streamDestination
+                    visible: panel.usesKey
                     text: qsTr("Save key to keyring")
-                    enabled: panel.pendingKey.length > 0
-                    onClicked: {
-                        Document.saveOutputKey(panel.selectedId, panel.pendingKey);
-                        panel.pendingKey = "";
-                    }
+                    enabled: panel.pendingKey.length > 0 && !panel.savingKeys[panel.selectedId]
+                             && panel.savedKeys[panel.selectedId] !== panel.pendingKey
+                    onClicked: panel.savePendingKey()
                 }
 
                 ChoiceField {
@@ -764,11 +892,25 @@ Item {
                 Text {
                     width: parent.width
                     wrapMode: Text.WordWrap
-                    visible: panel.streamDestination
-                    text: qsTr("Key stored in system keyring, never in project.")
+                    visible: panel.usesKey
+                    text: panel.destination.credentialRef
+                          ? qsTr("Key saved in system keyring.") : qsTr("Enter a stream key if required by the server.")
                     font.pixelSize: 9
                     color: Theme.c.textMuted
                     topPadding: 8
+                }
+                Text {
+                    objectName: "streamReadiness"
+                    width: parent.width
+                    wrapMode: Text.WordWrap
+                    visible: panel.streamDestination
+                    text: {
+                        void panel.revision;
+                        const target = Document.streamingTarget();
+                        return target.outputId ? qsTr("Ready to go live") : target.reason || "";
+                    }
+                    font.pixelSize: 10
+                    color: Theme.c.text
                 }
             }
 

@@ -4,19 +4,22 @@
 #include "preview.hpp"
 
 #include "assetcache.hpp"
-
 #include "lcomp/countdown.hpp"
 #include "lcomp/preview.hpp"
 
 #include <QDateTime>
 #include <QImage>
+#include <QProcess>
 #include <QQuickImageProvider>
 #include <QSocketNotifier>
+#include <QStandardPaths>
 #include <QTimer>
+#include <QUrl>
 #include <algorithm>
 #include <chrono>
 #include <csignal>
 #include <cstdint>
+#include <cstdio>
 #include <deque>
 #include <limits>
 #include <map>
@@ -138,7 +141,45 @@ Preview* Preview::create(QQmlEngine* engine, QJSEngine*) {
 
 Preview::Preview(QObject* parent)
     : QObject(parent), renderer_(g_renderer), state_(std::make_shared<State>()),
-      link_(std::make_unique<Link>()) {}
+      link_(std::make_unique<Link>()) {
+    bool valid = false;
+    const int seconds = qEnvironmentVariableIntValue("LIBERTAS_MONITOR_SECONDS", &valid);
+    if (!valid || seconds < 1 || seconds > 3600)
+        return;
+    // ponytail: opt-in session diagnostic; expose a UI duration only if operators need it.
+    QTimer::singleShot(15000, this, [this, seconds] {
+        const auto started = std::chrono::steady_clock::now();
+        auto* monitor = new QTimer(this);
+        monitor->setTimerType(Qt::PreciseTimer);
+        const auto sample = [this, started](const char* event) {
+            const double elapsed =
+                std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
+            std::fprintf(stderr,
+                         "SESSION_MONITOR %s elapsed=%.3f streaming=%d pending=%d frames=%llu "
+                         "missed=%llu encode_lag=%llu\n",
+                         event, elapsed, streaming(), streamingPending(),
+                         static_cast<unsigned long long>(output_frames_),
+                         static_cast<unsigned long long>(output_missed_),
+                         static_cast<unsigned long long>(output_lag_));
+            std::fflush(stderr);
+        };
+        sample("begin");
+        connect(monitor, &QTimer::timeout, this, [sample] { sample("sample"); });
+        monitor->start(1000);
+        QTimer::singleShot(std::chrono::seconds(seconds), Qt::PreciseTimer, this,
+                           [this, monitor, sample] {
+                               monitor->stop();
+                               sample("stop_requested");
+                               if (streaming() || streamingPending())
+                                   stopStreaming();
+                               monitor->deleteLater();
+                           });
+        connect(this, &Preview::recordingChanged, this, [this, sample] {
+            if (!streaming() && !streamingPending())
+                sample("stopped");
+        });
+    });
+}
 
 Preview::~Preview() {
     if (!link_)
@@ -197,7 +238,37 @@ QVariantMap Preview::renderStats(const QString& canvasId) const {
              frame.fps_den ? static_cast<double>(frame.fps_num) / frame.fps_den : 0.0}};
 }
 
+QVariantList Preview::captureStats() const {
+    QVariantList result;
+    if (!rendererAttached()) return result;
+    for (const auto& state : capture_stats_) {
+        const auto* source = latest_.source(state.source);
+        if (!source) continue;
+        QString requested = QStringLiteral("Leave unchanged");
+        if (const auto it = source->settings.find("frameRate"); it != source->settings.end())
+            if (const auto* rate = std::get_if<std::string>(&it->second))
+                requested = QString::fromStdString(*rate);
+        if (requested == QStringLiteral("Leave unchanged"))
+            requested = QStringLiteral("Use current device mode");
+        result.push_back(QVariantMap{{"sourceId", QString::fromStdString(state.source.to_string())},
+            {"name", QString::fromStdString(source->name)}, {"requested", requested},
+            {"negotiated", state.negotiated / 1000.0}, {"received", state.received / 1000.0},
+            {"error", QString::fromStdString(state.error)}});
+    }
+    return result;
+}
+
+QVariantMap Preview::outputStats() const {
+    return {{"available", output_stats_available_},
+            {"frames", QVariant::fromValue<qulonglong>(output_frames_ - base_output_frames_)},
+            {"missed", QVariant::fromValue<qulonglong>(output_missed_ - base_output_missed_)},
+            {"lag", QVariant::fromValue<qulonglong>(output_lag_ - base_output_lag_)}};
+}
+
 void Preview::resetStats() {
+    base_output_frames_ = output_frames_;
+    base_output_missed_ = output_missed_;
+    base_output_lag_ = output_lag_;
     {
         std::lock_guard lock(state_->mu);
         render_baselines_.clear();
@@ -272,8 +343,8 @@ QString Preview::caption(const QString& canvasId) const {
 
 void Preview::setLive(bool live, ldoc::Fps rate) {
     program_live_ = live;
-    live = live || recording_ || !filter_target_.isEmpty();
-    if (recording_ && recording_rate_.valid() && (!rate.valid() || recording_rate_.hz() > rate.hz()))
+    live = live || recording_ || streaming_ || !filter_target_.isEmpty();
+    if ((recording_ || streaming_) && recording_rate_.valid() && (!rate.valid() || recording_rate_.hz() > rate.hz()))
         rate = recording_rate_;
     if (!live) {
         if (link_) link_->refresh_pending = false;
@@ -284,15 +355,31 @@ void Preview::setLive(bool live, ldoc::Fps rate) {
     if (live_ == nullptr) {
         live_ = new QTimer(this);
         live_->setTimerType(Qt::PreciseTimer);
-        QObject::connect(live_, &QTimer::timeout, this, [this] { tick(); });
+        live_->setSingleShot(true);
+        QObject::connect(live_, &QTimer::timeout, this, [this] {
+            tick();
+            const auto now = std::chrono::steady_clock::now();
+            live_deadline_ += live_period_;
+            if (live_deadline_ <= now)
+                live_deadline_ += live_period_ * ((now - live_deadline_) / live_period_ + 1);
+            schedule_tick();
+        });
     }
-    // Rounded to whole milliseconds because QTimer has nothing finer, which is a rounding of
-    // when a *preview* is asked to redraw and not of the rate itself: the canvas keeps the exact
-    // rational, and the encode path that cares about drift reads that rather than this timer.
-    const double hz = rate.valid() ? rate.hz() : 60.0;
-    const int interval = hz > 0.0 ? std::max(1, static_cast<int>(1000.0 / hz + 0.5)) : 16;
-    if (!live_->isActive() || live_->interval() != interval)
-        live_->start(interval);
+    // Absolute deadlines retain fractional milliseconds and never accumulate timer drift.
+    const auto period = std::chrono::nanoseconds(
+        rate.valid() ? std::max<std::int64_t>(1, 1000000000LL * rate.den / rate.num) : 16666667);
+    if (!live_->isActive() || live_period_ != period) {
+        live_period_ = period;
+        live_deadline_ = std::chrono::steady_clock::now() + period;
+        schedule_tick();
+    }
+}
+
+void Preview::schedule_tick() {
+    const auto delay = std::chrono::ceil<std::chrono::milliseconds>(
+        live_deadline_ - std::chrono::steady_clock::now()).count();
+    live_->start(static_cast<int>(std::clamp<std::int64_t>(
+        delay, 1, std::numeric_limits<int>::max())));
 }
 
 /// Republish the document we already have, so the renderer composites it against whatever its
@@ -541,6 +628,10 @@ void Preview::on_readable() {
             return;
         lcomp::PreviewEvent& got = **event;
         switch (got.kind) {
+        case lcomp::PreviewEvent::Kind::Capture:
+            capture_stats_ = std::move(got.capture);
+            emit changed();
+            break;
         case lcomp::PreviewEvent::Kind::Pcm:
             lose(QStringLiteral("Unexpected PCM on the UI channel."));
             return;
@@ -558,13 +649,31 @@ void Preview::on_readable() {
             // refuse, and a UI that latched its own button would claim a recording nobody has.
             if (!got.record.error.empty())
                 report(QString::fromStdString(got.record.error));
-            recording_pending_ = false;
-            const bool was_recording = recording_;
-            recording_ = got.record.running;
+            const bool state_changed = recording_ != got.record.recording ||
+                streaming_ != got.record.streaming ||
+                (recording_pending_ && got.record.control_reply);
+            if (got.record.frames < base_output_frames_ ||
+                got.record.missed < base_output_missed_ || got.record.encode_lag < base_output_lag_)
+                base_output_frames_ = base_output_missed_ = base_output_lag_ = 0;
+            output_stats_available_ = got.record.running || got.record.frames > 0;
+            output_frames_ = got.record.frames;
+            output_missed_ = got.record.missed;
+            output_lag_ = got.record.encode_lag;
+            if (got.record.control_reply) recording_pending_ = false;
+            const bool was_recording = recording_, was_streaming = streaming_;
+            recording_ = got.record.recording;
+            streaming_ = got.record.streaming;
             if (recording_ && !was_recording)
                 report(QStringLiteral("Recording to %1").arg(recording_path_));
+            if (streaming_ && !was_streaming)
+                report(QStringLiteral("Live: connected to the RTMP server."));
             if (!recording_ && was_recording && got.record.error.empty())
                 report(QStringLiteral("Recording saved to %1").arg(recording_path_));
+            if (!streaming_ && was_streaming && got.record.error.empty())
+                report(QStringLiteral("Stream stopped."));
+            emit changed();
+            if (!state_changed)
+                break;
             emit recordingChanged();
             setLive(program_live_, latest_.canvases.empty() ? ldoc::Fps{}
                                                           : latest_.canvases.front().fps);
@@ -667,19 +776,135 @@ void Preview::startRecording(const QString& encodeId, const QString& path) {
         report(QStringLiteral("A recording needs somewhere to write."));
         return;
     }
+    streaming_mode_ = false;
     recording_path_ = path;
     const auto id = ldoc::Id::parse(encodeId.toStdString());
     const auto* encode = id ? latest_.encode(*id) : nullptr;
+    recording_encode_ = id.value_or(ldoc::Id::nil());
     const auto* canvas = encode ? latest_.canvas(encode->canvas) : nullptr;
     recording_rate_ = canvas ? canvas->fps : ldoc::Fps{};
     send_record(encodeId, path, true);
 }
 
-void Preview::stopRecording(const QString& encodeId) {
-    send_record(encodeId, {}, false);
+void Preview::startStreaming(const QString& outputId) {
+    if (streaming_ || recording_pending_)
+        return;
+    const auto id = ldoc::Id::parse(outputId.toStdString());
+    const auto found =
+        std::ranges::find_if(latest_.outputs, [&](const auto& o) { return id && o.id == *id; });
+    if (found == latest_.outputs.end() || !found->enabled) {
+        report(QStringLiteral("Choose an armed RTMP destination in Encode."));
+        return;
+    }
+    const auto output = *found;
+    const auto* video = latest_.encode(output.encode);
+    const auto* canvas = video ? latest_.canvas(video->canvas) : nullptr;
+    const auto* audio = output.audio_encode ? latest_.audio_encode(*output.audio_encode) : nullptr;
+    const QString base = QString::fromStdString(output.destination.url);
+    const QUrl url(base, QUrl::StrictMode);
+    if (!canvas || !audio || !latest_.bus(audio->bus) || video->encoder.codec != "h264" ||
+        audio->codec != "aac" ||
+        (output.destination.kind != ldoc::DestinationKind::Rtmp &&
+         output.destination.kind != ldoc::DestinationKind::Rtmps) ||
+        !url.isValid() || url.scheme().toStdString() != ldoc::to_string(output.destination.kind) ||
+        url.host().isEmpty() || url.path().isEmpty() || url.hasFragment() ||
+        !url.userInfo().isEmpty() ||
+        std::ranges::any_of(base, [](QChar c) { return c.unicode() <= 32; })) {
+        report(
+            QStringLiteral("RTMP needs a valid server URL, H.264 video and connected AAC audio."));
+        return;
+    }
+    streaming_mode_ = true;
+    streaming_output_ = output.id; // Stream keys never become UI properties or notices.
+    recording_rate_ = canvas->fps;
+    const auto start = [this, output, base](const QString& key) {
+        QString address = base;
+        if (!key.isEmpty()) {
+            const auto query = address.indexOf('?');
+            const auto suffix = query < 0 ? QString{} : address.mid(query + 1);
+            if (query >= 0)
+                address.truncate(query);
+            if (!address.endsWith('/'))
+                address += '/';
+            address += key;
+            if (!suffix.isEmpty())
+                address += (key.contains('?') ? '&' : '?') + suffix;
+        }
+        send_record(QString::fromStdString(output.encode.to_string()), address, true, output.id);
+    };
+    if (output.destination.credential_ref.empty()) {
+        start({}); // Local ingest servers may accept an anonymous publish URL.
+        return;
+    }
+    const QString helper = QStandardPaths::findExecutable(QStringLiteral("secret-tool"));
+    if (helper.isEmpty()) {
+        report(QStringLiteral("Install secret-tool to read the saved stream key."));
+        return;
+    }
+    recording_pending_ = true;
+    emit recordingChanged();
+    auto* process = new QProcess(this);
+    key_lookup_ = process;
+    auto* timeout = new QTimer(process);
+    timeout->setSingleShot(true);
+    connect(timeout, &QTimer::timeout, process, [process] { process->kill(); });
+    connect(process, &QProcess::errorOccurred, this, [this, process](QProcess::ProcessError error) {
+        if (error == QProcess::FailedToStart) {
+            key_lookup_ = nullptr;
+            recording_pending_ = false;
+            emit recordingChanged();
+            report(QStringLiteral("Could not open the stream key store."));
+            process->deleteLater();
+        }
+    });
+    const auto project = latest_.id;
+    connect(
+        process, &QProcess::finished, this,
+        [this, process, timeout, start, project, output](int code, QProcess::ExitStatus status) {
+            timeout->stop();
+            key_lookup_ = nullptr;
+            recording_pending_ = false;
+            QByteArray secret = process->readAllStandardOutput();
+            if (secret.endsWith('\n'))
+                secret.chop(1);
+            const auto current = std::ranges::find(latest_.outputs, output.id, &ldoc::Output::id);
+            if (status != QProcess::NormalExit || code != 0 || secret.isEmpty() ||
+                secret.size() > 16384 ||
+                std::ranges::any_of(secret, [](unsigned char c) { return c <= 32 || c == 127; })) {
+                report(QStringLiteral("Could not read a valid stream key. Unlock the keyring or "
+                                      "save the key again."));
+            } else if (latest_.id != project || current == latest_.outputs.end() ||
+                       *current != output || !link_ || !link_->alive) {
+                report(QStringLiteral("Stream settings changed. Press Go Live again."));
+            } else {
+                start(QString::fromUtf8(secret));
+            }
+            secret.fill('\0');
+            emit recordingChanged();
+            process->deleteLater();
+        });
+    process->start(helper, {QStringLiteral("lookup"), QStringLiteral("application"),
+                            QStringLiteral("libertas-studio"), QStringLiteral("credential"),
+                            QString::fromStdString(output.destination.credential_ref)});
+    timeout->start(10000);
 }
 
-void Preview::send_record(const QString& encodeId, const QString& path, bool start) {
+void Preview::stopStreaming() {
+    if (streaming_ && !recording_pending_) {
+        streaming_mode_ = true;
+        send_record({}, {}, false, streaming_output_);
+    }
+}
+
+void Preview::stopRecording(const QString& encodeId) {
+    if (recording_pending_) return;
+    streaming_mode_ = false;
+    send_record(recording_encode_.is_nil() ? encodeId
+        : QString::fromStdString(recording_encode_.to_string()), {}, false);
+}
+
+void Preview::send_record(const QString& encodeId, const QString& path, bool start,
+                          const ldoc::Id& output) {
     if (!link_ || !link_->channel || !link_->alive) {
         report(QStringLiteral("The renderer is not running, so there is nothing to record."));
         return;
@@ -694,6 +919,7 @@ void Preview::send_record(const QString& encodeId, const QString& path, bool sta
     // Stop must still work after the recording node or its encoder has been removed.
     request.encode = id.value_or(ldoc::Id::nil());
     request.path = path.toStdString();
+    request.output = output;
     if (recording_pending_)
         return;
     // Start after the renderer has acknowledged the latest encoder and routing settings.
@@ -712,20 +938,29 @@ void Preview::send_record(const QString& encodeId, const QString& path, bool sta
 }
 
 void Preview::lose(const QString& why) {
+    capture_stats_.clear();
     // Already torn down. Hello can fail before `alive` is set, and that path still has a child
     // to reap, so "not alive" on its own is not "already gone".
     if (!link_)
         return;
     if (!link_->alive && link_->child <= 0 && !link_->channel)
         return;
+    if (key_lookup_) {
+        key_lookup_->disconnect(this);
+        key_lookup_->kill();
+        key_lookup_->deleteLater();
+        key_lookup_ = nullptr;
+    }
+    link_->record_request.reset();
     link_->alive = false;
     link_->in_flight = false;
     link_->have_pending = false;
     link_->dirty = false;
     // A renderer that died took the file with it. Saying otherwise would leave a Record
     // button latched over a recording that stopped some time ago.
-    if (recording_ || recording_pending_) {
+    if (recording_ || streaming_ || recording_pending_) {
         recording_ = false;
+        streaming_ = false;
         recording_pending_ = false;
         emit recordingChanged();
     }

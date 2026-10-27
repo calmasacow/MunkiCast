@@ -19,12 +19,14 @@
 #include <algorithm>
 #include <cerrno>
 #include <chrono>
-#include <fcntl.h>
-#include <sys/stat.h>
-#include <unistd.h>
 #include <cstring>
+#include <fcntl.h>
 #include <format>
 #include <lcore/log.hpp>
+#include <limits>
+#include <mutex>
+#include <sys/stat.h>
+#include <unistd.h>
 
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -57,6 +59,8 @@ struct Encoder {
 
     AVFormatContext* fmt = nullptr;
     int file_fd = -1;
+    bool network = false;
+    std::chrono::steady_clock::time_point deadline;
 
     AVCodecContext* vctx = nullptr;
     AVStream* vst = nullptr;
@@ -76,9 +80,43 @@ struct Encoder {
     /// start at different zeroes and the file plays with a fixed offset that looks like drift.
     std::int64_t t0_ns = AV_NOPTS_VALUE;
     bool header_written = false;
+    std::vector<EncoderPtr> outputs;
+    std::string output_error;
+    std::int64_t output_origin_ns = 0;
+    bool rebase_output = false;
+    bool force_keyframe = false;
 };
 
 namespace {
+
+bool network_path(const std::string& path) {
+    return path.starts_with("rtmp://") || path.starts_with("rtmps://");
+}
+
+// FFmpeg protocol diagnostics may contain the full publish URL, including the key.
+thread_local bool private_network_log = false;
+
+struct NetworkOperation {
+    bool previous = private_network_log;
+
+    explicit NetworkOperation(Encoder& enc) {
+        static std::once_flag logging;
+        std::call_once(logging, [] {
+            av_log_set_callback([](void* ctx, int level, const char* fmt, va_list args) {
+                if (!private_network_log)
+                    av_log_default_callback(ctx, level, fmt, args);
+            });
+        });
+        private_network_log = previous || enc.network;
+        enc.deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+    }
+
+    ~NetworkOperation() { private_network_log = previous; }
+};
+
+int network_interrupt(void* opaque) {
+    return std::chrono::steady_clock::now() >= static_cast<Encoder*>(opaque)->deadline;
+}
 
 int file_write(void* opaque, const std::uint8_t* data, int size) {
     const int fd = static_cast<Encoder*>(opaque)->file_fd;
@@ -110,8 +148,61 @@ std::string av_err(int e) {
     return b;
 }
 
+bool open_muxer(Encoder* enc, std::string& error) {
+    const auto& cfg = enc->cfg;
+    int r = 0;
+    AVDictionary* opts = nullptr;
+    if (enc->network) {
+        enc->fmt->flags |= AVFMT_FLAG_FLUSH_PACKETS;
+        enc->fmt->max_interleave_delta = 1'000'000;
+        enc->fmt->interrupt_callback = {network_interrupt, enc};
+        av_dict_set(&opts, "rw_timeout", "5000000", 0);
+        av_dict_set(&opts, "rtmp_live", "live", 0);
+        av_dict_set(&opts, "tls_verify", "1", 0);
+        if ((r = avio_open2(&enc->fmt->pb, cfg.path.c_str(), AVIO_FLAG_WRITE,
+                            &enc->fmt->interrupt_callback, &opts)) < 0) {
+            av_dict_free(&opts);
+            error = std::format("Could not connect to RTMP server: {}", av_err(r));
+            return false;
+        }
+        av_dict_free(&opts);
+        av_dict_set(&opts, "flvflags", "no_duration_filesize", 0);
+    } else {
+        // Create exclusively: neither an existing take nor a symlink may be overwritten.
+        enc->file_fd = ::open(cfg.path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0666);
+        if (enc->file_fd < 0) {
+            error = std::format("Cannot create recording '{}': {}", cfg.path, std::strerror(errno));
+            return false;
+        }
+        constexpr int buffer_size = 32768;
+        auto* buffer = static_cast<std::uint8_t*>(av_malloc(buffer_size));
+        if (!buffer) {
+            error = "cannot allocate the recording write buffer";
+            return false;
+        }
+        enc->fmt->pb =
+            avio_alloc_context(buffer, buffer_size, 1, enc, nullptr, file_write, file_seek);
+        if (!enc->fmt->pb) {
+            av_free(buffer);
+            error = "cannot allocate the recording file writer";
+            return false;
+        }
+        enc->fmt->flags |= AVFMT_FLAG_CUSTOM_IO;
+        // Fragmented containers remain playable after an interrupted recording.
+        av_dict_set(&opts, "movflags", "frag_keyframe+empty_moov+default_base_moof", 0);
+    }
+    if ((r = avformat_write_header(enc->fmt, &opts)) < 0) {
+        av_dict_free(&opts);
+        error = std::format("avformat_write_header: {}", av_err(r));
+        return false;
+    }
+    av_dict_free(&opts);
+    enc->header_written = true;
+    return true;
+}
+
 /// Drains packets from an encoder into the muxer.
-bool drain(Encoder& enc, AVCodecContext* ctx, AVStream* st, std::uint64_t& bytes,
+bool drain(Encoder& enc, AVCodecContext* ctx, AVStream*, std::uint64_t& bytes,
            std::string& error) {
     for (;;) {
         const int r = avcodec_receive_packet(ctx, enc.pkt);
@@ -121,15 +212,44 @@ bool drain(Encoder& enc, AVCodecContext* ctx, AVStream* st, std::uint64_t& bytes
             error = std::format("avcodec_receive_packet: {}", av_err(r));
             return false;
         }
-        enc.pkt->stream_index = st->index;
-        av_packet_rescale_ts(enc.pkt, ctx->time_base, st->time_base);
         bytes += static_cast<std::uint64_t>(enc.pkt->size);
-        int w = av_interleaved_write_frame(enc.fmt, enc.pkt);
-        if (w >= 0 && enc.fmt->pb && enc.fmt->pb->error < 0)
-            w = enc.fmt->pb->error;
+        const bool video = ctx == enc.vctx;
+        const auto write = [&](Encoder& output) {
+            if (!output.header_written) return;
+            NetworkOperation operation(output);
+            if (output.output_origin_ns == AV_NOPTS_VALUE) {
+                if (!video || !(enc.pkt->flags & AV_PKT_FLAG_KEY)) return;
+                output.output_origin_ns = av_rescale_q(enc.pkt->dts, ctx->time_base,
+                                                       AVRational{1, 1000000000});
+            }
+            const auto origin = av_rescale_q(output.output_origin_ns,
+                                             AVRational{1, 1000000000}, ctx->time_base);
+            if (output.rebase_output && enc.pkt->dts < origin) return;
+            AVPacket* packet = av_packet_clone(enc.pkt);
+            int result = AVERROR(ENOMEM);
+            if (packet) {
+                auto* stream = video ? output.vst : output.ast;
+                packet->pts -= origin;
+                packet->dts -= origin;
+                packet->stream_index = stream->index;
+                av_packet_rescale_ts(packet, ctx->time_base, stream->time_base);
+                result = av_interleaved_write_frame(output.fmt, packet);
+                if (result >= 0 && output.fmt->pb && output.fmt->pb->error < 0)
+                    result = output.fmt->pb->error;
+                av_packet_free(&packet);
+            }
+            if (result < 0) {
+                output.output_error = std::format("Output write failed: {}", av_err(result));
+                std::string ignored;
+                encoder_remove_output(output, 0, ignored);
+            }
+        };
+        write(enc);
+        for (auto& output : enc.outputs) if (output) write(*output);
         av_packet_unref(enc.pkt);
-        if (w < 0) {
-            error = std::format("av_interleaved_write_frame: {}", av_err(w));
+        if (!enc.header_written && std::ranges::none_of(enc.outputs,
+                [](const auto& output) { return output && output->header_written; })) {
+            error = enc.output_error.empty() ? "No output destinations remain" : enc.output_error;
             return false;
         }
     }
@@ -251,6 +371,8 @@ AVCodecContext* try_video(const char* name, const RuntimeConfig& cfg, AVFormatCo
 EncoderPtr encoder_open(const RuntimeConfig& cfg, std::string& error) {
     auto enc = EncoderPtr(new Encoder());
     enc->cfg = cfg;
+    enc->network = network_path(cfg.path);
+    NetworkOperation operation(*enc);
     if (cfg.path.find('\0') != std::string::npos) {
         error = "the recording path contains a null character";
         return nullptr;
@@ -260,9 +382,10 @@ EncoderPtr encoder_open(const RuntimeConfig& cfg, std::string& error) {
     if (enc->cfg.source_height == 0)
         enc->cfg.source_height = cfg.height;
 
-    int r = avformat_alloc_output_context2(&enc->fmt, nullptr, nullptr, cfg.path.c_str());
+    int r = avformat_alloc_output_context2(&enc->fmt, nullptr, enc->network ? "flv" : nullptr,
+                                           cfg.path.c_str());
     if (r < 0 || enc->fmt == nullptr) {
-        error = std::format("avformat_alloc_output_context2({}): {}", cfg.path, av_err(r));
+        error = std::format("avformat_alloc_output_context2: {}", av_err(r));
         return nullptr;
     }
 
@@ -322,22 +445,23 @@ EncoderPtr encoder_open(const RuntimeConfig& cfg, std::string& error) {
         return nullptr;
     }
 
-    enc->sws = sws_getContext(
-        static_cast<int>(enc->cfg.source_width), static_cast<int>(enc->cfg.source_height),
-        cfg.source_rgba ? AV_PIX_FMT_RGBA : AV_PIX_FMT_BGRA, static_cast<int>(cfg.width),
-        static_cast<int>(cfg.height), enc->vctx->pix_fmt,
-        cfg.rescale_filter == "lanczos"   ? SWS_LANCZOS
-        : cfg.rescale_filter == "bicubic" ? SWS_BICUBIC
-                                          : SWS_BILINEAR,
-        nullptr, nullptr, nullptr);
+    // The frame API selects optimized conversions and divides work between CPU threads.
+    // The legacy sws_scale path processes RGBA -> NV12 on one thread even for hardware encode.
+    enc->sws = sws_alloc_context();
     if (enc->sws == nullptr) {
-        error = "sws_getContext failed";
+        error = "sws_alloc_context failed";
         return nullptr;
     }
-    // ADR-0014 again: say which matrix and which range, do not accept a default that varies.
-    const int* tbl = sws_getCoefficients(SWS_CS_ITU709);
-    sws_setColorspaceDetails(enc->sws, tbl, 1 /* src is full-range RGB */, tbl,
-                             0 /* dst is limited-range YUV */, 0, 1 << 16, 1 << 16);
+    const int scale_flags = cfg.rescale_filter == "lanczos"   ? SWS_LANCZOS
+                            : cfg.rescale_filter == "bicubic" ? SWS_BICUBIC
+                                                              : SWS_BILINEAR;
+    if (av_opt_set_int(enc->sws, "threads", 0, 0) < 0 ||
+        av_opt_set_int(enc->sws, "sws_flags", scale_flags, 0) < 0) {
+        error = "cannot configure video color conversion";
+        return nullptr;
+    }
+    enc->vframe->color_primaries = enc->vctx->color_primaries;
+    enc->vframe->color_trc = enc->vctx->color_trc;
 
     // --- audio ---
     if (cfg.audio_channels > 0) {
@@ -400,42 +524,101 @@ EncoderPtr encoder_open(const RuntimeConfig& cfg, std::string& error) {
                  enc->actx->frame_size);
     }
 
-    // Create exclusively: neither an existing take nor a symlink may be overwritten.
-    enc->file_fd = ::open(cfg.path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0666);
-    if (enc->file_fd < 0) {
-        error = std::format("Cannot create recording '{}': {}", cfg.path, std::strerror(errno));
-        return nullptr;
-    }
-    constexpr int buffer_size = 32768;
-    auto* buffer = static_cast<std::uint8_t*>(av_malloc(buffer_size));
-    if (!buffer) {
-        error = "cannot allocate the recording write buffer";
-        return nullptr;
-    }
-    enc->fmt->pb = avio_alloc_context(buffer, buffer_size, 1, enc.get(), nullptr,
-                                      file_write, file_seek);
-    if (!enc->fmt->pb) {
-        av_free(buffer);
-        error = "cannot allocate the recording file writer";
-        return nullptr;
-    }
-    enc->fmt->flags |= AVFMT_FLAG_CUSTOM_IO;
-    // Always write a fragmented container, so an interrupted recording is still a valid file.
-    AVDictionary* opts = nullptr;
-    av_dict_set(&opts, "movflags", "frag_keyframe+empty_moov+default_base_moof", 0);
-    if ((r = avformat_write_header(enc->fmt, &opts)) < 0) {
-        av_dict_free(&opts);
-        error = std::format("avformat_write_header: {}", av_err(r));
-        return nullptr;
-    }
-    av_dict_free(&opts);
-    enc->header_written = true;
+    if (!open_muxer(enc.get(), error)) return nullptr;
     enc->pkt = av_packet_alloc();
     return enc;
 }
 
+std::optional<std::size_t> encoder_add_output(Encoder& enc, const std::string& path,
+                                               std::string& error) {
+    if (path.empty() || path.find('\0') != std::string::npos) {
+        error = "Invalid output path";
+        return std::nullopt;
+    }
+    auto output = EncoderPtr(new Encoder());
+    output->cfg = enc.cfg;
+    output->cfg.path = path;
+    output->network = network_path(path);
+    output->output_origin_ns = AV_NOPTS_VALUE;
+    output->rebase_output = true;
+    NetworkOperation operation(*output);
+    int result = avformat_alloc_output_context2(&output->fmt, nullptr,
+        output->network ? "flv" : nullptr, path.c_str());
+    if (result < 0 || !output->fmt) {
+        error = "Cannot create output container";
+        return std::nullopt;
+    }
+    const auto stream = [&](AVStream* source) -> AVStream* {
+        auto* copy = avformat_new_stream(output->fmt, nullptr);
+        if (!copy || avcodec_parameters_copy(copy->codecpar, source->codecpar) < 0) return nullptr;
+        copy->codecpar->codec_tag = 0;
+        copy->time_base = source->time_base;
+        copy->avg_frame_rate = source->avg_frame_rate;
+        copy->r_frame_rate = source->r_frame_rate;
+        return copy;
+    };
+    output->vst = stream(enc.vst);
+    if (enc.ast) output->ast = stream(enc.ast);
+    if (!output->vst || (enc.ast && !output->ast)) {
+        error = "Cannot copy output stream parameters";
+        return std::nullopt;
+    }
+    if (!open_muxer(output.get(), error)) return std::nullopt;
+    enc.outputs.push_back(std::move(output));
+    enc.force_keyframe = true;
+    return enc.outputs.size();
+}
+
+bool encoder_output_active(const Encoder& enc, std::size_t id) {
+    if (id == 0) return enc.header_written;
+    return id <= enc.outputs.size() && enc.outputs[id - 1] && enc.outputs[id - 1]->header_written;
+}
+
+std::string encoder_output_error(const Encoder& enc, std::size_t id) {
+    if (id == 0) return enc.output_error;
+    return id <= enc.outputs.size() && enc.outputs[id - 1]
+        ? enc.outputs[id - 1]->output_error : std::string{};
+}
+
+bool encoder_remove_output(Encoder& enc, std::size_t id, std::string& error) {
+    Encoder* output = id == 0 ? &enc :
+        id <= enc.outputs.size() ? enc.outputs[id - 1].get() : nullptr;
+    if (!output || !output->header_written) return true;
+    NetworkOperation operation(*output);
+    int result = av_write_trailer(output->fmt);
+    output->header_written = false;
+    if (output->fmt->pb) {
+        avio_flush(output->fmt->pb);
+        if (result >= 0 && output->fmt->pb->error < 0) result = output->fmt->pb->error;
+    }
+    if (result >= 0 && output->file_fd >= 0 && ::fsync(output->file_fd) < 0)
+        result = AVERROR(errno);
+    if (output->network) {
+        const int closed = avio_closep(&output->fmt->pb);
+        if (result >= 0) result = closed;
+    } else if (output->fmt->pb) {
+        av_freep(&output->fmt->pb->buffer);
+        avio_context_free(&output->fmt->pb);
+    }
+    if (output->file_fd >= 0) {
+        if (::close(output->file_fd) < 0 && result >= 0) result = AVERROR(errno);
+        output->file_fd = -1;
+    }
+    if (result < 0) {
+        error = std::format("Output did not close cleanly: {}", av_err(result));
+        return false;
+    }
+    return true;
+}
+
 bool encoder_video(Encoder& enc, const std::uint8_t* bgra, std::size_t stride, std::int64_t pts_ns,
                    std::string& error) {
+    if (!bgra || stride < static_cast<std::size_t>(enc.cfg.source_width) * 4 ||
+        stride > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
+        error = "invalid video frame stride or pixels";
+        return false;
+    }
+    NetworkOperation operation(enc);
     if (enc.t0_ns == AV_NOPTS_VALUE)
         enc.t0_ns = pts_ns;
 
@@ -447,10 +630,21 @@ bool encoder_video(Encoder& enc, const std::uint8_t* bgra, std::size_t stride, s
     // the result "encode+convert", so the colour conversion - the more expensive of the two - was
     // not in the number at all. A stage that is not measured must not appear in the label.
     const auto t_convert = std::chrono::steady_clock::now();
-    const std::uint8_t* src[4] = {bgra, nullptr, nullptr, nullptr};
-    const int src_stride[4] = {static_cast<int>(stride), 0, 0, 0};
-    sws_scale(enc.sws, src, src_stride, 0, static_cast<int>(enc.cfg.source_height),
-              enc.vframe->data, enc.vframe->linesize);
+    AVFrame source{};
+    source.format = enc.cfg.source_rgba ? AV_PIX_FMT_RGBA : AV_PIX_FMT_BGRA;
+    source.width = static_cast<int>(enc.cfg.source_width);
+    source.height = static_cast<int>(enc.cfg.source_height);
+    source.data[0] = const_cast<std::uint8_t*>(bgra);
+    source.linesize[0] = static_cast<int>(stride);
+    source.colorspace = AVCOL_SPC_BT709;
+    source.color_range = AVCOL_RANGE_JPEG;
+    source.color_primaries = enc.vframe->color_primaries;
+    source.color_trc = enc.vframe->color_trc;
+    const int converted = sws_scale_frame(enc.sws, enc.vframe, &source);
+    if (converted < 0) {
+        error = std::format("video color conversion: {}", av_err(converted));
+        return false;
+    }
     enc.stats.convert_ms.push_back(
         std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_convert)
             .count());
@@ -459,6 +653,8 @@ bool encoder_video(Encoder& enc, const std::uint8_t* bgra, std::size_t stride, s
         av_rescale_q(pts_ns - enc.t0_ns, AVRational{1, 1'000'000'000}, enc.vctx->time_base);
 
     const auto t_begin = std::chrono::steady_clock::now();
+    enc.vframe->pict_type = enc.force_keyframe ? AV_PICTURE_TYPE_I : AV_PICTURE_TYPE_NONE;
+    enc.force_keyframe = false;
     const int r = avcodec_send_frame(enc.vctx, enc.vframe);
     if (r < 0) {
         error = std::format("avcodec_send_frame (video): {}", av_err(r));
@@ -475,6 +671,7 @@ bool encoder_video(Encoder& enc, const std::uint8_t* bgra, std::size_t stride, s
 
 bool encoder_audio(Encoder& enc, const float* interleaved, std::uint32_t frames,
                    std::int64_t pts_ns, std::string& error) {
+    NetworkOperation operation(enc);
     if (enc.actx == nullptr)
         return true;
     if (enc.t0_ns == AV_NOPTS_VALUE)
@@ -527,6 +724,7 @@ bool encoder_audio(Encoder& enc, const float* interleaved, std::uint32_t frames,
 }
 
 bool encoder_finish(Encoder& enc, std::string& error) {
+    NetworkOperation operation(enc);
     if (enc.vctx != nullptr) {
         avcodec_send_frame(enc.vctx, nullptr);
         if (!drain(enc, enc.vctx, enc.vst, enc.stats.video_bytes, error))
@@ -537,23 +735,21 @@ bool encoder_finish(Encoder& enc, std::string& error) {
         if (!drain(enc, enc.actx, enc.ast, enc.stats.audio_bytes, error))
             return false;
     }
-    int r = av_write_trailer(enc.fmt);
-    enc.header_written = false;
-    avio_flush(enc.fmt->pb);
-    if (r >= 0 && enc.fmt->pb->error < 0)
-        r = enc.fmt->pb->error;
-    if (r >= 0 && enc.file_fd >= 0 && ::fsync(enc.file_fd) < 0)
-        r = AVERROR(errno);
-    if (r < 0) {
-        error = std::format("av_write_trailer: {}", av_err(r));
-        return false;
+    bool success = encoder_remove_output(enc, 0, error);
+    for (std::size_t i = 0; i < enc.outputs.size(); ++i) {
+        std::string output_error;
+        if (!encoder_remove_output(enc, i + 1, output_error)) {
+            if (!error.empty()) error += " ";
+            error += output_error;
+            success = false;
+        }
     }
-    enc.header_written = false;
-    return true;
+    return success;
 }
 
 bool encoder_video_nv12(Encoder& enc, const std::uint8_t* y, int y_stride, const std::uint8_t* uv,
                         int uv_stride, std::int64_t pts_ns, std::string& error) {
+    NetworkOperation operation(enc);
     if (enc.vctx->pix_fmt != AV_PIX_FMT_NV12) {
         error = "encoder was not opened with NV12; the GPU convert path cannot feed it";
         return false;
@@ -582,6 +778,8 @@ bool encoder_video_nv12(Encoder& enc, const std::uint8_t* y, int y_stride, const
         av_rescale_q(pts_ns - enc.t0_ns, AVRational{1, 1'000'000'000}, enc.vctx->time_base);
 
     const auto t_begin = std::chrono::steady_clock::now();
+    enc.vframe->pict_type = enc.force_keyframe ? AV_PICTURE_TYPE_I : AV_PICTURE_TYPE_NONE;
+    enc.force_keyframe = false;
     const int r = avcodec_send_frame(enc.vctx, enc.vframe);
     if (r < 0) {
         error = std::format("avcodec_send_frame (video): {}", av_err(r));
@@ -607,6 +805,7 @@ const EncoderStats& encoder_stats(Encoder& enc) {
 void encoder_close(Encoder* enc) {
     if (enc == nullptr)
         return;
+    NetworkOperation operation(*enc);
     if (enc->header_written)
         av_write_trailer(enc->fmt);
     if (enc->pkt != nullptr)
@@ -626,7 +825,9 @@ void encoder_close(Encoder* enc) {
     if (enc->actx != nullptr)
         avcodec_free_context(&enc->actx);
     if (enc->fmt != nullptr) {
-        if (enc->fmt->pb != nullptr) {
+        if (enc->network) {
+            avio_closep(&enc->fmt->pb);
+        } else if (enc->fmt->pb != nullptr) {
             av_freep(&enc->fmt->pb->buffer);
             avio_context_free(&enc->fmt->pb);
         }

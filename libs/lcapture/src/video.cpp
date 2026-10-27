@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: Libertas-Studio contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "lcapture/video.hpp"
+#include "video_signal.hpp"
 #include <lcore/log.hpp>
 #include <algorithm>
 #include <array>
@@ -12,6 +13,7 @@
 #include <filesystem>
 #include <fcntl.h>
 #include <linux/videodev2.h>
+#include <optional>
 #include <poll.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
@@ -37,6 +39,37 @@ bool capture_node(int fd, v4l2_capability& caps) {
     if (call(fd, VIDIOC_QUERYCAP, &caps) < 0) return false;
     auto flags = (caps.capabilities & V4L2_CAP_DEVICE_CAPS) ? caps.device_caps : caps.capabilities;
     return (flags & V4L2_CAP_VIDEO_CAPTURE) && (flags & V4L2_CAP_STREAMING);
+}
+std::expected<detail::SignalMode, std::string> read_signal(int fd, v4l2_dv_timings* detected = nullptr) {
+    v4l2_dv_timings timings{};
+    if (call(fd, VIDIOC_QUERY_DV_TIMINGS, &timings) < 0)
+        return std::unexpected("Incoming signal timing unavailable; select an explicit capture "
+                               "resolution and frame rate, or Use current device mode.");
+    if (detected) *detected = timings;
+    return detail::signal_mode(timings);
+}
+std::optional<v4l2_fract> matching_interval(int fd, std::uint32_t format, unsigned width,
+                                          unsigned height, const detail::SignalMode& signal) {
+    std::optional<v4l2_fract> best;
+    double closest = 1e9;
+    v4l2_frmivalenum candidate{};
+    candidate.pixel_format = format;
+    candidate.width = width;
+    candidate.height = height;
+    for (; candidate.index < 1024; ++candidate.index) {
+        if (call(fd, VIDIOC_ENUM_FRAMEINTERVALS, &candidate) < 0) {
+            if (candidate.index == 0) return v4l2_fract{signal.denominator, signal.numerator};
+            break;
+        }
+        if (candidate.type != V4L2_FRMIVAL_TYPE_DISCRETE)
+            return v4l2_fract{signal.denominator, signal.numerator};
+        const auto interval = candidate.discrete;
+        if (!detail::matches_signal_rate(signal, interval.denominator, interval.numerator)) continue;
+        const double distance = std::abs(static_cast<double>(interval.denominator) /
+                                         interval.numerator - signal.fps());
+        if (distance < closest) { closest = distance; best = interval; }
+    }
+    return best;
 }
 AVPixelFormat pixel_format(std::uint32_t fmt) {
     switch (fmt) {
@@ -119,6 +152,10 @@ struct VideoCapture::State {
     AVFrame* decoded = nullptr;
     AVPacket* packet = nullptr;
     VideoOptions options;
+    double negotiated_fps = 0;
+    std::optional<detail::SignalMode> signal;
+    bool match_resolution = false, match_rate = false;
+    std::chrono::steady_clock::time_point signal_checked{};
     std::string colour_range;
     VideoLayout raw = VideoLayout::Bgra;
     bool bt709 = false, full_range = false;
@@ -305,6 +342,19 @@ struct VideoCapture::State {
 
 VideoCapture::VideoCapture(std::unique_ptr<State> state) : state_(std::move(state)) {}
 VideoCapture::~VideoCapture() = default;
+double VideoCapture::negotiated_fps() const { return state_->negotiated_fps; }
+bool VideoCapture::signal_changed() {
+    if (!state_->signal) return false;
+    const auto now = std::chrono::steady_clock::now();
+    if (now - state_->signal_checked < std::chrono::seconds(1)) return false;
+    state_->signal_checked = now;
+    const auto signal = read_signal(state_->fd);
+    if (!signal) return false;
+    return (state_->match_resolution && (signal->width != state_->signal->width ||
+                                         signal->height != state_->signal->height)) ||
+        (state_->match_rate && std::abs(signal->fps() - state_->signal->fps()) >
+                                  state_->signal->fps() * 0.0001);
+}
 void VideoCapture::stop() {
     state_->stopping = true;
     if (state_->thread.joinable()) state_->thread.join();
@@ -329,6 +379,19 @@ std::unique_ptr<VideoCapture> VideoCapture::open(const std::string& path,
     if (state->fd < 0) return fail(std::strerror(errno));
     v4l2_capability caps{};
     if (!capture_node(state->fd, caps)) return fail("device is not a streaming video capture node");
+    state->match_resolution = resolution == "Match incoming signal";
+    state->match_rate = rate == "Match incoming signal";
+    if (state->match_resolution || state->match_rate) {
+        v4l2_dv_timings timings{};
+        auto signal = read_signal(state->fd, &timings);
+        if (!signal) return fail(signal.error());
+        if (call(state->fd, VIDIOC_S_DV_TIMINGS, &timings) < 0 && errno != ENOTTY)
+            return fail("Device could not apply the detected incoming signal timing.");
+        state->signal = *signal;
+        state->signal_checked = std::chrono::steady_clock::now();
+        lc::info("incoming video signal: {}x{} at {:.3f} fps on {}",
+                 signal->width, signal->height, signal->fps(), path);
+    }
     auto& fmt = state->format;
     fmt.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     if (call(state->fd, VIDIOC_G_FMT, &fmt) < 0) return fail(std::strerror(errno));
@@ -336,7 +399,11 @@ std::unique_ptr<VideoCapture> VideoCapture::open(const std::string& path,
     param.type = V4L2_BUF_TYPE_VIDEO_CAPTURE;
     if (call(state->fd, VIDIOC_G_PARM, &param) < 0) return fail(std::strerror(errno));
     int width = static_cast<int>(fmt.fmt.pix.width), height = static_cast<int>(fmt.fmt.pix.height);
-    if (!resolution.empty() && resolution != "Leave unchanged") {
+    if (state->match_resolution) {
+        width = state->signal->width;
+        height = state->signal->height;
+    } else if (!resolution.empty() && resolution != "Leave unchanged" &&
+               resolution != "Use current device mode") {
         const auto x = resolution.find('x');
         if (x == std::string::npos || !integer(std::string_view(resolution).substr(0, x), width) ||
             !integer(std::string_view(resolution).substr(x + 1), height)) return fail("invalid capture resolution");
@@ -363,11 +430,15 @@ std::unique_ptr<VideoCapture> VideoCapture::open(const std::string& path,
         fmt.fmt.pix.field = V4L2_FIELD_NONE;
         if (call(state->fd, VIDIOC_TRY_FMT, &fmt) == 0 && fmt.fmt.pix.pixelformat == code &&
             fmt.fmt.pix.width == static_cast<unsigned>(width) && fmt.fmt.pix.height == static_cast<unsigned>(height)) {
+            if (state->match_rate && !matching_interval(state->fd, code, fmt.fmt.pix.width,
+                                                        fmt.fmt.pix.height, *state->signal)) continue;
             found = true;
             break;
         }
     }
-    if (!found) return fail("video format is not supported at this resolution");
+    if (!found) return fail(state->match_rate
+        ? "No supported capture format matches the incoming signal rate at this resolution."
+        : "video format is not supported at this resolution");
     if (call(state->fd, VIDIOC_S_FMT, &fmt) < 0) return fail(std::strerror(errno));
     if (fmt.fmt.pix.width != static_cast<unsigned>(width) || fmt.fmt.pix.height != static_cast<unsigned>(height) ||
         !supported(fmt.fmt.pix.pixelformat) || (selected && fmt.fmt.pix.pixelformat != selected))
@@ -384,7 +455,12 @@ std::unique_ptr<VideoCapture> VideoCapture::open(const std::string& path,
     const std::size_t plane = static_cast<std::size_t>(f.bytesperline) * f.height;
     if (!compressed && ((planar && f.bytesperline % 2) || f.sizeimage < plane + (planar ? plane / 2 : 0)))
         return fail("invalid capture plane layout");
-    if (!rate.empty() && rate != "Leave unchanged") {
+    if (state->match_rate) {
+        const auto interval = matching_interval(state->fd, f.pixelformat, f.width, f.height,
+                                                *state->signal);
+        if (!interval) return fail("Device has no capture rate matching the incoming signal.");
+        param.parm.capture.timeperframe = *interval;
+    } else if (!rate.empty() && rate != "Leave unchanged" && rate != "Use current device mode") {
         int num = 0, den = 1;
         if (rate == "59.94") { num = 60000; den = 1001; }
         else if (rate == "29.97") { num = 30000; den = 1001; }
@@ -394,11 +470,15 @@ std::unique_ptr<VideoCapture> VideoCapture::open(const std::string& path,
     const auto requested = param.parm.capture.timeperframe;
     if (!requested.numerator || !requested.denominator) return fail("invalid capture frame rate");
     if (call(state->fd, VIDIOC_S_PARM, &param) < 0) return fail(std::strerror(errno));
+    if (call(state->fd, VIDIOC_G_PARM, &param) < 0) return fail(std::strerror(errno));
     const auto interval = param.parm.capture.timeperframe;
     if (!interval.numerator || !interval.denominator ||
-        static_cast<std::uint64_t>(interval.numerator) * requested.denominator !=
-        static_cast<std::uint64_t>(interval.denominator) * requested.numerator)
+        (state->match_rate ? !detail::matches_signal_rate(*state->signal, interval.denominator,
+                                                        interval.numerator) :
+         static_cast<std::uint64_t>(interval.numerator) * requested.denominator !=
+         static_cast<std::uint64_t>(interval.denominator) * requested.numerator))
         return fail("device does not support requested frame rate");
+    state->negotiated_fps = static_cast<double>(interval.denominator) / interval.numerator;
     const double timeout_seconds = static_cast<double>(options.timeout_frames) * interval.numerator / interval.denominator;
     if (timeout_seconds <= 0 || timeout_seconds > 3600) return fail("invalid capture timeout interval");
     state->timeout = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::duration<double>(timeout_seconds));

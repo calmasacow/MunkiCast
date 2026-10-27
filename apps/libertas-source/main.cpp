@@ -699,7 +699,7 @@ int main(int argc, char** argv) {
         try {
             auto result = lcomp::serve_preview(
                 lipc::Channel{lipc::Fd{fd}}, {}, {}, [&] { return content.dirty.exchange(false); },
-                [&](const ldoc::Project& project, const ldoc::Id&, std::uint32_t) {
+                [&](const ldoc::Project& project, const ldoc::Id&, std::uint32_t, lcomp::Picture*) {
                     lcomp::Picture frame;
                     std::string error;
                     QMetaObject::invokeMethod(

@@ -2,16 +2,18 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ltest.hpp"
 
-#include <cstdlib>
+#include <chrono>
 #include <csignal>
+#include <cstdlib>
+#include <filesystem>
 #include <fstream>
+#include <lencode/encoder.hpp>
 #include <sys/resource.h>
 #include <sys/wait.h>
 #include <unistd.h>
-#include <filesystem>
-#include <lencode/encoder.hpp>
 
 extern "C" {
+#include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 }
 
@@ -223,4 +225,148 @@ LTEST_CASE(recording_write_failures_are_reported_before_claiming_a_saved_file) {
     std::filesystem::remove(cfg.path);
 }
 
+LTEST_CASE(frame_conversion_preserves_bt709_range_rescale_and_rgba_bgra_stride) {
+    for (const bool rgba : {false, true}) {
+        auto cfg = configured("x264");
+        cfg.width = cfg.height = 32;
+        cfg.source_width = cfg.source_height = 64;
+        cfg.source_rgba = rgba;
+        cfg.video_options = {{"preset", "ultrafast"}, {"tune", "zerolatency"}, {"crf", "10"}};
+        cfg.custom_options.clear();
+        std::string error;
+        auto encoder = encoder_open(cfg, error);
+        REQUIRE_MSG(encoder, "{}", error);
+        constexpr std::size_t stride = 64 * 4 + 32;
+        std::vector<std::uint8_t> pixels(stride * 64, 0);
+        for (std::size_t y = 0; y < 64; ++y)
+            for (std::size_t x = 0; x < 64; ++x) {
+                const auto offset = y * stride + x * 4;
+                const int band = static_cast<int>(x / 16);
+                pixels[offset + (rgba ? 0 : 2)] = band == 0 ? 255 : band == 3 ? 128 : 0;
+                pixels[offset + 1] = band == 1 ? 255 : band == 3 ? 128 : 0;
+                pixels[offset + (rgba ? 2 : 0)] = band == 2 ? 255 : band == 3 ? 128 : 0;
+                pixels[offset + 3] = 255;
+            }
+        CHECK(!encoder_video(*encoder, nullptr, stride, 0, error));
+        CHECK(!encoder_video(*encoder, pixels.data(), 64 * 4 - 1, 0, error));
+        error.clear();
+        REQUIRE_MSG(encoder_video(*encoder, pixels.data(), stride, 0, error), "{}", error);
+        REQUIRE_MSG(encoder_finish(*encoder, error), "{}", error);
+        encoder.reset();
+
+        AVFormatContext* file = nullptr;
+        REQUIRE(avformat_open_input(&file, cfg.path.c_str(), nullptr, nullptr) >= 0);
+        REQUIRE(avformat_find_stream_info(file, nullptr) >= 0);
+        const int stream = av_find_best_stream(file, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+        REQUIRE(stream >= 0);
+        auto* decoder = avcodec_alloc_context3(avcodec_find_decoder(AV_CODEC_ID_H264));
+        REQUIRE(decoder);
+        REQUIRE(avcodec_parameters_to_context(decoder, file->streams[stream]->codecpar) >= 0);
+        REQUIRE(avcodec_open2(decoder, decoder->codec, nullptr) >= 0);
+        auto* packet = av_packet_alloc();
+        auto* frame = av_frame_alloc();
+        REQUIRE(packet && frame);
+        bool decoded = false;
+        while (av_read_frame(file, packet) >= 0) {
+            if (packet->stream_index == stream) {
+                REQUIRE(avcodec_send_packet(decoder, packet) >= 0);
+                decoded = avcodec_receive_frame(decoder, frame) >= 0;
+            }
+            av_packet_unref(packet);
+            if (decoded)
+                break;
+        }
+        REQUIRE(decoded);
+        CHECK_EQ(frame->width, 32);
+        CHECK_EQ(frame->height, 32);
+        CHECK_EQ(frame->colorspace, AVCOL_SPC_BT709);
+        CHECK_EQ(frame->color_range, AVCOL_RANGE_MPEG);
+        const int luma[] = {63, 173, 32, 126};
+        for (int band = 0; band < 4; ++band)
+            CHECK_NEAR(frame->data[0][16 * frame->linesize[0] + band * 8 + 4], luma[band], 3);
+        av_frame_free(&frame);
+        av_packet_free(&packet);
+        avcodec_free_context(&decoder);
+        avformat_close_input(&file);
+        std::filesystem::remove(cfg.path);
+    }
+}
+
+LTEST_CASE(shared_muxers_start_on_keyframes_stop_independently_and_encode_video_once) {
+    auto cfg = configured("x264");
+    const auto second = cfg.path + ".second.mkv";
+    std::string error;
+    auto encoder = encoder_open(cfg, error);
+    REQUIRE_MSG(encoder, "{}", error);
+    std::vector<std::uint8_t> pixels(256 * 256 * 4, 128);
+    std::optional<std::size_t> destination;
+    for (int i = 0; i < 150; ++i) {
+        if (i == 30) {
+            destination = encoder_add_output(*encoder, second, error);
+            REQUIRE_MSG(destination, "{}", error);
+            CHECK(encoder_output_active(*encoder, 0));
+            // Refusing an existing file must not disturb either active destination.
+            CHECK(!encoder_add_output(*encoder, cfg.path, error));
+            error.clear();
+            CHECK(encoder_output_active(*encoder, *destination));
+        }
+        if (i == 90) {
+            REQUIRE(encoder_remove_output(*encoder, 0, error));
+            CHECK(!encoder_output_active(*encoder, 0));
+            CHECK(encoder_output_active(*encoder, *destination));
+        }
+        REQUIRE_MSG(encoder_video(*encoder, pixels.data(), 256 * 4,
+            static_cast<std::int64_t>(i) * 1000000000 / 30, error), "{}", error);
+    }
+    CHECK_EQ(encoder_stats(*encoder).video_frames, 150u);
+    REQUIRE_MSG(encoder_finish(*encoder, error), "{}", error);
+    encoder.reset();
+    for (const auto& path : {cfg.path, second}) {
+        AVFormatContext* file = nullptr;
+        REQUIRE(avformat_open_input(&file, path.c_str(), nullptr, nullptr) >= 0);
+        REQUIRE(avformat_find_stream_info(file, nullptr) >= 0);
+        const int video = av_find_best_stream(file, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+        REQUIRE(video >= 0);
+        const auto* codec = avcodec_find_decoder(file->streams[video]->codecpar->codec_id);
+        auto* decoder = avcodec_alloc_context3(codec);
+        REQUIRE(decoder);
+        REQUIRE(avcodec_parameters_to_context(decoder, file->streams[video]->codecpar) >= 0);
+        REQUIRE(avcodec_open2(decoder, codec, nullptr) >= 0);
+        auto* packet = av_packet_alloc();
+        auto* frame = av_frame_alloc();
+        REQUIRE(packet && frame);
+        int packets = 0, decoded = 0;
+        while (av_read_frame(file, packet) >= 0) {
+            if (packet->stream_index == video) {
+                if (packets++ == 0) CHECK((packet->flags & AV_PKT_FLAG_KEY) != 0);
+                CHECK(packet->dts == AV_NOPTS_VALUE || packet->dts >= 0);
+                REQUIRE(avcodec_send_packet(decoder, packet) >= 0);
+                int result = 0;
+                while ((result = avcodec_receive_frame(decoder, frame)) >= 0) ++decoded;
+                CHECK(result == AVERROR(EAGAIN) || result == AVERROR_EOF);
+            }
+            av_packet_unref(packet);
+        }
+        CHECK(packets > 40);
+        CHECK(decoded > 45);
+        av_packet_free(&packet);
+        av_frame_free(&frame);
+        avcodec_free_context(&decoder);
+        avformat_close_input(&file);
+        std::filesystem::remove(path);
+    }
+}
+
 LTEST_MAIN("encoding options")
+
+LTEST_CASE(rtmp_connection_failure_is_reported_without_disclosing_the_publish_key) {
+    auto cfg = configured("x264");
+    cfg.path = "rtmp://127.0.0.1:1/live/private-test-key";
+    std::string error;
+    const auto began = std::chrono::steady_clock::now();
+    auto encoder = encoder_open(cfg, error);
+    CHECK(!encoder);
+    CHECK(error.contains("Could not connect to RTMP server"));
+    CHECK(!error.contains("private-test-key"));
+    CHECK(std::chrono::steady_clock::now() - began < std::chrono::seconds(7));
+}

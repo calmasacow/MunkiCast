@@ -43,6 +43,9 @@ class VideoCapture {
     ~VideoCapture();
     void start(Callback callback);
     void stop();
+    [[nodiscard]] double negotiated_fps() const;
+    /// Poll incoming timing at most once per second for automatic modes. Explicit modes stay fixed.
+    [[nodiscard]] bool signal_changed();
   private:
     struct State;
     explicit VideoCapture(std::unique_ptr<State> state);

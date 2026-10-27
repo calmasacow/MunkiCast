@@ -103,7 +103,7 @@ Item {
             Text {
                 width: parent.width
                 text: dialog.mode === "remove"
-                    ? qsTr('Move "%1" to Trash?\n%2\nRestore it from Trash if needed. A blank collection will open.').arg(Document.projectName).arg(Document.projectPath)
+                    ? qsTr('Move "%1" to Trash?\n%2\nRestore it from Trash if needed. Another collection will open, or a blank one if none remain.').arg(Document.projectName).arg(Document.projectPath)
                     : qsTr("Current collection is saved before switching. Existing export paths are never overwritten.")
                 wrapMode: Text.WrapAnywhere
                 color: Theme.c.textMuted

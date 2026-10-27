@@ -7,7 +7,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 A live streaming and recording studio for Linux, built clean-sheet. Omarchy (Arch + Hyprland) is the
 bedrock target; the rest of Linux follows, then macOS and Windows.
 
-**Status: pre-alpha.** Nothing streams yet, and the program canvas says so on its face.
+**Status: pre-alpha.** Basic H.264/AAC streaming to one RTMP/RTMPS destination and MKV recording are available.
 
 What exists is a workspace you can use and a document you can edit:
 
@@ -32,16 +32,37 @@ What exists is a workspace you can use and a document you can edit:
   NVML. The broadcast figures beside them read "—" rather than zero, because zero dropped frames
   is a claim about a running show.
 
-The program canvas shows a picture of what this build can draw — a colour, a group of those, a
-scene inside a scene made of those — published by `libertas-render`. Anything else is left
-undrawn and the caption says how many. Capture, encode and output do not exist yet; those live
-in `tools/` as measured spikes and have not been made product code. The panels that will drive
-them say so on their faces — the audio mixer draws no meters and the controls panel has no Go
-Live button — because a panel that looks finished while being incapable is a panel nobody can
-tell the truth about later. With no render process running, the program canvas still reads "no
-pipeline attached". See [`docs/adr/`](docs/adr/) — twenty-eight decisions, each recording what
-was measured and what was rejected. Two of them are proposed rather than built: the scene model
-the vertical workflow needs, and the rename that follows it.
+The program canvas is published by `libertas-render`, which also owns capture and encoding.
+With no render process running, the canvas reads "no pipeline attached".
+
+## Testing basic RTMP
+
+1. Open **Encode**. Connect a canvas to an H.264 video encoder, a Program bus to an AAC
+   audio encoder, and both encoders to a streaming destination. Choose x264 for software encoding
+   or NVENC when supported by the installed GPU and driver.
+2. Choose a destination type. Services provide their ingest servers; choose **RTMP** for a
+   custom server URL, for example `rtmp://server/live`.
+   Enter the stream key separately; leaving the field saves it to the keyring.
+   **Save key to keyring** also saves or retries a failed save. This requires `secret-tool`
+   (Arch: `libsecret`) and an unlocked Secret Service keyring. An empty key reference publishes
+   directly to the URL, useful for local servers without authentication.
+3. Arm exactly one streaming destination. **Go Live!** enables once its URL and routes are valid.
+   It shows **Connecting…** while opening, then **Stop Live** after the server accepts publishing.
+4. Check video and audio at the receiver. Click **Stop Live** to finish.
+
+Twitch and YouTube support account authorization; see [destination and OAuth setup](docs/connectors.md).
+
+Streaming and recording can run together when connected to the same video and audio encodes.
+The encode runs once; each destination starts and stops independently. Destination connection or
+write failures report an error while the other destination continues. Reconnect manually with
+**Go Live!**. RTMPS uses FFmpeg's installed TLS support. Separate concurrent encodes, multistreaming,
+replay buffering, automatic reconnect, and streaming after closing the app remain pending.
+
+New video capture sources default to **Match incoming signal** for resolution and frame rate.
+This requires the device to report its incoming timing. Studio selects a capture rate within
+0.5% of that signal and follows timing changes. If detection is unavailable, select an explicit
+mode; Studio reports the limitation rather than guessing. **Use current device mode** preserves
+the existing USB capture settings. Existing saved sources keep their selected modes.
 
 ## Why
 

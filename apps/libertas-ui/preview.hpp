@@ -3,12 +3,14 @@
 #pragma once
 
 #include "ldoc/document.hpp"
+#include "lcomp/preview.hpp"
 
 #include <QObject>
 #include <QString>
-#include <QVariantMap>
 #include <QTimer>
+#include <QVariantMap>
 #include <QtQml/qqmlregistration.h>
+#include <chrono>
 #include <filesystem>
 #include <map>
 #include <memory>
@@ -16,6 +18,7 @@
 #include <string_view>
 
 class QJSEngine;
+class QProcess;
 class QQmlEngine;
 
 namespace libertas::ui {
@@ -37,6 +40,8 @@ class Preview : public QObject {
     Q_PROPERTY(bool rendererAttached READ rendererAttached NOTIFY changed)
     /// Whether the renderer is writing a file right now. Reported by the renderer rather than
     /// assumed from the request: the encoder opens over there, and it can fail to.
+    Q_PROPERTY(bool streaming READ streaming NOTIFY recordingChanged)
+    Q_PROPERTY(bool streamingPending READ streamingPending NOTIFY recordingChanged)
     Q_PROPERTY(bool recording READ recording NOTIFY recordingChanged)
     Q_PROPERTY(bool recordingPending READ recordingPending NOTIFY recordingChanged)
     Q_PROPERTY(QString recordingPath READ recordingPath NOTIFY recordingChanged)
@@ -56,6 +61,8 @@ class Preview : public QObject {
     [[nodiscard]] bool rendererAttached() const;
     Q_INVOKABLE [[nodiscard]] QVariantMap renderStats(const QString& canvasId) const;
     Q_INVOKABLE void resetStats();
+    Q_INVOKABLE [[nodiscard]] QVariantMap outputStats() const;
+    Q_INVOKABLE [[nodiscard]] QVariantList captureStats() const;
     /// Stops the render process and starts a fresh one with the latest document, so settings
     /// read at its start (Edit > Preferences) take effect.
     void restart();
@@ -97,12 +104,20 @@ class Preview : public QObject {
     friend class ProgramImageProvider;
 
     [[nodiscard]] bool recording() const { return recording_; }
-    [[nodiscard]] bool recordingPending() const { return recording_pending_; }
+
+    [[nodiscard]] bool recordingPending() const { return recording_pending_ && !streaming_mode_; }
     [[nodiscard]] QString recordingPath() const { return recording_path_; }
-    /// Start writing `encodeId` to `path`, or stop whatever is being written. The answer
+    /// Start writing `encodeId` to `path`, or stop the recording destination. The answer
     /// arrives as `recordingChanged`, or as a notice when the encoder would not open.
     Q_INVOKABLE void startRecording(const QString& encodeId, const QString& path);
     Q_INVOKABLE void stopRecording(const QString& encodeId);
+
+    [[nodiscard]] bool streaming() const { return streaming_; }
+
+    [[nodiscard]] bool streamingPending() const { return recording_pending_ && streaming_mode_; }
+
+    Q_INVOKABLE void startStreaming(const QString& outputId);
+    Q_INVOKABLE void stopStreaming();
 
   signals:
     void changed();
@@ -116,6 +131,7 @@ class Preview : public QObject {
 
     void start();
     void tick();
+    void schedule_tick();
     void try_send();
     void update_size();
     void on_readable();
@@ -123,7 +139,8 @@ class Preview : public QObject {
     void lose(const QString& why);
     void reap(bool patient);
     void report(const QString& text);
-    void send_record(const QString& encodeId, const QString& path, bool start);
+    void send_record(const QString& encodeId, const QString& path, bool start,
+                     const ldoc::Id& output = ldoc::Id::nil());
     [[nodiscard]] QString resolve(const QString& canvasId) const;
 
     std::filesystem::path renderer_;
@@ -131,7 +148,17 @@ class Preview : public QObject {
     QString first_canvas_;
     std::unique_ptr<Link> link_;
     QTimer* live_ = nullptr;
+    std::chrono::nanoseconds live_period_{};
+    std::chrono::steady_clock::time_point live_deadline_{};
+    bool output_stats_available_ = false;
+    std::uint64_t output_frames_ = 0, output_missed_ = 0, output_lag_ = 0;
+    std::uint64_t base_output_frames_ = 0, base_output_missed_ = 0, base_output_lag_ = 0;
     bool program_live_ = false;
+    QProcess* key_lookup_ = nullptr;
+    bool streaming_mode_ = false; // Identifies the pending control operation.
+    bool streaming_ = false;
+    ldoc::Id streaming_output_ = ldoc::Id::nil();
+    ldoc::Id recording_encode_ = ldoc::Id::nil();
     bool recording_ = false;
     bool recording_pending_ = false;
     QString recording_path_;
@@ -148,6 +175,7 @@ class Preview : public QObject {
     struct RenderBaseline { std::uint64_t ns = 0, frames = 0, missed = 0; };
     std::map<QString, RenderBaseline> render_baselines_;
     std::map<QString, QVariantMap> audio_levels_;
+    std::vector<lcomp::CaptureState> capture_stats_;
 };
 
 } // namespace libertas::ui

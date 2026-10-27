@@ -16,7 +16,9 @@ Duplicate/native import/export create fresh directories, regenerate project file
 files without copying locks, journals or recovery state. Existing destinations are refused.
 External absolute asset references remain external; native copies retain relative companion files.
 Remove requires a dialog naming the directory and moves it to desktop Trash. Failed trash leaves
-the collection open. A fresh default collection replaces the removed one.
+the collection open. Open a remaining readable collection after removal, or a fresh default
+collection if none remain. Reusing an existing collection avoids saving an Untitled replacement
+when the user switches again.
 
 Import and export use the desktop file-chooser portal. Native imports copy a chosen collection;
 OBS imports ask for canvas dimensions and rational FPS because these belong to OBS profiles.

@@ -28,7 +28,8 @@ Item {
 
     signal committed(string newValue)
     signal browseRequested
-    function clear() { input.clear(); }
+    signal editingFinished
+    function clear() { input.clear(); input.dirty = false; }
 
     implicitHeight: 20
 
@@ -131,13 +132,28 @@ Item {
             // path is replaced the moment anything else in the document changes.
             text: activeFocus ? text : field.value
 
-            onEditingFinished: {
-                if (text !== field.value)
-                    field.committed(text);
+            property bool dirty: false
+            property string draft: ""
+            function finishEdit() {
+                if (!dirty) return;
+                const value = draft;
+                dirty = false;
+                if (value !== field.value) field.committed(value);
+                field.editingFinished();
             }
-            onTextEdited: if (field.commitOnEdit) field.committed(text)
+            onEditingFinished: finishEdit()
+            onTextChanged: {
+                if (activeFocus) { draft = text; dirty = true; }
+            }
+            onActiveFocusChanged: if (!activeFocus) finishEdit()
+            onTextEdited: {
+                draft = text;
+                dirty = true;
+                if (field.commitOnEdit) field.committed(text);
+            }
             Keys.onEscapePressed: {
                 text = field.value;
+                dirty = false;
                 focus = false;
             }
         }

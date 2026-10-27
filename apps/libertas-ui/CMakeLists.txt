@@ -12,11 +12,13 @@
 # desktop portal's OpenFile, and this machine's portal config sends that to Omanta. Qt's own
 # dialog is not used. Widgets is here for QColorDialog, which the colour field opens. That
 # dialog already has the picker and the custom-colour slots, so they are not rebuilt here.
-find_package(Qt6 6.5 REQUIRED COMPONENTS Core DBus Gui Qml Quick QuickControls2 QuickShapes Widgets WebEngineQuick)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Core DBus Gui Network Qml Quick QuickControls2 QuickShapes Widgets WebEngineQuick)
 
 qt_standard_project_setup(REQUIRES 6.5)
 
 qt_add_executable(libertas-ui
+    connectors.cpp
+    connectors.hpp
     assetcache.cpp
     assetcache.hpp
     countdowns.cpp
@@ -138,6 +140,7 @@ target_link_libraries(libertas-ui PRIVATE
     libertas::limport
     libertas::lsession
     libertas::ltheme
+    Qt6::Network
     Qt6::DBus
     Qt6::Gui
     Qt6::Quick
@@ -198,3 +201,5 @@ if(LIBERTAS_BUILD_TESTS)
         LABELS "needs-qt-threads"
     )
 endif()
+
+qt_add_resources(libertas-ui connector_catalog PREFIX "/connectors" FILES data/obs-services.json)

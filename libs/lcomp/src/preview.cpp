@@ -41,6 +41,7 @@ enum class Kind : std::uint8_t {
     Pcm = 10,
     Record = 11,
     RecordState = 12,
+    Capture = 13,
 };
 
 constexpr std::size_t kMaxDocument = 32u * 1024u * 1024u;
@@ -335,11 +336,13 @@ std::expected<void, std::string> PreviewLink::send_record(const RecordRequest& r
     if (request.start && request.encode.is_nil())
         return std::unexpected(std::string{"a recording needs an encode"});
     // A path long enough to be a problem is a bug on the way in, not something to truncate.
-    if (request.path.size() > 4096)
+    if (request.path.size() > 32768)
         return std::unexpected(std::string{"that path is too long to record to"});
     std::vector<std::byte> payload{static_cast<std::byte>(Kind::Record)};
     payload.push_back(static_cast<std::byte>(request.start ? 1 : 0));
     for (char c : request.encode.to_string())
+        payload.push_back(static_cast<std::byte>(c));
+    for (char c : request.output.to_string())
         payload.push_back(static_cast<std::byte>(c));
     for (char c : request.path)
         payload.push_back(static_cast<std::byte>(c));
@@ -405,13 +408,23 @@ std::expected<PreviewEvent, std::string> PreviewLink::decode(lipc::Message messa
         return event;
     }
     if (kind == Kind::RecordState) {
-        if (payload.size() < 2)
+        if (payload.size() < 27)
             return std::unexpected(std::string{"a recording state was cut short"});
         PreviewEvent event;
         event.kind = PreviewEvent::Kind::Record;
         event.record.running = std::to_integer<unsigned>(payload[1]) != 0;
-        event.record.error.assign(reinterpret_cast<const char*>(payload.data() + 2),
-                                  payload.size() - 2);
+        std::size_t at = 2;
+        if (!take_u64(payload, at, event.record.frames) ||
+            !take_u64(payload, at, event.record.missed) ||
+            !take_u64(payload, at, event.record.encode_lag))
+            return std::unexpected(std::string{"recording counters were cut short"});
+        const auto flags = std::to_integer<unsigned>(payload[at++]);
+        if (flags > 7) return std::unexpected(std::string{"invalid output state flags"});
+        event.record.recording = (flags & 1) != 0;
+        event.record.streaming = (flags & 2) != 0;
+        event.record.control_reply = (flags & 4) != 0;
+        event.record.error.assign(reinterpret_cast<const char*>(payload.data() + at),
+                                  payload.size() - at);
         return event;
     }
     if (kind == Kind::Pcm) {
@@ -429,6 +442,33 @@ std::expected<PreviewEvent, std::string> PreviewLink::decode(lipc::Message messa
             if (!std::isfinite(sample)) return std::unexpected(std::string{"non-finite PCM"});
             event.pcm.samples.push_back(sample);
         }
+        return event;
+    }
+    if (kind == Kind::Capture) {
+        PreviewEvent event;
+        event.kind = PreviewEvent::Kind::Capture;
+        std::size_t at = 1;
+        std::uint32_t count = 0;
+        if (!take_u32(payload, at, count) || count > 1024)
+            return std::unexpected(std::string{"invalid capture count"});
+        for (std::uint32_t i = 0; i < count; ++i) {
+            if (payload.size() - at < 26)
+                return std::unexpected(std::string{"truncated capture source"});
+            auto id = ldoc::Id::parse(std::string_view(
+                reinterpret_cast<const char*>(payload.data() + at), 26));
+            at += 26;
+            CaptureState state;
+            std::uint16_t length = 0;
+            if (!id || !take_u32(payload, at, state.negotiated) ||
+                !take_u32(payload, at, state.received) || !take_u16(payload, at, length) ||
+                length > 1024 || payload.size() - at < length)
+                return std::unexpected(std::string{"invalid capture state"});
+            state.source = *id;
+            state.error.assign(reinterpret_cast<const char*>(payload.data() + at), length);
+            at += length;
+            event.capture.push_back(std::move(state));
+        }
+        if (at != payload.size()) return std::unexpected(std::string{"trailing capture data"});
         return event;
     }
     if (kind == Kind::Audio) {
@@ -568,245 +608,388 @@ std::expected<PreviewEvent, std::string> PreviewLink::decode(lipc::Message messa
 std::expected<void, std::string> serve_preview(lipc::Channel channel, FrameSource frames,
                                                FramesDone done, FramesFresh fresh,
                                                CanvasRenderer render, AudioMeters audio,
-                                               AudioPcm pcm, RecordHooks record) {
-    // Set whenever a project or scene message lands, so the first commit after an edit always
-    // composites even if no screen has redrawn since.
-    bool document_changed = true;
-    std::uint32_t previous_edge = 0;
-    std::vector<std::byte> hello;
-    hello.push_back(static_cast<std::byte>(Kind::Hello));
+                                               AudioPcm pcm, RecordHooks record,
+                                               std::function<std::vector<CaptureState>()> capture) {
+    std::vector<std::byte> hello{static_cast<std::byte>(Kind::Hello)};
     append_u16(hello, kPreviewProtocol);
     if (auto sent = channel.send(hello); !sent)
         return sent;
 
     Assembly assembly;
+    std::optional<ldoc::Project> project;
+    bool assembling = false, document_changed = true, preview_pending = false;
+    std::uint32_t preview_edge = 0;
+    std::optional<std::chrono::nanoseconds> output_period;
+    std::chrono::steady_clock::time_point next_output;
+    std::optional<RecordState> latest_record;
     std::vector<std::pair<ldoc::Id, Slot>> slots;
+
     struct RenderStats {
         std::uint64_t ns = 0, frames = 0, missed = 0;
     };
+
     std::vector<std::pair<ldoc::Id, RenderStats>> stats;
+    const bool trace_output = std::getenv("LIBERTAS_TRACE_OUTPUT") != nullptr;
+    double cycle_ms = 0, prepare_ms = 0, render_ms = 0, encode_ms = 0, publish_ms = 0;
+    auto cycle_finished = std::chrono::steady_clock::now();
 
-    for (;;) {
-        auto ready = channel.wait(-1);
-        if (!ready)
-            return std::unexpected(ready.error());
-        for (;;) {
-            auto message = channel.receive();
-            if (!message) {
-                if (message.error() == lipc::Empty::PeerGone)
-                    return {};
-                break;
+    const auto send_record_state = [&](const RecordState& state) {
+        std::vector<std::byte> reply{static_cast<std::byte>(Kind::RecordState),
+                                     static_cast<std::byte>(state.running ? 1 : 0)};
+        append_u64(reply, state.frames);
+        append_u64(reply, state.missed);
+        append_u64(reply, state.encode_lag);
+        reply.push_back(static_cast<std::byte>((state.recording ? 1 : 0) |
+            (state.streaming ? 2 : 0) | (state.control_reply ? 4 : 0)));
+        for (char c : state.error)
+            reply.push_back(static_cast<std::byte>(c));
+        return channel.send(reply);
+    };
+
+    const auto render_cycle =
+        [&](bool publish,
+            std::chrono::steady_clock::time_point frame_time) -> std::expected<void, std::string> {
+        const auto cycle_started = std::chrono::steady_clock::now();
+        render_ms = encode_ms = publish_ms = 0;
+        if (publish && pcm) {
+            const auto block = pcm();
+            if (!block.samples.empty()) {
+                if (block.samples.size() > 9600 || block.samples.size() % 2)
+                    return std::unexpected(std::string{"invalid outgoing PCM block"});
+                std::vector<std::byte> packet{static_cast<std::byte>(Kind::Pcm)};
+                for (char c : block.source.to_string())
+                    packet.push_back(static_cast<std::byte>(c));
+                for (float sample : block.samples)
+                    append_u32(packet,
+                               std::bit_cast<std::uint32_t>(std::isfinite(sample) ? sample : 0));
+                if (auto sent = channel.send(packet); !sent)
+                    return sent;
             }
+        }
+        if (publish && capture) {
+            const auto states = capture();
+            if (states.size() > 1024)
+                return std::unexpected(std::string{"too many capture sources"});
+            std::vector<std::byte> packet{static_cast<std::byte>(Kind::Capture)};
+            append_u32(packet, static_cast<std::uint32_t>(states.size()));
+            for (const auto& state : states) {
+                for (char c : state.source.to_string()) packet.push_back(static_cast<std::byte>(c));
+                append_u32(packet, state.negotiated);
+                append_u32(packet, state.received);
+                const auto error = state.error.substr(0, 1024);
+                append_u16(packet, static_cast<std::uint16_t>(error.size()));
+                for (char c : error) packet.push_back(static_cast<std::byte>(c));
+            }
+            if (auto sent = channel.send(packet); !sent) return sent;
+        }
+        if (audio) {
+            const auto levels = audio(*project);
+            if (publish) {
+                if (levels.size() > 1024)
+                    return std::unexpected(std::string{"too many audio meters"});
+                std::vector<std::byte> meters{static_cast<std::byte>(Kind::Audio)};
+                append_u32(meters, static_cast<std::uint32_t>(levels.size()));
+                for (const auto& level : levels) {
+                    const auto id = level.node.to_string();
+                    for (char c : id)
+                        meters.push_back(static_cast<std::byte>(c));
+                    for (float peak : {level.left, level.right})
+                        append_u32(meters, std::isfinite(peak)
+                                               ? static_cast<std::uint32_t>(
+                                                     std::clamp(peak, 0.0f, 1.0f) * 1000000.0f)
+                                               : 0);
+                    meters.push_back(static_cast<std::byte>(level.available));
+                }
+                if (auto sent = channel.send(meters); !sent)
+                    return sent;
+            }
+        }
 
-            const std::span<const std::byte> payload = message->payload;
-            if (payload.empty())
-                continue;
-            const auto kind = static_cast<Kind>(std::to_integer<unsigned>(payload[0]));
-            if (kind == Kind::Quit)
-                return {};
-
-            const auto send_record_state = [&](const RecordState& state) {
-                std::vector<std::byte> reply{static_cast<std::byte>(Kind::RecordState),
-                                            static_cast<std::byte>(state.running ? 1 : 0)};
-                for (char c : state.error)
-                    reply.push_back(static_cast<std::byte>(c));
-                return channel.send(reply);
-            };
-
-            if (kind == Kind::Record) {
-                RecordState state;
-                if (payload.size() < 28) {
-                    state.error = "a recording message was cut short";
-                } else if (!record.control) {
-                    // Said rather than ignored: a client that asked to record and heard
-                    // nothing would sit there believing it was recording.
-                    state.error = "this renderer cannot record";
-                } else if (!assembly.project || !assembly.error.empty()) {
-                    state.error = assembly.error.empty()
-                                      ? "a recording was asked for before the project arrived"
-                                      : assembly.error;
-                } else {
-                    const auto id = ldoc::Id::parse(std::string_view(
-                        reinterpret_cast<const char*>(payload.data() + 2), 26));
-                    if (!id) {
-                        state.error = "that is not an encode id";
-                    } else {
-                        RecordRequest request;
-                        request.start = std::to_integer<unsigned>(payload[1]) != 0;
-                        request.encode = *id;
-                        request.path.assign(reinterpret_cast<const char*>(payload.data() + 28),
-                                            payload.size() - 28);
-                        state = record.control(request, *assembly.project);
+        // A commit with no document change behind it and no new captured frame would
+        // composite to exactly the picture already on screen. The UI republishes at the
+        // canvas rate, which is faster than a 30 Hz screen produces, so skipping here is
+        // what stops a full scale and blit per duplicate. A document change always draws:
+        // the project may have moved something even if no frame arrived.
+        //
+        // A recording is the exception: a file whose frames stop arriving when the
+        // picture holds still is a file that plays back at the wrong speed.
+        const bool recording =
+            record.wants &&
+            std::ranges::any_of(project->canvases,
+                                [&record](const ldoc::Canvas& c) { return record.wants(c.id); });
+        if (!recording && !document_changed && fresh && !fresh()) {
+            return publish ? send_ack(channel) : std::expected<void, std::string>{};
+        }
+        document_changed = false;
+        prepare_ms = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - cycle_started).count();
+        for (const ldoc::Canvas& canvas : project->canvases) {
+            const auto started = std::chrono::steady_clock::now();
+            const bool wants_output = record.wants && record.frame && record.wants(canvas.id);
+            const auto edge = !publish && wants_output ? 0u : preview_edge;
+            Picture full;
+            Picture* full_output = wants_output && edge != 0 ? &full : nullptr;
+            Picture picture;
+            if (render) {
+                picture = render(*project, canvas.id, edge, full_output);
+            } else {
+                picture = composite_canvas(*project, canvas.id, frames);
+                if (full_output)
+                    *full_output = picture;
+                picture = preview_size(std::move(picture), edge);
+            }
+            const auto completed = std::chrono::steady_clock::now();
+            render_ms += std::chrono::duration<double, std::milli>(completed - started).count();
+            auto found = std::find_if(stats.begin(), stats.end(),
+                                      [&](const auto& item) { return item.first == canvas.id; });
+            if (found == stats.end()) {
+                stats.push_back({canvas.id, RenderStats{}});
+                found = std::prev(stats.end());
+            }
+            auto& total = found->second;
+            const auto elapsed = static_cast<std::uint64_t>(
+                std::chrono::duration_cast<std::chrono::nanoseconds>(completed - started).count());
+            total.ns += elapsed;
+            if (canvas.fps.valid() && elapsed > 0) {
+                const auto budgets = std::ceil(static_cast<long double>(elapsed) * canvas.fps.num /
+                                               (1000000000.0L * canvas.fps.den));
+                total.missed += static_cast<std::uint64_t>(budgets) - 1;
+            }
+            ++total.frames;
+            if (std::getenv("LIBERTAS_BENCHMARK") && total.frames % 120 == 0)
+                std::fprintf(stderr, "render %s: %.3f ms average, %llu frames, %llu missed\n",
+                             canvas.name.c_str(),
+                             static_cast<double>(total.ns) / static_cast<double>(total.frames) /
+                                 1e6,
+                             static_cast<unsigned long long>(total.frames),
+                             static_cast<unsigned long long>(total.missed));
+            picture.render_ns = total.ns;
+            picture.rendered_frames = total.frames;
+            picture.render_lag_frames = total.missed;
+            picture.fps_num = canvas.fps.valid() ? static_cast<std::uint32_t>(canvas.fps.num) : 0;
+            picture.fps_den = canvas.fps.valid() ? static_cast<std::uint32_t>(canvas.fps.den) : 0;
+            if (wants_output) {
+                const auto encode_started = std::chrono::steady_clock::now();
+                if (const auto state =
+                        record.frame(canvas.id, full_output ? full : picture, frame_time)) {
+                    latest_record = *state;
+                    if (!state->running) {
+                        output_period.reset();
+                        if (!publish) {
+                            if (auto sent = send_record_state(*state); !sent)
+                                return sent;
+                            latest_record.reset();
+                        }
                     }
                 }
-                if (auto sent = send_record_state(state); !sent)
+                encode_ms += std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - encode_started).count();
+            }
+            const auto publish_started = std::chrono::steady_clock::now();
+            if (publish)
+                if (auto sent = send_frame(channel, canvas.id, picture, slots); !sent)
                     return sent;
-                continue;
+            publish_ms += std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - publish_started).count();
+        }
+        if (done)
+            done();
+        cycle_finished = std::chrono::steady_clock::now();
+        cycle_ms = std::chrono::duration<double, std::milli>(cycle_finished - cycle_started).count();
+        if (publish) {
+            if (latest_record) {
+                if (auto sent = send_record_state(*latest_record); !sent)
+                    return sent;
+                latest_record.reset();
             }
+            return send_ack(channel);
+        }
+        return {};
+    };
 
-            if (kind == Kind::Project || kind == Kind::Scene) {
-                std::size_t at = 1;
-                std::uint32_t length = 0;
-                if (!take_u32(payload, at, length)) {
-                    assembly.error = "a document message was cut short";
-                    continue;
-                }
-                const lipc::Fd* fd = only_fd(*message);
-                if (fd == nullptr) {
-                    assembly.error = "a document message arrived without its buffer";
-                    continue;
-                }
-                auto text = read_memfd(*fd, length);
-                if (!text) {
-                    assembly.error = text.error();
-                    continue;
-                }
-                document_changed = true;
-                if (kind == Kind::Project) {
-                    assembly.reset();
-                    auto parsed = ldoc::project_from_json(*text);
-                    if (!parsed)
-                        assembly.error = parsed.error();
-                    else
-                        assembly.project = std::move(parsed->project);
-                } else if (assembly.project && assembly.error.empty()) {
-                    auto parsed = ldoc::scene_from_json(*text);
-                    if (!parsed)
-                        assembly.error = parsed.error();
-                    else
-                        assembly.project->scenes.push_back(std::move(parsed->scene));
-                }
-                continue;
+    for (;;) {
+        const auto now = std::chrono::steady_clock::now();
+        if ((output_period && now >= next_output) || (!output_period && preview_pending)) {
+            auto frame_time = now;
+            if (output_period) {
+                const auto skipped = (now - next_output) / *output_period;
+                if (trace_output && skipped > 0)
+                    std::fprintf(stderr,
+                        "OUTPUT_DEADLINE missed=%lld cycle_ms=%.3f prepare_ms=%.3f "
+                        "render_ms=%.3f encode_ms=%.3f publish_ms=%.3f outside_cycle_ms=%.3f\n",
+                        static_cast<long long>(skipped), cycle_ms, prepare_ms, render_ms,
+                        encode_ms, publish_ms,
+                        std::chrono::duration<double, std::milli>(now - cycle_finished).count());
+                // Stamp the selected output slot, not poll/OS wake-up jitter within that slot.
+                next_output += *output_period * ((now - next_output) / *output_period);
+                frame_time = next_output;
+                next_output += *output_period;
             }
+            const bool publish = std::exchange(preview_pending, false);
+            if (auto result = render_cycle(publish, frame_time); !result)
+                return result;
+        }
 
-            if (kind != Kind::Commit)
-                continue;
+        // Output deadlines belong to the renderer. A paused UI neither stops the clock nor
+        // accumulates preview packets: only a requested preview is published and acknowledged.
+        int timeout = -1;
+        if (output_period) {
+            const auto delay = std::chrono::ceil<std::chrono::milliseconds>(
+                                   next_output - std::chrono::steady_clock::now())
+                                   .count();
+            timeout = static_cast<int>(
+                std::clamp<std::int64_t>(delay, 0, std::numeric_limits<int>::max()));
+        }
+        auto ready = channel.wait(timeout);
+        if (!ready)
+            return std::unexpected(ready.error());
+        if (!*ready)
+            continue;
+        auto message = channel.receive();
+        if (!message) {
+            if (message.error() == lipc::Empty::PeerGone)
+                return {};
+            continue;
+        }
+        const std::span<const std::byte> payload = message->payload;
+        if (payload.empty())
+            continue;
+        const auto kind = static_cast<Kind>(std::to_integer<unsigned>(payload[0]));
+        if (kind == Kind::Quit)
+            return {};
+        if (kind == Kind::Record) {
+            RecordState state;
+            if (payload.size() < 54) {
+                state.error = "a recording message was cut short";
+            } else if (!record.control) {
+                // Said rather than ignored: a client that asked to record and heard
+                // nothing would sit there believing it was recording.
+                state.error = "this renderer cannot record";
+            } else if (!project) {
+                state.error = "a recording was asked for before the project arrived";
+            } else {
+                const auto id = ldoc::Id::parse(
+                    std::string_view(reinterpret_cast<const char*>(payload.data() + 2), 26));
+                const auto output = ldoc::Id::parse(
+                    std::string_view(reinterpret_cast<const char*>(payload.data() + 28), 26));
+                if (!id || !output) {
+                    state.error = "that is not an encode or output id";
+                } else {
+                    RecordRequest request;
+                    request.start = std::to_integer<unsigned>(payload[1]) != 0;
+                    request.encode = *id;
+                    request.output = *output;
+                    request.path.assign(reinterpret_cast<const char*>(payload.data() + 54),
+                                        payload.size() - 54);
+                    state = record.control(request, *project);
+                }
+            }
+            latest_record.reset();
+            if (!state.running) {
+                output_period.reset();
+            } else if (!output_period && project && record.wants) {
+                const auto canvas = std::ranges::find_if(
+                    project->canvases, [&](const auto& c) { return record.wants(c.id); });
+                if (canvas != project->canvases.end() && canvas->fps.valid()) {
+                    output_period = std::chrono::nanoseconds(std::max<std::int64_t>(
+                        1, 1000000000LL * canvas->fps.den / canvas->fps.num));
+                    next_output = std::chrono::steady_clock::now();
+                }
+            }
+            if (auto sent = send_record_state(state); !sent)
+                return sent;
+            continue;
+        }
 
+        if (kind == Kind::Project || kind == Kind::Scene) {
+            if (kind == Kind::Project) {
+                assembly.reset();
+                assembling = true;
+            } else if (!assembling) {
+                assembly.error = "a scene arrived without a project";
+                assembling = true;
+            }
             std::size_t at = 1;
-            std::uint32_t max_edge = 0;
-            if (!take_u32(payload, at, max_edge) || at != payload.size() ||
-                max_edge > static_cast<std::uint32_t>(kMaxPreviewEdge)) {
-                if (auto sent = send_fault(channel, "invalid preview size"); !sent)
-                    return sent;
-                if (auto sent = send_ack(channel); !sent)
-                    return sent;
+            std::uint32_t length = 0;
+            if (!take_u32(payload, at, length)) {
+                assembly.error = "a document message was cut short";
                 continue;
             }
-            document_changed = document_changed || max_edge != previous_edge;
-            previous_edge = max_edge;
+            const lipc::Fd* fd = only_fd(*message);
+            if (fd == nullptr) {
+                assembly.error = "a document message arrived without its buffer";
+                continue;
+            }
+            auto text = read_memfd(*fd, length);
+            if (!text) {
+                assembly.error = text.error();
+                continue;
+            }
+            if (kind == Kind::Project) {
+                assembly.reset();
+                auto parsed = ldoc::project_from_json(*text);
+                if (!parsed)
+                    assembly.error = parsed.error();
+                else
+                    assembly.project = std::move(parsed->project);
+            } else if (assembly.project && assembly.error.empty()) {
+                auto parsed = ldoc::scene_from_json(*text);
+                if (!parsed)
+                    assembly.error = parsed.error();
+                else
+                    assembly.project->scenes.push_back(std::move(parsed->scene));
+            }
+            continue;
+        }
+        if (kind != Kind::Commit)
+            continue;
+
+        std::size_t at = 1;
+        std::uint32_t edge = 0;
+        if (!take_u32(payload, at, edge) || at != payload.size() ||
+            edge > static_cast<std::uint32_t>(kMaxPreviewEdge)) {
+            if (auto sent = send_fault(channel, "invalid preview size"); !sent)
+                return sent;
+            if (auto sent = send_ack(channel); !sent)
+                return sent;
+            continue;
+        }
+        if (assembling) {
+            assembling = false;
             if (!assembly.project || !assembly.error.empty()) {
-                const std::string why =
+                const auto why =
                     assembly.error.empty() ? "a commit arrived before its project" : assembly.error;
+                assembly.reset();
                 if (auto sent = send_fault(channel, why); !sent)
                     return sent;
                 if (auto sent = send_ack(channel); !sent)
                     return sent;
                 continue;
             }
-
-            if (pcm) {
-                const auto block = pcm();
-                if (!block.samples.empty()) {
-                    if (block.samples.size() > 9600 || block.samples.size() % 2)
-                        return std::unexpected(std::string{"invalid outgoing PCM block"});
-                    std::vector<std::byte> packet{static_cast<std::byte>(Kind::Pcm)};
-                    for (char c : block.source.to_string()) packet.push_back(static_cast<std::byte>(c));
-                    for (float sample : block.samples)
-                        append_u32(packet, std::bit_cast<std::uint32_t>(std::isfinite(sample) ? sample : 0));
-                    if (auto sent = channel.send(packet); !sent) return sent;
-                }
-            }
-            if (audio) {
-                const auto levels = audio(*assembly.project);
-                if (levels.size() > 1024) return std::unexpected(std::string{"too many audio meters"});
-                std::vector<std::byte> meters{static_cast<std::byte>(Kind::Audio)};
-                append_u32(meters, static_cast<std::uint32_t>(levels.size()));
-                for (const auto& level : levels) {
-                    const auto id = level.node.to_string();
-                    for (char c : id) meters.push_back(static_cast<std::byte>(c));
-                    for (float peak : {level.left, level.right})
-                        append_u32(meters, std::isfinite(peak) ? static_cast<std::uint32_t>(std::clamp(peak, 0.0f, 1.0f) * 1000000.0f) : 0);
-                    meters.push_back(static_cast<std::byte>(level.available));
-                }
-                if (auto sent = channel.send(meters); !sent) return sent;
-            }
-
-            // A commit with no document change behind it and no new captured frame would
-            // composite to exactly the picture already on screen. The UI republishes at the
-            // canvas rate, which is faster than a 30 Hz screen produces, so skipping here is
-            // what stops a full scale and blit per duplicate. A document change always draws:
-            // the project may have moved something even if no frame arrived.
-            //
-            // A recording is the exception: a file whose frames stop arriving when the
-            // picture holds still is a file that plays back at the wrong speed.
-            const bool recording = record.wants && std::ranges::any_of(
-                assembly.project->canvases,
-                [&record](const ldoc::Canvas& c) { return record.wants(c.id); });
-            if (!recording && !document_changed && fresh && !fresh()) {
-                if (auto sent = send_ack(channel); !sent)
-                    return sent;
-                continue;
-            }
-            document_changed = false;
-            for (const ldoc::Canvas& canvas : assembly.project->canvases) {
-                const auto started = std::chrono::steady_clock::now();
-                Picture picture =
-                    render ? render(*assembly.project, canvas.id, max_edge)
-                           : preview_size(composite_canvas(*assembly.project, canvas.id, frames),
-                                          max_edge);
-                const auto completed = std::chrono::steady_clock::now();
-                auto found = std::find_if(stats.begin(), stats.end(), [&](const auto& item) {
-                    return item.first == canvas.id;
-                });
-                if (found == stats.end()) {
-                    stats.push_back({canvas.id, RenderStats{}});
-                    found = std::prev(stats.end());
-                }
-                auto& total = found->second;
-                const auto elapsed = static_cast<std::uint64_t>(
-                    std::chrono::duration_cast<std::chrono::nanoseconds>(completed - started).count());
-                total.ns += elapsed;
-                if (canvas.fps.valid() && elapsed > 0) {
-                    const auto budgets = std::ceil(static_cast<long double>(elapsed) * canvas.fps.num /
-                                                   (1000000000.0L * canvas.fps.den));
-                    total.missed += static_cast<std::uint64_t>(budgets) - 1;
-                }
-                ++total.frames;
-                if (std::getenv("LIBERTAS_BENCHMARK") && total.frames % 120 == 0)
-                    std::fprintf(stderr, "render %s: %.3f ms average, %llu frames, %llu missed\n",
-                                 canvas.name.c_str(),
-                                 static_cast<double>(total.ns) / static_cast<double>(total.frames) /
-                                     1e6,
-                                 static_cast<unsigned long long>(total.frames),
-                                 static_cast<unsigned long long>(total.missed));
-                picture.render_ns = total.ns;
-                picture.rendered_frames = total.frames;
-                picture.render_lag_frames = total.missed;
-                picture.fps_num = canvas.fps.valid() ? static_cast<std::uint32_t>(canvas.fps.num) : 0;
-                picture.fps_den = canvas.fps.valid() ? static_cast<std::uint32_t>(canvas.fps.den) : 0;
-                // The encoder wants the canvas at its real size; the preview wants it small
-                // enough for a panel. When both are wanted, composite twice rather than
-                // encoding the downscaled one -- a 1080p file off a 640px preview is not a
-                // recording of anything.
-                if (record.wants && record.frame && record.wants(canvas.id)) {
-                    Picture full;
-                    const Picture* recorded = &picture;
-                    if (max_edge != 0) {
-                        full = render ? render(*assembly.project, canvas.id, 0)
-                                      : composite_canvas(*assembly.project, canvas.id, frames);
-                        recorded = &full;
-                    }
-                    if (const auto state = record.frame(canvas.id, *recorded)) {
-                        if (auto sent = send_record_state(*state); !sent)
-                            return sent;
-                    }
-                }
-                if (auto sent = send_frame(channel, canvas.id, picture, slots); !sent)
-                    return sent;
-            }
-            if (done)
-                done();
+            project = std::move(assembly.project);
+            assembly.reset();
+            document_changed = true;
+        }
+        if (!project) {
+            if (auto sent = send_fault(channel, "a commit arrived before its project"); !sent)
+                return sent;
             if (auto sent = send_ack(channel); !sent)
+                return sent;
+            continue;
+        }
+        document_changed = document_changed || edge != preview_edge;
+        preview_edge = edge;
+        preview_pending = true;
+
+        if (output_period && record.wants &&
+            !std::ranges::any_of(project->canvases,
+                                 [&](const auto& c) { return record.wants(c.id); })) {
+            auto state = record.control(RecordRequest{}, *project);
+            state.error = "Output stopped because its canvas was removed." +
+                          (state.error.empty() ? std::string{} : " " + state.error);
+            output_period.reset();
+            latest_record.reset();
+            if (auto sent = send_record_state(state); !sent)
                 return sent;
         }
     }

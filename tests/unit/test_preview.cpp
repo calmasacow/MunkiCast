@@ -7,6 +7,8 @@
 #include "lcomp/preview.hpp"
 #include "ltest.hpp"
 
+#include <arpa/inet.h>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <csignal>
@@ -16,10 +18,13 @@
 #include <fstream>
 #include <lcapture/audio.hpp>
 #include <ldoc/project_io.hpp>
+#include <ldoc/json.hpp>
 #include <mutex>
+#include <sys/socket.h>
 #include <sys/wait.h>
 #include <thread>
 #include <tuple>
+#include <unistd.h>
 #include <utility>
 
 extern "C" {
@@ -97,7 +102,8 @@ std::tuple<int, int, int, int> pixel(const lcomp::PreviewFrame& frame, int x, in
 }
 
 /// One commit, and the one frame it produced. Fails the case rather than returning a blank.
-lcomp::PreviewFrame commit(lcomp::PreviewLink& link, const ldoc::Project& project) {
+lcomp::PreviewFrame commit(lcomp::PreviewLink& link, const ldoc::Project& project,
+                           lcomp::RecordState* output_stats = nullptr) {
     const auto sent = link.send_project(project);
     REQUIRE_MSG(sent.has_value(), "{}", sent.error());
     lcomp::PreviewFrame frame;
@@ -111,6 +117,8 @@ lcomp::PreviewFrame commit(lcomp::PreviewLink& link, const ldoc::Project& projec
             REQUIRE_MSG(false, "{}", got.fault);
         if (got.kind == lcomp::PreviewEvent::Kind::PeerGone)
             REQUIRE_MSG(false, "the renderer exited during a commit");
+        if (got.kind == lcomp::PreviewEvent::Kind::Record && output_stats)
+            *output_stats = got.record;
         if (got.kind == lcomp::PreviewEvent::Kind::Frame) {
             frame = got.frame;
             have = true;
@@ -199,7 +207,7 @@ LTEST_CASE(browser_scene_switch_preserves_page_unless_shutdown_is_enabled) {
     }
 }
 
-LTEST_CASE(record_writes_playable_rescaled_video_with_correct_colours_and_routed_audio) {
+static void output_writes_playable_video_and_routed_audio(bool streaming, int shared = 0) {
     auto ends = lipc::Channel::pair();
     REQUIRE(ends);
     auto child = lcomp::spawn_renderer(LIBERTAS_RENDER, std::move(ends->second).take_socket());
@@ -251,34 +259,143 @@ LTEST_CASE(record_writes_playable_rescaled_video_with_correct_colours_and_routed
     output.destination.kind = ldoc::DestinationKind::File;
     // The file must use its own AAC route, even with an Opus stream output listed first.
     project.outputs = {stream, output};
+    if (streaming) {
+        // Stream audio must come from the selected destination, not the file sharing its video.
+        project.outputs[0].audio_encode = audio.id;
+        project.outputs[1].audio_encode = stream_audio.id;
+    }
+    if (shared) project.outputs[1].audio_encode = audio.id;
     const auto path = std::filesystem::temp_directory_path() /
                       ("libertas-record-" + video.id.to_string() + ".mkv");
+    const auto simultaneous = path.string() + ".local.mkv";
+
+    struct Listener {
+        pid_t pid = -1;
+
+        ~Listener() {
+            if (pid > 0) {
+                ::kill(pid, SIGKILL);
+                ::waitpid(pid, nullptr, 0);
+            }
+        }
+    } listener;
+
+    std::string address;
+    if (streaming) {
+        const int socket = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+        REQUIRE(socket >= 0);
+        sockaddr_in local{};
+        local.sin_family = AF_INET;
+        local.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+        REQUIRE(::bind(socket, reinterpret_cast<sockaddr*>(&local), sizeof(local)) == 0);
+        socklen_t size = sizeof(local);
+        REQUIRE(::getsockname(socket, reinterpret_cast<sockaddr*>(&local), &size) == 0);
+        ::close(socket);
+        address = "rtmp://127.0.0.1:" + std::to_string(ntohs(local.sin_port)) + "/live/test-key";
+        project.outputs[0].enabled = true;
+        project.outputs[0].destination.url = address;
+        listener.pid = ::fork();
+        REQUIRE(listener.pid >= 0);
+        if (listener.pid == 0) {
+            ::execl(LIBERTAS_TEST_FFMPEG, LIBERTAS_TEST_FFMPEG, "-nostdin", "-v", "error",
+                    "-listen", "1", "-timeout", "10", "-i", address.c_str(), "-c", "copy", "-f",
+                    "matroska", path.c_str(), nullptr);
+            ::_exit(127);
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(300));
+    }
     bool ready = false;
     for (int i = 0; i < 200 && !ready; ++i) {
         ready = commit(link, project).status == lcomp::PictureStatus::Complete;
         std::this_thread::sleep_for(std::chrono::milliseconds(30));
     }
     REQUIRE(ready);
+    bool file_running = false, stream_running = false;
+    const auto file_control = [&](bool start) {
+        REQUIRE(link.send_record({start, video.id, start ? simultaneous : std::string{}}));
+        bool replied = false;
+        for (int i = 0; i < 30 && !replied; ++i) {
+            auto event = link.receive(2000);
+            REQUIRE(event && *event);
+            if ((**event).kind != lcomp::PreviewEvent::Kind::Record ||
+                !(**event).record.control_reply) continue;
+            const auto& state = (**event).record;
+            CHECK_MSG(state.error.empty(), "{}", state.error);
+            CHECK_EQ(state.recording, start);
+            CHECK_EQ(state.streaming, stream_running);
+            file_running = start;
+            replied = true;
+        }
+        REQUIRE(replied);
+    };
     const auto control = [&](bool start) {
-        REQUIRE(link.send_record({start, start ? video.id : ldoc::Id::nil(), path.string()}));
+        REQUIRE(link.send_record({start, start ? video.id : ldoc::Id::nil(),
+                                  streaming ? address : path.string(),
+                                  streaming ? stream.id : ldoc::Id::nil()}));
         bool replied = false;
         for (int i = 0; i < 20 && !replied; ++i) {
             auto event = link.receive(2000);
             REQUIRE(event && *event);
-            if ((**event).kind == lcomp::PreviewEvent::Kind::Record) {
+            if ((**event).kind == lcomp::PreviewEvent::Kind::Record &&
+                (**event).record.control_reply) {
                 CHECK_MSG((**event).record.error.empty(), "{}", (**event).record.error);
-                CHECK_EQ((**event).record.running, start);
+                CHECK_EQ((**event).record.running, start || file_running);
+                if (streaming) {
+                    stream_running = start;
+                    CHECK_EQ((**event).record.streaming, start);
+                    CHECK_EQ((**event).record.recording, file_running);
+                }
                 replied = true;
             }
         }
         REQUIRE(replied);
     };
+    if (shared == 1) file_control(true);
     control(true);
-    for (int i = 0; i < 60; ++i) {
+    if (shared == 2) file_control(true);
+    for (int i = 0; i < (shared ? 90 : 60); ++i) {
         commit(link, project);
         std::this_thread::sleep_for(std::chrono::milliseconds(30));
     }
+    lcomp::RecordState before_pause, after_pause;
+    commit(link, project, &before_pause);
+    CHECK(before_pause.running);
+    CHECK(before_pause.frames > 40);
+    // A screenshot/modal UI pause must not stop either the file writer or RTMP publisher.
+    std::this_thread::sleep_for(std::chrono::milliseconds(700));
+    commit(link, project, &after_pause);
+    CHECK(after_pause.frames >= before_pause.frames + 18);
+    CHECK(after_pause.missed <= before_pause.missed + 2);
+    CHECK(after_pause.encode_lag <= after_pause.missed);
+    if (shared == 1) {
+        file_control(false);
+        lcomp::RecordState state;
+        commit(link, project, &state);
+        CHECK(state.streaming && !state.recording);
+        CHECK(state.frames >= after_pause.frames);
+    }
     control(false);
+    if (shared == 2) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(200));
+        lcomp::RecordState state;
+        commit(link, project, &state);
+        CHECK(state.recording && !state.streaming);
+        CHECK(state.frames > after_pause.frames);
+        file_control(false);
+    }
+    if (shared) {
+        AVFormatContext* recording = nullptr;
+        REQUIRE(avformat_open_input(&recording, simultaneous.c_str(), nullptr, nullptr) >= 0);
+        REQUIRE(avformat_find_stream_info(recording, nullptr) >= 0);
+        CHECK(av_find_best_stream(recording, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0) >= 0);
+        CHECK(av_find_best_stream(recording, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0) >= 0);
+        avformat_close_input(&recording);
+        std::filesystem::remove(simultaneous);
+    }
+    if (streaming) {
+        CHECK_EQ(reap(listener.pid, 5000), 0);
+        listener.pid = -1;
+    }
     link.quit();
     link.close();
     CHECK_EQ(reap(*child, 5000), 0);
@@ -323,16 +440,45 @@ LTEST_CASE(record_writes_playable_rescaled_video_with_correct_colours_and_routed
               rgba[pixel_offset + 2]);
     sws_freeContext(converter);
     int video_packets = 1;
+    std::int64_t previous_dts = AV_NOPTS_VALUE;
+    double largest_gap = 0;
     while (av_read_frame(file, packet) >= 0) {
-        if (packet->stream_index == vi) ++video_packets;
+        if (packet->stream_index == vi) {
+            ++video_packets;
+            if (packet->dts != AV_NOPTS_VALUE) {
+                if (previous_dts != AV_NOPTS_VALUE)
+                    largest_gap =
+                        std::max(largest_gap, static_cast<double>(packet->dts - previous_dts) *
+                                                  av_q2d(file->streams[vi]->time_base));
+                previous_dts = packet->dts;
+            }
+        }
         av_packet_unref(packet);
     }
-    CHECK_MSG(video_packets >= 50, "early preview ticks retained only {} video frames", video_packets);
+    CHECK_MSG(largest_gap < 0.12, "UI pause left a {} second gap in encoded video", largest_gap);
+    CHECK_MSG(video_packets >= 50, "early preview ticks retained only {} video frames",
+              video_packets);
     av_frame_free(&frame);
     av_packet_free(&packet);
     avcodec_free_context(&decoder);
     avformat_close_input(&file);
     std::filesystem::remove(path);
+}
+
+LTEST_CASE(record_writes_playable_rescaled_video_with_correct_colours_and_routed_audio) {
+    output_writes_playable_video_and_routed_audio(false);
+}
+
+LTEST_CASE(rtmp_publishes_playable_rescaled_video_and_destination_audio) {
+    output_writes_playable_video_and_routed_audio(true);
+}
+
+LTEST_CASE(shared_encode_can_start_recording_then_stream_and_stop_recording_independently) {
+    output_writes_playable_video_and_routed_audio(true, 1);
+}
+
+LTEST_CASE(shared_encode_can_start_stream_then_record_and_stop_stream_independently) {
+    output_writes_playable_video_and_routed_audio(true, 2);
 }
 
 LTEST_CASE(recording_failure_reaches_the_client_without_killing_preview) {
@@ -388,19 +534,235 @@ LTEST_CASE(recording_failure_reaches_the_client_without_killing_preview) {
     std::filesystem::remove(path);
 }
 
+LTEST_CASE(recording_receives_full_size_and_preview_from_one_composition) {
+    auto ends = lipc::Channel::pair();
+    REQUIRE(ends);
+    int render_calls = 0, output_calls = 0;
+    bool server_ok = false, correct_output = false, timestamp_before_render = false;
+    std::chrono::steady_clock::time_point render_started;
+    std::jthread server([&, channel = std::move(ends->second)]() mutable {
+        lcomp::RecordHooks record;
+        record.wants = [](const ldoc::Id&) { return true; };
+        record.frame = [&](const ldoc::Id&, const lcomp::Picture& full,
+                           std::chrono::steady_clock::time_point frame_time) {
+            timestamp_before_render = frame_time <= render_started;
+            ++output_calls;
+            correct_output =
+                full.width == 64 && full.height == 32 && full.pixels.size() == 64 * 32 * 4;
+            return std::optional<lcomp::RecordState>{};
+        };
+        server_ok = lcomp::serve_preview(
+                        std::move(channel), {}, {}, {},
+                        [&](const ldoc::Project& project, const ldoc::Id& canvas,
+                            std::uint32_t edge, lcomp::Picture* full) {
+                            ++render_calls;
+                            render_started = std::chrono::steady_clock::now();
+                            auto picture = lcomp::composite_canvas(project, canvas);
+                            if (full)
+                                *full = picture;
+                            return lcomp::preview_size(std::move(picture), edge);
+                        },
+                        {}, {}, std::move(record))
+                        .has_value();
+    });
+    lcomp::PreviewLink link{std::move(ends->first)};
+    REQUIRE(link.take_hello(2000));
+    auto project = ldoc::make_default_project("shared output render");
+    project.canvases.front().width = 64;
+    project.canvases.front().height = 32;
+    REQUIRE(link.send_project(project, 16));
+    bool acknowledged = false;
+    for (int i = 0; i < 8 && !acknowledged; ++i) {
+        auto event = link.receive(2000);
+        REQUIRE(event && *event);
+        if ((**event).kind == lcomp::PreviewEvent::Kind::Frame) {
+            CHECK_EQ((**event).frame.width, 16);
+            CHECK_EQ((**event).frame.height, 8);
+        }
+        acknowledged = (**event).kind == lcomp::PreviewEvent::Kind::Ack;
+    }
+    REQUIRE(acknowledged);
+    link.quit();
+    link.close();
+    server.join();
+    CHECK(server_ok);
+    CHECK(correct_output);
+    CHECK(timestamp_before_render);
+    CHECK_EQ(render_calls, 1);
+    CHECK_EQ(output_calls, 1);
+}
+
+LTEST_CASE(output_clock_survives_ui_pause_and_partial_project_transfer) {
+    for (const ldoc::Fps rate : {ldoc::Fps{60, 1}, ldoc::Fps{60000, 1001}}) {
+        auto ends = lipc::Channel::pair();
+        REQUIRE(ends);
+        std::atomic<unsigned> frames = 0, blue_frames = 0, invalid_frames = 0;
+        bool server_ok = false, timestamps_aligned = true;
+        std::optional<std::chrono::steady_clock::time_point> first_frame;
+        std::jthread server([&, channel = std::move(ends->second)]() mutable {
+            bool running = false;
+            lcomp::RecordHooks record;
+            record.control = [&](const lcomp::RecordRequest& request, const ldoc::Project&) {
+                running = request.start;
+                return lcomp::RecordState{running, {}};
+            };
+            record.wants = [&](const ldoc::Id&) { return running; };
+            record.frame = [&](const ldoc::Id&, const lcomp::Picture& picture,
+                               std::chrono::steady_clock::time_point frame_time) {
+                if (!first_frame)
+                    first_frame = frame_time;
+                const auto ns =
+                    std::chrono::duration_cast<std::chrono::nanoseconds>(frame_time - *first_frame)
+                        .count();
+                const auto slot = std::llround(static_cast<double>(ns) * rate.hz() / 1e9);
+                const double scheduled_ns = static_cast<double>(slot) * 1e9 / rate.hz();
+                timestamps_aligned =
+                    timestamps_aligned && std::abs(static_cast<double>(ns) - scheduled_ns) < 1000.0;
+                ++frames;
+                const auto* pixels = picture.read_from();
+                if (pixels && pixels[0] == 0 && pixels[1] == 0 && pixels[2] == 255)
+                    ++blue_frames;
+                else if (!pixels || pixels[0] != 255 || pixels[1] != 0 || pixels[2] != 0)
+                    ++invalid_frames;
+                return std::optional<lcomp::RecordState>{};
+            };
+            server_ok =
+                lcomp::serve_preview(std::move(channel), {}, {}, {}, {}, {}, {}, std::move(record))
+                    .has_value();
+        });
+        // An extra writer lets the test pause between Project and Commit on the real channel.
+        lipc::Channel writer{lipc::Fd{::dup(ends->first.poll_fd())}};
+        REQUIRE(writer.valid());
+        lcomp::PreviewLink link{std::move(ends->first)};
+        REQUIRE(link.take_hello(2000));
+        auto red = colour_source(255, 0, 0);
+        ldoc::Scene scene;
+        scene.id = ldoc::Id::generate();
+        scene.roots = {bound_to(red)};
+        auto project = show(scene, {red});
+        project.canvases.front().fps = rate;
+        commit(link, project);
+        REQUIRE(link.send_record({true, ldoc::Id::generate(), "clock-test.mkv"}));
+        auto state = link.receive(2000);
+        REQUIRE(state && *state && (**state).kind == lcomp::PreviewEvent::Kind::Record);
+        REQUIRE((**state).record.running);
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(700));
+        CHECK_MSG(frames.load() >= 38, "only {} frames while UI was paused", frames.load());
+        const auto queued = link.poll();
+        REQUIRE(queued);
+        CHECK(!queued->has_value()); // No unrequested preview traffic or growing socket backlog.
+
+        project.sources.front().settings["color"] = ldoc::Rgba::from_srgb8(0, 0, 255);
+        const auto bytes = ldoc::project_to_json(project);
+        auto memory = lipc::make_memfd("incomplete-project", bytes.size());
+        REQUIRE(memory);
+        REQUIRE(::pwrite(memory->get(), bytes.data(), bytes.size(), 0) ==
+                static_cast<ssize_t>(bytes.size()));
+        std::vector<std::byte> payload{
+            std::byte{2}}; // Project; scenes/commit deliberately withheld.
+        for (unsigned shift = 0; shift < 32; shift += 8)
+            payload.push_back(static_cast<std::byte>((bytes.size() >> shift) & 255u));
+        const int fd = memory->get();
+        REQUIRE(writer.send(payload, std::span<const int>(&fd, 1)));
+        const auto before = frames.load();
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+        CHECK(frames.load() >= before + 6);
+        CHECK_EQ(blue_frames.load(), 0u);
+        CHECK_EQ(invalid_frames.load(), 0u);
+        commit(link, project);
+        CHECK(blue_frames.load() > 0);
+
+        // A malformed replacement must not corrupt the last committed live project either.
+        REQUIRE(writer.send(payload)); // Missing memfd.
+        REQUIRE(link.refresh());
+        auto fault = link.receive(2000);
+        REQUIRE(fault && *fault && (**fault).kind == lcomp::PreviewEvent::Kind::Fault);
+        auto ack = link.receive(2000);
+        REQUIRE(ack && *ack && (**ack).kind == lcomp::PreviewEvent::Kind::Ack);
+        const auto blue_before = blue_frames.load();
+        std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        CHECK(blue_frames.load() >= blue_before + 3);
+        CHECK_EQ(invalid_frames.load(), 0u);
+
+        REQUIRE(link.send_record({false, {}, {}}));
+        state = link.receive(2000);
+        REQUIRE(state && *state && (**state).kind == lcomp::PreviewEvent::Kind::Record);
+        CHECK(!(**state).record.running);
+        const auto stopped_at = frames.load();
+        std::this_thread::sleep_for(std::chrono::milliseconds(70));
+        CHECK_EQ(frames.load(), stopped_at);
+        link.quit();
+        link.close();
+        server.join();
+        CHECK(server_ok);
+        CHECK(timestamps_aligned);
+    }
+}
+
+LTEST_CASE(capture_statistics_report_actual_rates_errors_and_clear_removed_sources) {
+    auto ends = lipc::Channel::pair();
+    REQUIRE(ends);
+    const auto id = ldoc::Id::generate();
+    bool server_ok = false;
+    std::jthread server([&, channel = std::move(ends->second)]() mutable {
+        int requests = 0;
+        server_ok = lcomp::serve_preview(std::move(channel), {}, {}, {}, {}, {}, {}, {}, [&] {
+            if (++requests == 1)
+                return std::vector<lcomp::CaptureState>{{id, 60000, 59940, ""},
+                    {ldoc::Id::nil(), 0, 0, "device does not support requested frame rate"}};
+            return std::vector<lcomp::CaptureState>{};
+        }).has_value();
+    });
+    lcomp::PreviewLink link{std::move(ends->first)};
+    REQUIRE(link.take_hello(2000));
+    auto project = ldoc::make_default_project("capture statistics");
+    project.canvases[0].width = project.canvases[0].height = 4;
+    REQUIRE(link.send_project(project));
+    for (int round = 0; round < 2; ++round) {
+        auto event = link.receive(2000);
+        REQUIRE(event && *event);
+        REQUIRE((**event).kind == lcomp::PreviewEvent::Kind::Capture);
+        const auto& states = (**event).capture;
+        if (round == 0) {
+            REQUIRE(states.size() == 2);
+            CHECK_EQ(states[0].source, id);
+            CHECK_EQ(states[0].negotiated, 60000u);
+            CHECK_EQ(states[0].received, 59940u);
+            CHECK(states[0].error.empty());
+            CHECK_EQ(states[1].error, "device does not support requested frame rate");
+        } else CHECK(states.empty());
+        do {
+            event = link.receive(2000);
+            REQUIRE(event && *event);
+        } while ((**event).kind != lcomp::PreviewEvent::Kind::Ack);
+        if (round == 0) REQUIRE(link.refresh());
+    }
+    link.quit();
+    server.join();
+    CHECK(server_ok);
+}
+
 LTEST_CASE(render_lag_counts_composite_budgets_not_delayed_acknowledgments) {
     auto ends = lipc::Channel::pair();
     REQUIRE(ends.has_value());
     bool server_ok = false;
     std::jthread server([channel = std::move(ends->second), &server_ok]() mutable {
-        server_ok = lcomp::serve_preview(std::move(channel), {}, [] {
-            // Delayed release/transport must not become another missed render frame.
-            std::this_thread::sleep_for(std::chrono::milliseconds(120));
-        }, {}, [](const ldoc::Project& project, const ldoc::Id& canvas, std::uint32_t) {
-            if (project.canvas(canvas)->name == "Slow")
-                std::this_thread::sleep_for(std::chrono::milliseconds(45));
-            return lcomp::composite_canvas(project, canvas);
-        }).has_value();
+        server_ok = lcomp::serve_preview(
+                        std::move(channel), {},
+                        [] {
+                            // Delayed release/transport must not become another missed render
+                            // frame.
+                            std::this_thread::sleep_for(std::chrono::milliseconds(120));
+                        },
+                        {},
+                        [](const ldoc::Project& project, const ldoc::Id& canvas, std::uint32_t,
+                           lcomp::Picture*) {
+                            if (project.canvas(canvas)->name == "Slow")
+                                std::this_thread::sleep_for(std::chrono::milliseconds(45));
+                            return lcomp::composite_canvas(project, canvas);
+                        })
+                        .has_value();
     });
     lcomp::PreviewLink link{std::move(ends->first)};
     REQUIRE(link.take_hello(2000).has_value());
@@ -492,6 +854,9 @@ LTEST_CASE(a_picture_crosses_the_process_and_the_renderer_exits_when_the_client_
         // A refresh uses the assembled document and a new size budget. Read the actual memfd
         // through the real process, including its resize, instead of testing a sizing helper.
         REQUIRE(link.refresh(2).has_value());
+        auto capture = link.receive(2000);
+        REQUIRE(capture && *capture);
+        CHECK_EQ((**capture).kind, lcomp::PreviewEvent::Kind::Capture);
         auto meters = link.receive(2000);
         REQUIRE(meters && meters->has_value());
         CHECK_EQ((**meters).kind, lcomp::PreviewEvent::Kind::Audio);
@@ -505,6 +870,9 @@ LTEST_CASE(a_picture_crosses_the_process_and_the_renderer_exits_when_the_client_
         REQUIRE(ack && ack->has_value());
         CHECK_EQ((**ack).kind, lcomp::PreviewEvent::Kind::Ack);
         REQUIRE(link.refresh(2).has_value());
+        capture = link.receive(2000);
+        REQUIRE(capture && *capture);
+        CHECK_EQ((**capture).kind, lcomp::PreviewEvent::Kind::Capture);
         meters = link.receive(2000);
         REQUIRE(meters && meters->has_value());
         CHECK_EQ((**meters).kind, lcomp::PreviewEvent::Kind::Audio);

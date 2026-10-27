@@ -277,7 +277,17 @@ bool Document::removeCollection() {
     for (qsizetype i = collection_items_.size(); i-- > 0;)
         if (collection_items_[i].toMap().value("path") == path)
             collection_items_.removeAt(i);
-    installSession(lsession::LocalSession::in_memory(studioProject("Untitled")));
+    // Reuse a remaining collection so switching cannot save a new Untitled replacement.
+    std::unique_ptr<lsession::Session> next;
+    for (const auto& entry : collection_items_) {
+        auto opened = lsession::LocalSession::open(entry.toMap().value("path").toString().toStdString());
+        if (opened) {
+            next = std::move(*opened);
+            break;
+        }
+    }
+    installSession(next ? std::move(next)
+                        : lsession::LocalSession::in_memory(studioProject("Untitled")));
     emit notice(QStringLiteral("Collection moved to Trash: %1").arg(trashed));
     return true;
 }

@@ -5,6 +5,7 @@
 #include "lcomp/composite.hpp"
 #include "lipc/channel.hpp"
 
+#include <chrono>
 #include <cstdint>
 #include <expected>
 #include <filesystem>
@@ -17,7 +18,7 @@
 
 namespace lcomp {
 
-/// The preview protocol. Version 7.
+/// The preview protocol. Version 10.
 ///
 /// Whole messages on a `lipc::Channel`, bulk in sealed memfds. The bytes are little-endian and
 /// carry no padding, so a reader does not depend on the writer's struct layout.
@@ -29,11 +30,12 @@ namespace lcomp {
 ///            on refresh; Ack alone means no document, capture or size change.
 ///   Quit     u8 kind. The renderer exits.
 ///   Frame    u8 kind, 26-byte canvas id, u32 width, u32 height, u32 stride, u8 status,
-///            u32 gap count, u64 cumulative render ns, u64 completed frames, u64 missed render budgets,
-///            u32 canvas fps numerator, u32 denominator. The first frame for a canvas, and any frame whose size changed,
-///            carries one memfd of tightly packed straight sRGB8. Later frames of the same
-///            size reuse it: the client copies on receipt, and it does not send another
-///            snapshot until it has copied, so the renderer is not writing what is being read.
+///            u32 gap count, u64 cumulative render ns, u64 completed frames, u64 missed render
+///            budgets, u32 canvas fps numerator, u32 denominator. The first frame for a canvas, and
+///            any frame whose size changed, carries one memfd of tightly packed straight sRGB8.
+///            Later frames of the same size reuse it: the client copies on receipt, and it does not
+///            send another snapshot until it has copied, so the renderer is not writing what is
+///            being read.
 ///   Ack      u8 kind. One per commit, after that commit's frames. The client may send again.
 ///   Fault    u8 kind, the rest UTF-8. Something about the snapshot could not be drawn at all.
 ///            An ack still follows, or the client would wait forever.
@@ -41,14 +43,28 @@ namespace lcomp {
 ///            u8 availability. Sent even when a video refresh only produces an Ack.
 ///   Pcm      u8 kind, source ULID, interleaved stereo float32 little-endian at 48 kHz.
 ///            At most 9600 samples; workers to renderer only, never to the UI.
-///   Record   u8 kind, u8 start (0 = stop), 26-byte encode id, then the UTF-8 path.
+///   Record   u8 kind, u8 start (0 = stop), 26-byte encode id, 26-byte output id, then the UTF-8
+///   path.
 ///            Client to renderer. A stop carries the id and an empty path.
-///   RecState u8 kind, u8 running, then UTF-8 error text, empty when nothing went wrong.
-///            One per Record, and one unprompted if a recording stops on its own.
+///   RecState u8 kind, u8 running, u64 encoded frames, u64 missed output slots, u64 encoding
+///            lag, u8 flags (recording=1, streaming=2, control reply=4), then UTF-8 error text.
+///            One per Record, counters with requested previews,
+///            and one unprompted if an output stops on its own.
+///
+/// Active output runs on the renderer's clock using the last committed project. Preview
+/// requests only control publication; partial document transfers never replace the live scene.
 ///
 /// An empty payload cannot be sent (ADR-0026), and every message here starts with its kind, so
 /// none of them are empty.
-inline constexpr std::uint16_t kPreviewProtocol = 7;
+inline constexpr std::uint16_t kPreviewProtocol = 10;
+
+/// Capture packet: u32 count, then source ULID, negotiated/received milli-FPS,
+/// u16 error byte length and UTF-8 error. Rates describe arrivals, not unique images.
+struct CaptureState {
+    ldoc::Id source;
+    std::uint32_t negotiated = 0, received = 0;
+    std::string error;
+};
 
 struct AudioLevel {
     ldoc::Id node;
@@ -57,7 +73,7 @@ struct AudioLevel {
 };
 struct AudioPacket { ldoc::Id source; std::vector<float> samples; };
 
-/// Start or stop writing one encode to one file.
+/// Start or stop writing one encode to a file or RTMP destination.
 ///
 /// The encode names the canvas, so this does not carry one: two recordings of the same canvas
 /// at different bitrates are two encodes, and that is the only way to say it (ADR-0029).
@@ -66,12 +82,20 @@ struct RecordRequest {
     ldoc::Id encode;
     /// Where to write. Empty for a stop; the container is chosen from the extension.
     std::string path;
+    /// Explicit destination for streaming; nil preserves the recording route.
+    ldoc::Id output = ldoc::Id::nil();
 };
 
 /// What the renderer made of it. `error` empty means it did what was asked.
 struct RecordState {
     bool running = false;
     std::string error;
+    std::uint64_t frames = 0;
+    std::uint64_t missed = 0;
+    /// Missed slots attributable to the preceding synchronous encode/audio/mux operation.
+    std::uint64_t encode_lag = 0;
+    bool recording = false, streaming = false;
+    bool control_reply = true;
 };
 
 /// One frame: owned pixels, or a retained read-only immutable mapping.
@@ -98,7 +122,7 @@ struct PreviewFrame {
 
 /// What `poll` produced. `fault` is set for Fault; `frame` is set for Frame.
 struct PreviewEvent {
-    enum class Kind : std::uint8_t { Hello, Frame, Ack, Fault, PeerGone, Audio, Pcm, Record };
+    enum class Kind : std::uint8_t { Hello, Frame, Ack, Fault, PeerGone, Audio, Pcm, Record, Capture };
 
     Kind kind = Kind::PeerGone;
     PreviewFrame frame;
@@ -106,6 +130,7 @@ struct PreviewEvent {
     std::vector<AudioLevel> audio;
     AudioPacket pcm;
     RecordState record;
+    std::vector<CaptureState> capture;
 };
 
 /// The UI's end of the preview, and the test's. It does not composite.
@@ -214,7 +239,9 @@ using FramesDone = std::function<void()>;
 /// which is what a caller with no capture wants.
 using FramesFresh = std::function<bool()>;
 
-using CanvasRenderer = std::function<Picture(const ldoc::Project&, const ldoc::Id&, std::uint32_t)>;
+/// When supplied, full_output receives the full canvas from the same composition as the preview.
+using CanvasRenderer = std::function<Picture(const ldoc::Project&, const ldoc::Id&, std::uint32_t,
+                                             Picture* full_output)>;
 using AudioMeters = std::function<std::vector<AudioLevel>(const ldoc::Project&)>;
 using AudioPcm = std::function<AudioPacket()>;
 
@@ -226,14 +253,18 @@ struct RecordHooks {
     /// Whether this canvas is being recorded. Asked once per canvas per commit, because the
     /// answer decides whether it has to be composited at full size as well as preview size.
     std::function<bool(const ldoc::Id&)> wants;
-    /// One full-size frame. A state is returned only when recording stops or fails.
-    std::function<std::optional<RecordState>(const ldoc::Id&, const Picture&)> frame;
+    /// One full-size frame and its scheduled output time, before variable render cost.
+    /// May report counters while running, or a stop/failure.
+    std::function<std::optional<RecordState>(const ldoc::Id&, const Picture&,
+                                             std::chrono::steady_clock::time_point)>
+        frame;
 };
 
 [[nodiscard]] std::expected<void, std::string>
 serve_preview(lipc::Channel channel, FrameSource frames = {}, FramesDone done = {},
               FramesFresh fresh = {}, CanvasRenderer render = {}, AudioMeters audio = {},
-              AudioPcm pcm = {}, RecordHooks record = {});
+              AudioPcm pcm = {}, RecordHooks record = {},
+              std::function<std::vector<CaptureState>()> capture = {});
 
 /// Start `libertas-render` with one end of a channel.
 ///

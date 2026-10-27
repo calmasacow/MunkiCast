@@ -40,6 +40,7 @@ Item {
     }
 
     function selectOutput() {
+        view.forceActiveFocus(Qt.OtherFocusReason);
         view.selectedKind = Workspace.encodeOutput !== "" ? "output" : "";
         view.selectedId = Workspace.encodeOutput;
         if (view.selectedId !== "")
@@ -69,6 +70,7 @@ Item {
         selectedKind: view.selectedKind
         selectedId: view.selectedId
         onNodeSelected: (kind, id) => {
+            view.forceActiveFocus(Qt.MouseFocusReason);
             view.selectedKind = kind;
             view.selectedId = id;
         }

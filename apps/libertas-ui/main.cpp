@@ -3,6 +3,10 @@
 
 #include "assetcache.hpp"
 #include "document.hpp"
+#include "lcomp/composite.hpp"
+#include "ldoc/json.hpp"
+#include "ldoc/project_io.hpp"
+#include "llayout/serialize.hpp"
 #include "preferences.hpp"
 #include "preview.hpp"
 #include "shortcuts.hpp"
@@ -10,51 +14,49 @@
 #include "theme.hpp"
 #include "workspace.hpp"
 
-#include "llayout/serialize.hpp"
-
-#include "ldoc/json.hpp"
-#include "ldoc/project_io.hpp"
-#include "lcomp/composite.hpp"
-
+#include <QApplication>
 #include <QCommandLineOption>
 #include <QCommandLineParser>
-#include <QApplication>
-#include <QtWebEngineQuick/qtwebenginequickglobal.h>
-#include <QtWebEngineQuick/qquickwebengineprofile.h>
-#include <QMouseEvent>
-#include <QObject>
-#include <QQmlApplicationEngine>
 #include <QCoreApplication>
+#include <QDir>
+#include <QElapsedTimer>
 #include <QEventLoop>
-#include <QImage>
-#include <QQuickItem>
-#include <QQuickImageProvider>
-#include <QWheelEvent>
-#include <QSize>
-#include <QSet>
-#include <QVariantMap>
-#include <QQuickWindow>
-#include <QThread>
-#include <QTimer>
-#include <QTemporaryDir>
-#include <QStandardPaths>
 #include <QFile>
 #include <QFileInfo>
+#include <QImage>
+#include <QInputMethodEvent>
+#include <QJSValue>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QJSValue>
-#include <QQmlExpression>
+#include <QMouseEvent>
+#include <QObject>
+#include <QProcess>
+#include <QQmlApplicationEngine>
 #include <QQmlContext>
-#include <QElapsedTimer>
-#include <QDir>
+#include <QQmlExpression>
+#include <QQuickImageProvider>
+#include <QQuickItem>
+#include <QQuickWindow>
+#include <QSet>
+#include <QSize>
+#include <QStandardPaths>
+#include <QTemporaryDir>
+#include <QThread>
+#include <QTimer>
 #include <QUrl>
-
+#include <QVariantMap>
+#include <QWheelEvent>
+#include <QtWebEngineQuick/qquickwebengineprofile.h>
+#include <QtWebEngineQuick/qtwebenginequickglobal.h>
 #include <algorithm>
+#include <arpa/inet.h>
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <sys/socket.h>
+#include <unistd.h>
 
 namespace {
 
@@ -691,6 +693,24 @@ int main(int argc, char** argv) {
         preview.resetStats();
         report(preview.renderStats(QString{}).value(QStringLiteral("frames")).toULongLong() == 0,
                "reset clears the displayed per-canvas frame count");
+        // Exercise the actual timer, without renderer load hiding timer drift. Rounding
+        // 60/59.94 Hz to a repeating 17 ms timer loses more than two frames in two seconds.
+        for (const ldoc::Fps rate : {ldoc::Fps{60, 1}, ldoc::Fps{60000, 1001}}) {
+            libertas::ui::Preview cadence(nullptr);
+            cadence.setLive(true, rate);
+            auto* timer = cadence.findChild<QTimer*>();
+            int ticks = 0;
+            const auto connection =
+                QObject::connect(timer, &QTimer::timeout, &cadence, [&] { ++ticks; });
+            QElapsedTimer elapsed;
+            elapsed.start();
+            pump(2000);
+            cadence.setLive(false, rate);
+            QObject::disconnect(connection);
+            const double expected = static_cast<double>(elapsed.nsecsElapsed()) * rate.hz() / 1e9;
+            report(std::abs(ticks - expected) < 2.0,
+                   "fractional frame deadlines preserve 60 and 59.94 FPS without drift");
+        }
         // The caption updates in the same event as the frame. The image paints on the next
         // pass, and a picture that appears between the two drag grabs is counted as spill.
         settle();
@@ -1380,13 +1400,13 @@ int main(int argc, char** argv) {
                         view->setProperty("selectedKind", "output");
                         view->setProperty("selectedId", QString::fromStdString(output.id.to_string()));
                         settle();
-                        auto* protocol = props->findChild<QQuickItem*>("encodeDestinationProtocol");
+                        auto* protocol = props->findChild<QQuickItem*>("encodeDestinationType");
                         auto* url = props->findChild<QQuickItem*>("encodeDestinationUrl");
                         auto* key = props->findChild<QQuickItem*>("encodeDestinationKey");
                         report(protocol && protocol->isVisible() && url && url->isVisible() &&
                                    key && key->isVisible() && key->property("echoMode").toInt() == 2 &&
-                                   document.destinationKinds().size() == 4,
-                               "stream properties expose protocol, URL and a masked key with only stream protocols");
+                                   document.destinationKinds().size() > 70,
+                               "stream properties expose a destination catalog, URL and a masked key");
                         if (parser.isSet(shot_opt))
                             grab().save(parser.value(shot_opt) + QStringLiteral("/encode-destination-properties.png"));
                         if (protocol && url && key) {
@@ -1397,12 +1417,48 @@ int main(int argc, char** argv) {
                             const auto settings = document.outputEncoderSettings(QString::fromStdString(output.id.to_string()));
                             report(settings.value("destinationKind") == "srt" &&
                                        settings.value("url") == "srt://localhost:9000",
-                                   "destination protocol and URL fields edit the selected stream");
+                                   "destination type and URL fields edit the selected stream");
                             QMetaObject::invokeMethod(key, "committed", Q_ARG(QString, QStringLiteral("arming-private-key-check")));
                             report(ldoc::project_to_json(document.projectForBindings()).find("arming-private-key-check") == std::string::npos,
                                    "typing a stream key never writes it to the document");
                             document.undo();
                             document.undo();
+                            const auto outputId = QString::fromStdString(output.id.to_string());
+                            const auto beforeService = document.projectForBindings().outputs;
+                            document.setOutputService(outputId, QStringLiteral("twitch"));
+                            settle();
+                            const auto twitch = document.outputEncoderSettings(outputId);
+                            auto* server = props->findChild<QQuickItem*>("encodeDestinationServer");
+                            auto* account = props->findChild<QQuickItem*>("connectDestinationAccount");
+                            report(twitch.value("service") == "twitch" &&
+                                       twitch.value("url") == "rtmp://live.twitch.tv/app" &&
+                                       twitch.value("credentialRef").toString().isEmpty() &&
+                                       server && server->isVisible() && !url->isVisible() &&
+                                       account && account->isVisible(),
+                                   "Twitch selection supplies ingest servers, account login and a fresh key reference");
+                            const auto armed = std::find_if(document.projectForBindings().outputs.begin(),
+                                document.projectForBindings().outputs.end(),
+                                [&](const auto& o) { return o.id == output.id; });
+                            report(armed != document.projectForBindings().outputs.end() && !armed->enabled,
+                                   "changing destination disarms the output");
+                            if (parser.isSet(shot_opt))
+                                grab().save(parser.value(shot_opt) + QStringLiteral("/encode-twitch-properties.png"));
+                            document.setOutputService(outputId, QStringLiteral("youtube"));
+                            settle();
+                            report(document.outputEncoderSettings(outputId).value("destinationKind") == "rtmps" &&
+                                       account && account->isVisible(),
+                                   "YouTube defaults to secure ingestion and exposes account login");
+                            document.undo();
+                            document.undo();
+                            settle();
+                            report(document.projectForBindings().outputs == beforeService,
+                                   "undo restores the original destination, key reference and arming state");
+                            document.setOutputService(outputId, QStringLiteral("srt"));
+                            settle();
+                            report(url->isVisible() && !key->isVisible() && !account->isVisible(),
+                                   "SRT exposes its address without RTMP keys or account login");
+                            document.undo();
+                            settle();
                         }
                         view->setProperty("selectedKind", oldKind);
                         view->setProperty("selectedId", oldId);
@@ -2636,6 +2692,11 @@ int main(int argc, char** argv) {
         {
             document.addSource(QStringLiteral("Capture settings check"), QStringLiteral("source.v4l2"));
             const auto camera = document.recentSources(1).front().toMap().value("id").toString();
+            report(document.sourceDetails(camera).value("settings").toMap().value("resolution") ==
+                       "Match incoming signal" &&
+                   document.sourceDetails(camera).value("settings").toMap().value("frameRate") ==
+                       "Match incoming signal",
+                   "new video sources default to matching incoming resolution and frame rate");
             const auto defaults = document.sourceDetails(camera).value("settings").toMap();
             report(defaults.value("videoFormat") == "Auto" && defaults.value("buffering").toBool() &&
                        !defaults.value("autoReset").toBool() && defaults.value("timeoutFrames").toInt() == 5,
@@ -2769,6 +2830,13 @@ int main(int argc, char** argv) {
                 }
                 QMetaObject::invokeMethod(dialog, "close");
             }
+            for (const QString& rate : {QStringLiteral("60"), QStringLiteral("59.94")}) {
+                document.applySourceSettings(camera, QString{}, {{"frameRate", rate}});
+                report(document.sourceDetails(camera).value("settings").toMap().value("frameRate") == rate,
+                       "explicit capture FPS survives applying and reopening source settings");
+            }
+            document.undo();
+            document.undo();
             document.undo();
             document.undo();
             document.undo();
@@ -5499,15 +5567,88 @@ int main(int argc, char** argv) {
                                 click(save);
                             }
                             settle();
-                            qputenv("PATH", oldPath);
-                            if (oldFile.isNull()) qunsetenv("LIBERTAS_TEST_KEY_FILE");
-                            else qputenv("LIBERTAS_TEST_KEY_FILE", oldFile);
                             QFile secret(store.filePath("secret"));
                             report(secret.open(QIODevice::ReadOnly) && secret.readAll() == "self-check-only-key" &&
                                        !document.outputEncoderSettings(selected).value("credentialRef").toString().isEmpty(),
                                    "Save key sends the secret through stdin and stores only a reference");
-                            report(key->property("value").toString().isEmpty(),
-                                   "saving clears the key from the editor");
+                            report(key->property("value").toString() == "self-check-only-key" &&
+                                       key->property("echoMode").toInt() == 2,
+                                   "saving keeps the key in the password-masked editor");
+                            secret.close();
+                            auto* graph = view->findChild<QQuickItem*>("encodeGraph");
+                            auto* url = visibleControl("encodeDestinationUrl");
+                            const auto originalUrl =
+                                document.outputEncoderSettings(selected).value("url");
+                            const auto protocol = document.outputEncoderSettings(selected)
+                                                      .value("destinationKind")
+                                                      .toString();
+                            const auto typeWithoutEnter = [&](QQuickItem* field,
+                                                              const QString& text) {
+                                reveal(field);
+                                const auto inputs = collect(field, "textLineInput");
+                                report(!inputs.isEmpty(), "destination text editor exists");
+                                if (inputs.isEmpty())
+                                    return;
+                                inputs.front()->forceActiveFocus();
+                                QMetaObject::invokeMethod(inputs.front(), "selectAll");
+                                QInputMethodEvent edit;
+                                edit.setCommitString(text);
+                                QCoreApplication::sendEvent(inputs.front(), &edit);
+                            };
+                            const auto selectNode = [&](const QString& kind, const QString& id) {
+                                QMetaObject::invokeMethod(graph, "nodeSelected",
+                                                          Q_ARG(QString, kind), Q_ARG(QString, id));
+                                settle();
+                            };
+                            if (graph && url) {
+                                typeWithoutEnter(url, "rtmp://127.0.0.1/live/focus-check");
+                                selectNode("", "");
+                                selectNode("output", selected);
+                                report(document.outputEncoderSettings(selected).value("url") ==
+                                               "rtmp://127.0.0.1/live/focus-check" &&
+                                           url->property("value").toString() ==
+                                               "rtmp://127.0.0.1/live/focus-check",
+                                       "clicking off a destination commits its URL before "
+                                       "selection changes");
+                                typeWithoutEnter(key, "self-check-auto-saved-key");
+                                selectNode("", "");
+                                pump(200);
+                                selectNode("output", selected);
+                                report(secret.open(QIODevice::ReadOnly) &&
+                                           secret.readAll() == "self-check-auto-saved-key" &&
+                                           key->property("value").toString() ==
+                                               "self-check-auto-saved-key" &&
+                                           key->property("placeholder")
+                                               .toString()
+                                               .contains("Saved in keyring"),
+                                       "clicking off a destination saves its key and retains the "
+                                       "masked value");
+                                secret.close();
+                                report(helper.open(QIODevice::WriteOnly | QIODevice::Truncate),
+                                       "credential helper fixture can change its result");
+                                helper.write("#!/bin/sh\nexit 1\n");
+                                helper.close();
+                                typeWithoutEnter(key, "self-check-retry-key");
+                                selectNode("", "");
+                                pump(200);
+                                selectNode("output", selected);
+                                report(key->property("value").toString() == "self-check-retry-key",
+                                       "failed key saves retain the draft when reselecting the "
+                                       "destination");
+                                report(helper.open(QIODevice::WriteOnly | QIODevice::Truncate),
+                                       "credential helper fixture can change its result");
+                                helper.write("#!/bin/sh\ncat > \"$LIBERTAS_TEST_KEY_FILE\"\n");
+                                helper.close();
+                                QMetaObject::invokeMethod(save, "clicked");
+                                pump(200);
+                                document.setOutputDestination(selected, protocol,
+                                                              originalUrl.toString());
+                            }
+                            qputenv("PATH", oldPath);
+                            if (oldFile.isNull())
+                                qunsetenv("LIBERTAS_TEST_KEY_FILE");
+                            else
+                                qputenv("LIBERTAS_TEST_KEY_FILE", oldFile);
                         }
                 }
                 if (view) {
@@ -5693,6 +5834,29 @@ int main(int argc, char** argv) {
                             report(record_button->isVisible() && preview.recording() &&
                                        preview.renderStats(canvas_id).value("frames").toULongLong() > initial_frames,
                                    "static recording keeps receiving frames after switching to Build");
+                            const auto output_stats = preview.outputStats();
+                            report(output_stats.value("available").toBool() &&
+                                       output_stats.value("frames").toULongLong() > 0 &&
+                                       output_stats.value("lag").toULongLong() <=
+                                           output_stats.value("missed").toULongLong(),
+                                   "running output reports actual frame and encoding lag counters");
+                            preview.resetStats();
+                            report(preview.outputStats().value("frames").toULongLong() == 0 &&
+                                       preview.outputStats().value("missed").toULongLong() == 0 &&
+                                       preview.outputStats().value("lag").toULongLong() == 0,
+                                   "Reset Stats resets output counters with the render counters");
+                            // Simulate a screenshot/modal stall of the actual Qt/UI thread.
+                            const auto before_ui_pause = preview.outputStats();
+                            QThread::msleep(700);
+                            pump(100);
+                            const auto after_ui_pause = preview.outputStats();
+                            const double encoded_during_pause = static_cast<double>(
+                                after_ui_pause.value("frames").toULongLong() -
+                                before_ui_pause.value("frames").toULongLong());
+                            report(encoded_during_pause >= test_canvas.fps.hz() * 0.65 &&
+                                       after_ui_pause.value("missed").toULongLong() <=
+                                           before_ui_pause.value("missed").toULongLong() + 2,
+                                   "blocking the UI for 700 ms does not pause output or lose its frames");
                             if (parser.isSet(shot_opt))
                                 grab().save(parser.value(shot_opt) + QStringLiteral("/persistent-recording.png"));
                             click(record_button);
@@ -5706,6 +5870,178 @@ int main(int argc, char** argv) {
                             report(!preview.recording() && !preview.recordingPending() &&
                                        window->property("notice").toString().contains("size changed"),
                                    "recording failure resets Record and reports why it stopped");
+                            // Exercise the actual Go Live button against a local RTMP receiver.
+                            const auto live_buttons =
+                                collect(window->contentItem(), "goLiveButton");
+                            const int listener_socket =
+                                ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+                            sockaddr_in local{};
+                            local.sin_family = AF_INET;
+                            local.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+                            socklen_t local_size = sizeof(local);
+                            const bool bound =
+                                listener_socket >= 0 &&
+                                ::bind(listener_socket, reinterpret_cast<sockaddr*>(&local),
+                                       sizeof(local)) == 0 &&
+                                ::getsockname(listener_socket, reinterpret_cast<sockaddr*>(&local),
+                                              &local_size) == 0;
+                            if (listener_socket >= 0)
+                                ::close(listener_socket);
+                            report(bound && !live_buttons.isEmpty(),
+                                   "Go Live has a local RTMP test endpoint");
+                            if (bound && !live_buttons.isEmpty()) {
+                                for (const auto& o : configured.outputs)
+                                    if (o.destination.kind != ldoc::DestinationKind::File &&
+                                        o.destination.kind != ldoc::DestinationKind::Replay)
+                                        document.setOutputEnabled(
+                                            QString::fromStdString(o.id.to_string()), false);
+                                ldoc::Output stream;
+                                stream.id = ldoc::Id::generate();
+                                stream.encode = video->id;
+                                stream.audio_encode = recording->audio_encode;
+                                stream.enabled = true;
+                                stream.destination.url =
+                                    "rtmp://127.0.0.1:" + std::to_string(ntohs(local.sin_port)) +
+                                    "/live";
+                                stream.destination.credential_ref = "self-check-key";
+                                document.runCommand(ldoc::SetCanvas{test_canvas});
+                                document.runCommand(
+                                    ldoc::AddOutput{stream, configured.outputs.size()});
+                                QTemporaryDir key_store;
+                                QFile helper(key_store.filePath("secret-tool"));
+                                report(helper.open(QIODevice::WriteOnly), "test key store opens");
+                                helper.write(
+                                    "#!/bin/sh\nif [ \"$1\" = store ]; then cat >/dev/null; "
+                                    "else printf '%s\\n' self-check-publish-key; fi\n");
+                                helper.close();
+                                helper.setPermissions(QFile::ReadOwner | QFile::WriteOwner |
+                                                      QFile::ExeOwner);
+                                const QByteArray saved_path = qgetenv("PATH");
+                                const auto received =
+                                    recording_folder.filePath("rtmp-received.mkv");
+                                QProcess receiver;
+                                receiver.start(QStandardPaths::findExecutable("ffmpeg"),
+                                               {"-nostdin", "-v", "error", "-listen", "1",
+                                                "-timeout", "10", "-i",
+                                                QString::fromStdString(stream.destination.url) +
+                                                    "/self-check-publish-key",
+                                                "-c", "copy", received});
+                                report(receiver.waitForStarted(), "local RTMP receiver starts");
+                                pump(300);
+                                qputenv("PATH", key_store.path().toUtf8() + ':' + saved_path);
+                                settle();
+                                auto* live_button = live_buttons.front();
+                                report(live_button->isEnabled(),
+                                       "Go Live enables for an armed H.264/AAC route");
+                                workspace.openEncode(QString::fromStdString(stream.id.to_string()));
+                                settle();
+                                const auto key_fields =
+                                    collect(window->contentItem(), "encodeDestinationKey");
+                                const auto key_saves =
+                                    collect(window->contentItem(), "encodeSaveDestinationKey");
+                                if (!key_fields.isEmpty() && !key_saves.isEmpty()) {
+                                    auto* key_field = key_fields.front();
+                                    const auto editors = collect(key_field, "textLineInput");
+                                    if (!editors.isEmpty()) {
+                                        editors.front()->forceActiveFocus();
+                                        QMetaObject::invokeMethod(editors.front(), "selectAll");
+                                        QInputMethodEvent edit;
+                                        edit.setCommitString("self-check-publish-key");
+                                        QCoreApplication::sendEvent(editors.front(), &edit);
+                                        QMetaObject::invokeMethod(key_saves.front(), "clicked");
+                                        pump(100);
+                                        for (int i = 0; i < 50 && !key_field->isEnabled(); ++i)
+                                            pump(20);
+                                        report(
+                                            key_field->property("value").toString() ==
+                                                    "self-check-publish-key" &&
+                                                key_field->property("echoMode").toInt() == 2 &&
+                                                live_button->isEnabled() &&
+                                                document.outputEncoderSettings(
+                                                            QString::fromStdString(
+                                                                stream.id.to_string()))
+                                                        .value("url")
+                                                        .toString() ==
+                                                    QString::fromStdString(stream.destination.url),
+                                            "saving a key retains its masked value, URL, arming "
+                                            "and Go Live readiness");
+                                        report(ldoc::project_to_json(document.projectForBindings())
+                                                       .find("self-check-publish-key") ==
+                                                   std::string::npos,
+                                               "retaining the masked editor value never puts the "
+                                               "secret in project JSON");
+                                    }
+                                } else
+                                    report(false, "armed stream has editable key controls");
+
+                                document.setOutputEnabled(
+                                    QString::fromStdString(stream.id.to_string()), false);
+                                settle();
+                                report(!live_button->isEnabled(),
+                                       "Go Live disables when no destination is armed");
+                                document.setOutputEnabled(
+                                    QString::fromStdString(stream.id.to_string()), true);
+                                settle();
+                                click(live_button);
+                                for (int i = 0; i < 70 && preview.streamingPending(); ++i)
+                                    pump(100);
+                                qputenv("PATH", saved_path);
+                                report(
+                                    preview.streaming() && !preview.recording() &&
+                                        record_button->isEnabled(),
+                                    "Go Live retrieves the saved key and starts RTMP publishing");
+                                click(record_button);
+                                for (int i = 0; i < 70 && preview.recordingPending(); ++i)
+                                    pump(100);
+                                report(preview.streaming() && preview.recording() && live_button->isEnabled(),
+                                       "Record starts while streaming with the same encode and leaves Stop Live enabled");
+                                pump(1200);
+                                const auto simultaneous_path = preview.recordingPath();
+                                if (parser.isSet(shot_opt))
+                                    grab().save(parser.value(shot_opt) + "/rtmp-live.png");
+                                click(live_button);
+                                for (int i = 0; i < 70 && preview.streamingPending(); ++i)
+                                    pump(100);
+                                report(!preview.streaming() && !preview.streamingPending() && preview.recording(),
+                                       "Stop Live closes only the RTMP publisher while recording continues");
+                                pump(200);
+                                click(record_button);
+                                for (int i = 0; i < 70 && preview.recordingPending(); ++i)
+                                    pump(100);
+                                report(!preview.recording() && QFileInfo(simultaneous_path).size() > 0,
+                                       "Record stops independently and closes its shared-encode file");
+                                const bool received_stream =
+                                    (receiver.state() == QProcess::NotRunning ||
+                                     receiver.waitForFinished(5000)) &&
+                                    receiver.exitStatus() == QProcess::NormalExit &&
+                                    receiver.exitCode() == 0 && QFileInfo(received).size() > 0;
+                                report(received_stream,
+                                       ("the RTMP receiver saves a nonempty video file: " +
+                                        receiver.readAllStandardError())
+                                           .constData());
+                                if (receiver.state() != QProcess::NotRunning) {
+                                    receiver.kill();
+                                    receiver.waitForFinished();
+                                }
+                                document.setOutputCredentialRef(
+                                    QString::fromStdString(stream.id.to_string()), {});
+                                document.setOutputDestination(
+                                    QString::fromStdString(stream.id.to_string()), "rtmp",
+                                    "rtmp://127.0.0.1:1/live");
+                                settle();
+                                click(live_button);
+                                for (int i = 0; i < 70 && preview.streamingPending(); ++i)
+                                    pump(100);
+                                report(!preview.streaming() && !preview.streamingPending() &&
+                                           live_button->isEnabled(),
+                                       "an RTMP connection failure clears pending state and allows "
+                                       "retry");
+                                document.runCommand(ldoc::RemoveOutput{stream.id});
+                                for (const auto& o : configured.outputs)
+                                    if (o.destination.kind != ldoc::DestinationKind::File &&
+                                        o.destination.kind != ldoc::DestinationKind::Replay)
+                                        document.runCommand(ldoc::SetOutput{o});
+                            }
                             document.runCommand(ldoc::SetCanvas{*canvas});
                             document.runCommand(ldoc::SetEncode{*video});
                         }
@@ -6635,6 +6971,7 @@ int main(int argc, char** argv) {
                     document.projectForBindings().outputs.size() == 1,
                     "New opens a blank saved collection with default canvas, encode and destination");
                 const auto removed = document.projectPath();
+                const auto collectionsBeforeRemove = document.collections().size();
                 menu("menuCollectionRemove");
                 report(dialog->isVisible() && QFile::exists(removed + "/project.json"),
                        "Remove asks for confirmation before touching a collection");
@@ -6644,10 +6981,15 @@ int main(int argc, char** argv) {
                 // Qt's native Trash operates inside an isolated XDG data directory in --check.
                 menu("menuCollectionRemove");
                 accept();
-                report(!QFile::exists(removed) && document.projectName() == "Untitled" &&
-                    document.projectForBindings().encodes.size() == 1,
-                    "confirmed Remove moves the project to Trash and opens a blank default session");
+                report(!QFile::exists(removed) && document.projectPath() != removed &&
+                    !document.projectPath().isEmpty() &&
+                    document.collections().size() == collectionsBeforeRemove - 1,
+                    "confirmed Remove moves the project to Trash and opens a remaining collection");
+                const auto collectionsAfterRemove = document.collections().size();
                 report(document.openCollection(duplicate), "a prior collection survives removing another");
+                report(document.collections().size() == collectionsAfterRemove &&
+                           !QFile::exists(removed),
+                       "switching after removal does not save a replacement Untitled collection");
                 report(libertas::ui::Document::lastCollection() == std::filesystem::path(duplicate.toStdString()) &&
                     document.collections().size() >= 4, "collection catalog persists known collections and last-open path");
                 report(document.openCollection(original), "collection workflow returns to the original project");

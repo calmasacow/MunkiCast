@@ -4,21 +4,20 @@
 #include "document.hpp"
 
 #include "assetcache.hpp"
-
 #include "lcomp/composite.hpp"
-#include <lcomp/countdown.hpp>
 #include "ldoc/command.hpp"
 
-#include <QElapsedTimer>
 #include <QDateTime>
 #include <QDir>
-#include <QRegularExpression>
-#include <QFontDatabase>
+#include <QElapsedTimer>
 #include <QFileInfo>
+#include <QFontDatabase>
 #include <QImageReader>
 #include <QProcess>
+#include <QRegularExpression>
 #include <QStandardPaths>
 #include <QTransform>
+#include <QUrl>
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -27,6 +26,7 @@
 #include <lcapture/audio.hpp>
 #include <lcapture/screen.hpp>
 #include <lcapture/video.hpp>
+#include <lcomp/countdown.hpp>
 #include <lcomp/filters.hpp>
 #include <lcore/log.hpp>
 #include <set>
@@ -87,6 +87,21 @@ void Document::configure(std::filesystem::path project_dir) {
 Document* Document::create(QQmlEngine*, QJSEngine*) { return new Document; }
 
 Document::Document(QObject* parent) : QObject(parent) {
+    connect(this, &Document::outputKeySaveFinished, &connectors_, &Connectors::keySaved);
+    connect(&connectors_, &Connectors::authorized, this,
+            [this](const QString& id, const QString& service, const QString& project,
+                   const QString& url, const QString& key) {
+        if (id_str(session_->project().id) != project ||
+            outputEncoderSettings(id).value("service").toString() != service) return;
+        const auto kind = url.startsWith("rtmps://") ? QStringLiteral("rtmps") : QStringLiteral("rtmp");
+        setOutputDestination(id, kind, url);
+        saveOutputKey(id, key);
+    });
+    connect(this, &Document::changed, this, [this] {
+        if (!connectors_.busy()) return;
+        const auto settings = outputEncoderSettings(connectors_.target());
+        if (settings.isEmpty()) connectors_.cancel();
+    });
     if (g_project_dir.empty()) {
         session_ = lsession::LocalSession::in_memory(studioProject("Untitled"));
     } else {
@@ -1998,10 +2013,13 @@ constexpr FieldSpec kCamera[] = {
      "Remove any separate audio source using the same input to avoid doubling the mix.",
      "note"},
     {"videoFormat", "Video format", "choice", "Auto", false, 0, "Auto"},
-    {"resolution", "Resolution", "choice", "Leave unchanged", false, 0,
-     "Leave unchanged|3840x2160|2560x1440|1920x1080|1280x720|960x540|640x480"},
-    {"frameRate", "Frame rate", "choice", "Leave unchanged", false, 0,
-     "Leave unchanged|60|59.94|50|30|29.97|25|24"},
+    {"resolution", "Resolution", "choice", "Match incoming signal", false, 0,
+     "Match incoming signal|Leave unchanged|3840x2160|2560x1440|1920x1080|1280x720|960x540|640x480"},
+    {"frameRate", "Frame rate", "choice", "Match incoming signal", false, 0,
+     "Match incoming signal|Leave unchanged|120|60|59.94|50|30|29.97|25|24"},
+    {"", "Match incoming signal detects input timing and follows changes. The capture rate must "
+         "be within 0.5% of the input rate. If the device cannot report its input timing, select "
+         "an explicit mode. Use current device mode keeps its existing USB capture settings.", "note"},
     {"colourRange", "Colour range", "choice", "Default", false, 0, "Default|Partial|Full"},
     {"buffering", "Use buffering", "bool", "", true},
     {"",
@@ -2576,6 +2594,9 @@ QVariantList Document::sourceSettingsSchema(const QString& type) const {
         }
         const QString choices = QString::fromLatin1(f.choices);
         QStringList options = choices.isEmpty() ? QStringList{} : choices.split(QLatin1Char('|'));
+        if (type == QLatin1String("source.v4l2") &&
+            (std::string_view{f.key} == "resolution" || std::string_view{f.key} == "frameRate"))
+            m["choiceLabels"] = QVariantMap{{"Leave unchanged", QStringLiteral("Use current device mode")}};
         if (type == QLatin1String("source.clone") && std::string_view{f.key} == "target") {
             QVariantMap labels;
             options.append(QString{});
@@ -3408,19 +3429,7 @@ QVariantList Document::transitions() const {
 }
 
 QVariantList Document::destinationKinds() const {
-    static constexpr ldoc::DestinationKind kKinds[] = {
-        ldoc::DestinationKind::Rtmps, ldoc::DestinationKind::Rtmp,
-        ldoc::DestinationKind::Srt,   ldoc::DestinationKind::Whip,
-    };
-    QVariantList out;
-    for (const ldoc::DestinationKind k : kKinds) {
-        const auto id = ldoc::to_string(k);
-        QVariantMap m;
-        m["id"] = QString::fromUtf8(id.data(), static_cast<qsizetype>(id.size()));
-        m["title"] = m["id"].toString().toUpper();
-        out.append(m);
-    }
-    return out;
+    return Connectors::catalog();
 }
 
 QVariantList Document::codecs() const {
@@ -3704,6 +3713,34 @@ void Document::initializeEncodeGraph() {
     }
     if (!steps.empty())
         run(ldoc::make_batch(std::move(steps), "Initialize Encode graph"));
+}
+
+QVariantMap Document::streamingTarget() const {
+    const auto& p = session_->project();
+    const ldoc::Output* selected = nullptr;
+    for (const auto& o : p.outputs) {
+        if (!o.enabled || o.destination.kind == ldoc::DestinationKind::File ||
+            o.destination.kind == ldoc::DestinationKind::Replay)
+            continue;
+        if (selected)
+            return {{"reason", tr("Arm exactly one streaming destination for basic RTMP.")}};
+        selected = &o;
+    }
+    if (!selected)
+        return {{"reason", tr("Configure and arm an RTMP destination in Encode.")}};
+    const auto& d = selected->destination;
+    const QUrl url(qstr(d.url), QUrl::StrictMode);
+    if ((d.kind != ldoc::DestinationKind::Rtmp && d.kind != ldoc::DestinationKind::Rtmps) ||
+        !url.isValid() || url.scheme() != qstr(std::string(ldoc::to_string(d.kind))) ||
+        url.host().isEmpty() || url.path().isEmpty() || url.hasFragment() ||
+        !url.userInfo().isEmpty() || qstr(d.url).contains(QRegularExpression("[\\x00-\\x20]")))
+        return {{"reason", tr("Enter a valid RTMP or RTMPS server URL with an application path.")}};
+    const auto* video = p.encode(selected->encode);
+    const auto* audio = selected->audio_encode ? p.audio_encode(*selected->audio_encode) : nullptr;
+    if (!video || !p.canvas(video->canvas) || video->encoder.codec != "h264" || !audio ||
+        audio->codec != "aac" || !p.bus(audio->bus))
+        return {{"reason", tr("Connect H.264 video and AAC audio to the streaming destination.")}};
+    return {{"outputId", id_str(selected->id)}, {"reason", tr("Start the armed RTMP destination")}};
 }
 
 QString Document::recordingEncodeId() const {
@@ -4320,6 +4357,35 @@ void Document::setEncodeEncoder(const QString& id, const QString& codec,
     });
 }
 
+void Document::setOutputService(const QString& id, const QString& service) {
+    const auto entry = Connectors::service(service);
+    if (entry.isEmpty()) return;
+    const auto kind = ldoc::destination_kind_from_string(to_std(entry.value("kind").toString()));
+    if (!kind) return;
+    if (connectors_.target() == id) connectors_.cancel();
+    edit_output(id, [&](ldoc::Output& o) {
+        if (o.destination.kind == ldoc::DestinationKind::File ||
+            o.destination.kind == ldoc::DestinationKind::Replay) return;
+        o.destination.service = to_std(service);
+        o.destination.kind = *kind;
+        o.destination.url.clear();
+        o.destination.credential_ref.clear();
+        o.enabled = false;
+        const auto servers = entry.value("servers").toList();
+        if (!servers.isEmpty()) {
+            const auto url = servers.first().toMap().value("id").toString();
+            o.destination.url = to_std(url);
+            if (url.startsWith("rtmps://")) o.destination.kind = ldoc::DestinationKind::Rtmps;
+        }
+    });
+}
+
+void Document::connectOutputAccount(const QString& id) {
+    const auto settings = outputEncoderSettings(id);
+    if (settings.isEmpty()) return;
+    connectors_.start(id, settings.value("service").toString(), id_str(session_->project().id));
+}
+
 void Document::setOutputDestination(const QString& id, const QString& kind, const QString& url) {
     const auto parsed_kind = ldoc::destination_kind_from_string(to_std(kind));
     if (!kind.isEmpty() && !parsed_kind) {
@@ -4365,6 +4431,9 @@ QVariantMap Document::outputEncoderSettings(const QString& id) const {
             settings["destinationKind"] = QString::fromUtf8(kind.data(), static_cast<qsizetype>(kind.size()));
             settings["url"] = qstr(o.destination.url);
             settings["credentialRef"] = qstr(o.destination.credential_ref);
+            const auto fallback = o.destination.kind == ldoc::DestinationKind::Rtmps
+                ? QStringLiteral("rtmp") : settings["destinationKind"].toString();
+            settings["service"] = o.destination.service.empty() ? fallback : qstr(o.destination.service);
             return settings;
         }
     }
@@ -4502,6 +4571,7 @@ void Document::saveOutputKey(const QString& id, const QString& key) {
     const auto parsed = parse_id(id);
     if (!parsed || key.isEmpty() || key.size() > 16384 || key.contains(QChar::Null)) {
         emit notice(QStringLiteral("Enter a nonempty stream key (at most 16384 characters)."));
+        emit outputKeySaveFinished(id, false);
         return;
     }
     QString ref;
@@ -4513,36 +4583,46 @@ void Document::saveOutputKey(const QString& id, const QString& key) {
             break;
         }
     }
-    if (!found)
+    if (!found) {
+        emit outputKeySaveFinished(id, false);
         return;
+    }
     if (ref.isEmpty())
         ref = QStringLiteral("libertas-output-%1").arg(id_str(ldoc::Id::generate()));
     const auto helper = QStandardPaths::findExecutable(QStringLiteral("secret-tool"));
     if (helper.isEmpty()) {
         emit notice(QStringLiteral("Install secret-tool and unlock a Secret Service keyring to save keys."));
+        emit outputKeySaveFinished(id, false);
         return;
     }
     auto* process = new QProcess(this);
     auto* timeout = new QTimer(process);
     timeout->setSingleShot(true);
     const auto projectId = session_->project().id;
+    const auto service = outputEncoderSettings(id).value("service");
     connect(timeout, &QTimer::timeout, process, [process] { process->kill(); });
-    connect(process, &QProcess::errorOccurred, this, [this, process](QProcess::ProcessError error) {
-        if (error == QProcess::FailedToStart) {
-            emit notice(QStringLiteral("Could not start the stream key store."));
-            process->deleteLater();
-        }
-    });
+    connect(process, &QProcess::errorOccurred, this,
+            [this, process, id](QProcess::ProcessError error) {
+                if (error == QProcess::FailedToStart) {
+                    emit notice(QStringLiteral("Could not start the stream key store."));
+                    emit outputKeySaveFinished(id, false);
+                    process->deleteLater();
+                }
+            });
     connect(process, &QProcess::finished, this,
-            [this, process, timeout, id, ref, projectId](int code, QProcess::ExitStatus status) {
+            [this, process, timeout, id, ref, projectId, service](int code, QProcess::ExitStatus status) {
         timeout->stop();
         if (status == QProcess::NormalExit && code == 0) {
-            if (session_->project().id == projectId)
+            if (session_->project().id == projectId &&
+                outputEncoderSettings(id).value("service") == service)
                 setOutputCredentialRef(id, ref);
             emit notice(QStringLiteral("Stream key saved in the system keyring."));
         } else {
             emit notice(QStringLiteral("Stream key was not saved. Check that the Secret Service keyring is unlocked."));
         }
+        emit outputKeySaveFinished(id, status == QProcess::NormalExit && code == 0 &&
+                                           session_->project().id == projectId &&
+                                           outputEncoderSettings(id).value("service") == service);
         process->deleteLater();
     });
     process->start(helper, {QStringLiteral("store"), QStringLiteral("--label=Libertas Studio stream key"),

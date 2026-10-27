@@ -159,6 +159,7 @@ Project random_project(std::mt19937& rng) {
     out.destination.kind = DestinationKind::Rtmps;
     out.destination.url = "rtmps://a.rtmps.youtube.com/live2";
     out.destination.credential_ref = "youtube-main";
+    out.destination.service = "youtube";
     out.enabled = true;
     p.outputs.push_back(out);
 

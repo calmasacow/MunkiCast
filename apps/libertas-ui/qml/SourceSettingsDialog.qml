@@ -349,6 +349,15 @@ Item {
                 width: scroll.width
                 spacing: 4
 
+                Text {
+                    width: parent.width
+                    visible: dialog.typeId === "source.v4l2"
+                    text: qsTr("Capture FPS is independent of canvas FPS. Settings apply on OK. Check requested, negotiated and received FPS in Broadcast Statistics.")
+                    color: Theme.c.textMuted
+                    font.pixelSize: 10
+                    wrapMode: Text.WordWrap
+                }
+
                 // The source's own name, which is a different thing from the source node's: one
                 // camera can sit in six scenes under six labels, and this is the camera.
                 TextLine {

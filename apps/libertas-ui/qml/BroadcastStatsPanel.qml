@@ -8,20 +8,7 @@ import Libertas
 
 /// How the broadcast is actually going.
 ///
-/// Two kinds of number live here and they are drawn differently on purpose.
-///
-/// The machine's figures — CPU, memory, free disk, GPU load, encoder load, VRAM — are measured
-/// right now and are real. The show's figures — frame rate, render time, frames missed to
-/// rendering lag belong to preview compositing and are reported per canvas. Encoding and output
-/// figures remain unavailable until an encoder exists.
-///
-/// Not as zero. "0 / 0 (0.0%)" dropped frames reads as *nothing is being dropped*, which is a
-/// claim about a running show; "—" says there is no show. Those are different sentences and only
-/// one of them is true.
-///
-/// The encoder figure is separate from GPU load because it is the one that catches people out: a
-/// GPU sitting at 40% whose video encode engine is pinned at 100% drops frames while looking
-/// idle, and on this machine the second stream is what saturates it.
+/// Render counters measure compositing; output counters measure delivered frames and stalls.
 Item {
     id: panel
 
@@ -31,6 +18,27 @@ Item {
         if (n >= 1024 * 1024 * 1024)
             return (n / (1024 * 1024 * 1024)).toFixed(1) + " GB";
         return (n / (1024 * 1024)).toFixed(1) + " MB";
+    }
+
+    property var output: Preview.outputStats()
+    property var captures: Preview.captureStats()
+    Timer {
+        interval: 250
+        repeat: true
+        running: panel.visible
+        onTriggered: panel.output = Preview.outputStats()
+    }
+    Connections {
+        target: Preview
+        function onChanged() {
+            panel.output = Preview.outputStats();
+            panel.captures = Preview.captureStats();
+        }
+    }
+
+    function frameCount(n) {
+        const total = panel.output.frames + panel.output.missed;
+        return n + " (" + (total > 0 ? 100 * n / total : 0).toFixed(1) + "%)";
     }
 
     readonly property string unavailable: "—"
@@ -216,17 +224,61 @@ Item {
                 }
             }
 
+            Repeater {
+                model: panel.captures
+                delegate: Column {
+                    required property var modelData
+                    width: body.width
+                    Text {
+                        width: parent.width
+                        text: modelData.name + qsTr(" capture")
+                        color: Theme.c.accent
+                        font.pixelSize: 10
+                        topPadding: 6
+                    }
+                    StatRow {
+                        width: parent.width
+                        label: qsTr("Requested FPS")
+                        value: modelData.requested
+                    }
+                    StatRow {
+                        width: parent.width
+                        label: qsTr("Device negotiated FPS")
+                        value: modelData.negotiated > 0 ? modelData.negotiated.toFixed(3) : panel.unavailable
+                    }
+                    StatRow {
+                        width: parent.width
+                        label: qsTr("Received FPS (1 second)")
+                        value: modelData.received.toFixed(3)
+                    }
+                    Text {
+                        width: parent.width
+                        text: modelData.error || qsTr("Arrival rate; repeated images still count as frames.")
+                        color: modelData.error ? Theme.c.warning : Theme.c.textMuted
+                        font.pixelSize: 9
+                        wrapMode: Text.WordWrap
+                    }
+                }
+            }
+
             StatRow {
                 width: parent.width
+                objectName: "encoderSkippedFrames"
                 label: qsTr("Skipped frames due to encoding lag")
-                value: panel.unavailable
+                value: panel.output.available ? panel.frameCount(panel.output.lag) : panel.unavailable
+            }
+
+            StatRow {
+                width: parent.width
+                label: qsTr("Output frames missed (all causes)")
+                value: panel.output.available ? panel.frameCount(panel.output.missed) : panel.unavailable
             }
 
             Text {
                 width: parent.width
                 wrapMode: Text.WordWrap
                 text: Preview.rendererAttached
-                    ? qsTr("Render time and missed frames describe preview compositing. Encoding stats appear when an output encoder is running.")
+                    ? qsTr("Render counters include full-size compositing for active outputs. Encoding lag counts output frames missed while encoding or writing packets. All causes also includes scheduling and rendering delays.")
                     : qsTr("Waiting for renderer statistics.")
                 font.pixelSize: 9
                 color: Theme.c.textMuted
