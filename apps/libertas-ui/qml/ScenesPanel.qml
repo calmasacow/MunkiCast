@@ -69,6 +69,12 @@ Item {
         z: 45
     }
 
+    SceneReorder {
+        id: reorder
+        view: list
+        favourites: false
+    }
+
     ListView {
         id: list
 
@@ -113,13 +119,54 @@ Item {
                  : mouse.containsMouse ? Theme.c.panelHeaderActive
                  : "transparent"
 
+            border.width: row.activeFocus ? 1 : 0
+            border.color: Theme.c.text
+            opacity: reorder.dragging && reorder.sceneId === row.sceneId ? 0.45 : 1
+            activeFocusOnTab: true
+            Accessible.role: Accessible.ListItem
+            Accessible.name: row.name
+            Accessible.description: qsTr("Drag to reorder, or use Ctrl+Up and Ctrl+Down")
+            Keys.onEscapePressed: reorder.cancel()
+            Keys.onPressed: event => {
+                if ((event.modifiers & Qt.ControlModifier) &&
+                    (event.key === Qt.Key_Up || event.key === Qt.Key_Down)) {
+                    reorder.step(row.sceneId, row.index, event.key === Qt.Key_Up ? -1 : 1);
+                    event.accepted = true;
+                }
+            }
+            Keys.onReturnPressed: Document.activateScene(row.sceneId)
+            Keys.onSpacePressed: Document.activateScene(row.sceneId)
+
             MouseArea {
                 id: mouse
 
                 anchors.fill: parent
                 hoverEnabled: true
+                property bool suppressClick: false
+                cursorShape: reorder.dragging ? Qt.ClosedHandCursor : Qt.ArrowCursor
+                onPressed: event => {
+                    suppressClick = false;
+                    if (event.button === Qt.LeftButton) {
+                        row.forceActiveFocus();
+                        reorder.begin(row.sceneId, mapToItem(reorder, event.x, event.y));
+                    }
+                }
+                onPositionChanged: event => {
+                    if (pressed && (pressedButtons & Qt.LeftButton)) {
+                        reorder.move(mapToItem(reorder, event.x, event.y));
+                        suppressClick = suppressClick || reorder.dragging;
+                    }
+                }
+                onReleased: event => {
+                    if (event.button === Qt.LeftButton) {
+                        suppressClick = suppressClick || reorder.dragging;
+                        reorder.finish();
+                    }
+                }
+                onCanceled: reorder.cancel()
                 acceptedButtons: Qt.LeftButton | Qt.RightButton
                 onClicked: (ev) => {
+                    if (mouse.suppressClick) return;
                     if (ev.button !== Qt.RightButton) {
                         Document.activateScene(row.sceneId);
                         return;
@@ -154,6 +201,7 @@ Item {
                     sceneMenu.popup(at.x, at.y, rows);
                 }
                 onDoubleClicked: {
+                    if (mouse.suppressClick) return;
                     rename.text = row.name;
                     rename.visible = true;
                     rename.forceActiveFocus();

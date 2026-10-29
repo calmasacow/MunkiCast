@@ -112,6 +112,8 @@ class AudioSources {
         std::vector<ldoc::Effect> node_effects;
         FilterPath parents;
         ldoc::Id source;
+        double transition_gain = 1;
+        bool transition_weighted = false;
     };
 
     std::mutex mu_;
@@ -212,7 +214,8 @@ class AudioSources {
                 const bool ready =
                     process(input, route.node_effects, "node:" + route.node.to_string()) &&
                     processed_ready[source];
-                const float volume = route.audio.mute ? 0 : gain(route.audio.gain_db);
+                const float volume = route.audio.mute ? 0 : gain(route.audio.gain_db) *
+                    static_cast<float>(route.transition_gain);
                 lcomp::AudioLevel level{route.node, 0, 0, ready};
                 for (std::size_t i = 0; i < input.size(); i += 2) {
                     level.left = std::max(level.left, std::abs(input[i] * volume));
@@ -229,7 +232,7 @@ class AudioSources {
                     add(destinations[*route.audio.bus], input, volume);
                 for (const auto& send : route.audio.sends)
                     add(destinations[send.to], input,
-                        (send.pre_fader ? (route.audio.mute ? 0 : 1) : volume) *
+                        (send.pre_fader ? (route.audio.mute ? 0 : static_cast<float>(route.transition_gain)) : volume) *
                             gain(send.gain_db));
                 if (route.audio.monitor) {
                     monitoring = true;
@@ -406,7 +409,7 @@ class AudioSources {
     }
 
     std::vector<lcomp::AudioLevel> meters(const ldoc::Project& project) {
-        std::set<ldoc::Id> wanted, visited;
+        std::set<ldoc::Id> wanted, visited, walking;
         std::vector<lcomp::AudioLevel> result;
         std::vector<Route> routes;
         const ldoc::Scene* owner = nullptr;
@@ -445,11 +448,33 @@ class AudioSources {
             if (!deactivate || !*deactivate)
                 session_for(source);
         }
+        double transition_gain = 1;
+        bool transition_weighted = false;
+        ldoc::Id current_deck;
+        std::map<ldoc::Id, std::map<ldoc::Id, double>> transition_gains;
         std::function<void(const std::vector<ldoc::Node>&)> walk;
         walk = [&](const std::vector<ldoc::Node>& nodes) {
             for (const auto& node : nodes) {
-                if (!node.visible || !visited.insert(node.id).second)
-                    continue;
+                if (!node.visible) continue;
+                if (!visited.insert(node.id).second) {
+                    if (transition_weighted)
+                        for (auto& route : routes)
+                            if (route.node == node.id && route.transition_weighted) {
+                                auto& gain = transition_gains[node.id][current_deck];
+                                gain = std::min(1.0, gain + transition_gain);
+                                route.transition_gain = std::max(route.transition_gain, gain);
+                            }
+                    if (!transition_weighted || node.kind() == ldoc::NodeKind::Source) continue;
+                }
+                if (!walking.insert(node.id).second) continue;
+                const auto previous_gain = transition_gain;
+                const bool previous_weighted = transition_weighted;
+                if (const auto weight = project.settings.extra.find("ui.transition-gain." + node.id.to_string());
+                    weight != project.settings.extra.end())
+                    if (const auto* value = std::get_if<double>(&weight->second)) {
+                        transition_gain *= std::clamp(*value, 0.0, 1.0);
+                        transition_weighted = true;
+                    }
                 const auto previous_depth = inherited.size();
                 if (node.kind() != ldoc::NodeKind::Source)
                     add_filters(node.id, node.effects);
@@ -474,6 +499,7 @@ class AudioSources {
                          source->type != "source.playlist" && source->type != "source.blackmagic" &&
                          source->type != "source.browser" && source->type != "source.v4l2")) {
                         inherited.resize(previous_depth);
+                        walking.erase(node.id);
                         continue;
                     }
                     auto session = session_for(*source);
@@ -485,18 +511,27 @@ class AudioSources {
                         if (change.mute) routing.mute = *change.mute;
                         if (change.sends) routing.sends = *change.sends;
                     }
+                    if (transition_weighted)
+                        transition_gains[node.id][current_deck] = transition_gain;
                     routes.push_back({node.id, session, std::move(routing), source->effects,
-                                      node.effects, inherited, source_id});
+                                      node.effects, inherited, source_id, transition_gain,
+                                      transition_weighted});
                 }
                 inherited.resize(previous_depth);
+                transition_gain = previous_gain;
+                transition_weighted = previous_weighted;
+                walking.erase(node.id);
             }
         };
         for (const auto& deck : project.decks) {
-            const auto preview = project.settings.extra.find("ui.filter-preview-deck");
-            if (preview != project.settings.extra.end())
-                if (const auto* id = std::get_if<std::string>(&preview->second);
-                    id && *id == deck.id.to_string())
-                    continue;
+            bool preview_only = false;
+            for (const auto* key : {"ui.filter-preview-deck", "ui.studio-preview-deck"})
+                if (const auto preview = project.settings.extra.find(key);
+                    preview != project.settings.extra.end())
+                    if (const auto* id = std::get_if<std::string>(&preview->second);
+                        id && *id == deck.id.to_string()) preview_only = true;
+            if (preview_only) continue;
+            current_deck = deck.id;
             if (deck.program_scene)
                 if (const auto* scene = project.scene(*deck.program_scene)) {
                     owner = scene;

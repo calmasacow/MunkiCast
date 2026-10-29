@@ -18,7 +18,7 @@
 
 namespace lcomp {
 
-/// The preview protocol. Version 10.
+/// The preview protocol. Version 11.
 ///
 /// Whole messages on a `lipc::Channel`, bulk in sealed memfds. The bytes are little-endian and
 /// carry no padding, so a reader does not depend on the writer's struct layout.
@@ -56,7 +56,7 @@ namespace lcomp {
 ///
 /// An empty payload cannot be sent (ADR-0026), and every message here starts with its kind, so
 /// none of them are empty.
-inline constexpr std::uint16_t kPreviewProtocol = 10;
+inline constexpr std::uint16_t kPreviewProtocol = 11;
 
 /// Capture packet: u32 count, then source ULID, negotiated/received milli-FPS,
 /// u16 error byte length and UTF-8 error. Rates describe arrivals, not unique images.
@@ -77,6 +77,8 @@ struct AudioPacket { ldoc::Id source; std::vector<float> samples; };
 ///
 /// The encode names the canvas, so this does not carry one: two recordings of the same canvas
 /// at different bitrates are two encodes, and that is the only way to say it (ADR-0029).
+enum class RecordOperation : std::uint8_t { Output, ReplayStart, ReplayStop, ReplaySave };
+
 struct RecordRequest {
     bool start = false;
     ldoc::Id encode;
@@ -84,6 +86,7 @@ struct RecordRequest {
     std::string path;
     /// Explicit destination for streaming; nil preserves the recording route.
     ldoc::Id output = ldoc::Id::nil();
+    RecordOperation operation = RecordOperation::Output;
 };
 
 /// What the renderer made of it. `error` empty means it did what was asked.
@@ -96,6 +99,9 @@ struct RecordState {
     std::uint64_t encode_lag = 0;
     bool recording = false, streaming = false;
     bool control_reply = true;
+    bool replay = false, replay_saving = false;
+    std::uint64_t replay_bytes = 0, replay_duration_ms = 0;
+    std::string clip_path = {};
 };
 
 /// One frame: owned pixels, or a retained read-only immutable mapping.

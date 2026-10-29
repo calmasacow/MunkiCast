@@ -12,9 +12,11 @@ Item {
     implicitHeight: info.height + 20
     property string recordTarget: ""
     property var streamTarget: ({})
+    property bool replayEnabled: false
     function refresh() {
         bar.recordTarget = Document.recordingEncodeId();
         bar.streamTarget = Document.streamingTarget();
+        bar.replayEnabled = !!Document.outputEncoderSettings(Document.replayOutputId()).enabled;
         Telemetry.setDiskPath(Document.recordingDirectory());
     }
     Component.onCompleted: refresh()
@@ -29,6 +31,22 @@ Item {
         if (n >= 1024 * 1024 * 1024)
             return (n / (1024 * 1024 * 1024)).toFixed(1) + " GB";
         return (n / (1024 * 1024)).toFixed(1) + " MB";
+    }
+
+    ToolButton {
+        objectName: "studioModeButton"
+        anchors.right: info.left
+        anchors.rightMargin: 20
+        anchors.verticalCenter: parent.verticalCenter
+        width: 100; height: 28
+        label: qsTr("Studio Mode")
+        tip: qsTr("Stage Main scenes before taking them to Program")
+        active: !!Document.mainDeck.studio
+        enabled: !!Document.mainDeck.id
+        onClicked: {
+            Preview.setManualTransition(-1);
+            Document.setDeckStudioMode(Document.mainDeck.id, !Document.mainDeck.studio);
+        }
     }
 
     Row {
@@ -145,9 +163,26 @@ Item {
         ToolButton {
             width: 96
             height: 28
-            label: qsTr("Replay")
-            enabled: false
-            tip: qsTr("The replay buffer is not built yet")
+            objectName: "replayButton"
+            label: Preview.replayActive ? qsTr("Stop Replay") : qsTr("Replay")
+            enabled: (bar.replayEnabled || Preview.replayActive) && !Preview.replaySaving && !Preview.outputPending
+            active: Preview.replayActive
+            tip: Preview.replayActive ? qsTr("Stop the replay buffer") : qsTr("Start the replay buffer")
+            onClicked: {
+                if (Preview.replayActive) Preview.stopReplay();
+                else Preview.startReplay();
+            }
+        }
+
+        // ponytail: manual clip trigger for testing; remove when event triggers replace it.
+        ToolButton {
+            objectName: "clipButton"
+            width: 64
+            height: 28
+            label: qsTr("Clip")
+            enabled: Preview.replayActive && !Preview.replaySaving && !Preview.outputPending && Preview.replayDurationMs > 0
+            tip: qsTr("Save the previous buffered seconds as a clip")
+            onClicked: Preview.saveReplay(Document.replayPath())
         }
     }
 

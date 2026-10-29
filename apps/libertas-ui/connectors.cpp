@@ -61,7 +61,7 @@ QVariantList Connectors::catalog() {
                 servers.prepend(
                     QVariantMap{{"id", "rtmp://live.twitch.tv/app"}, {"title", "Auto"}});
             out.append(QVariantMap{{"id", id},
-                                   {"title", id == "youtube" ? "YouTube" : name},
+                                   {"title", id == "youtube" ? "YouTube" : name == "Twitter" ? "x.com" : name},
                                    {"kind", "rtmp"},
                                    {"servers", servers},
                                    {"oauth", id == "twitch" || id == "youtube"},

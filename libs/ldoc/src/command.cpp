@@ -1240,7 +1240,8 @@ struct Apply {
         if (c.value.audio_encode && !p.audio_encode(*c.value.audio_encode))
             return std::unexpected(std::format("there is no audio encode {} to send",
                                                c.value.audio_encode->to_string()));
-        if (c.value.enabled && c.value.destination.url.empty())
+        if (c.value.enabled && c.value.destination.url.empty() &&
+            c.value.destination.kind != DestinationKind::Replay)
             return std::unexpected("an output cannot be enabled with nowhere to send to");
         Applied out{SetOutput{*it}, describe(c)};
         *it = c.value;

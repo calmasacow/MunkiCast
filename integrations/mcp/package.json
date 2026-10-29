@@ -1,0 +1,31 @@
+{
+  "name": "libertas-studio-mcp",
+  "version": "2.0.0",
+  "type": "module",
+  "description": "Optional stdio transport for the independent native Libertas Studio MCP server",
+  "license": "GPL-3.0-or-later",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "bin": {
+    "libertas-studio-mcp": "main.js"
+  },
+  "files": [
+    "main.js",
+    "README.md",
+    "LICENSE",
+    "test.js"
+  ],
+  "scripts": {
+    "start": "node main.js",
+    "build": "node --check main.js",
+    "test": "node --test test.js",
+    "prepack": "npm run build"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.32.2"
+  },
+  "devDependencies": {
+    "obs-websocket-js": "5.0.8"
+  }
+}

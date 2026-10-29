@@ -59,6 +59,25 @@ LTEST_CASE(catalog_has_unique_destinations_and_usable_ingest_servers) {
     CHECK(Connectors::service("missing").isEmpty());
 }
 
+LTEST_CASE(kick_and_rumble_offer_stream_key_destinations) {
+    const auto kick = Connectors::service("obs:Kick");
+    const auto rumble = Connectors::service("obs:Rumble");
+    for (const auto& service : {kick, rumble}) {
+        REQUIRE(!service.isEmpty());
+        CHECK(service.value("kind").toString() == "rtmp");
+        CHECK(!service.value("oauth").toBool());
+        REQUIRE(service.value("servers").toList().size() == 1);
+    }
+    CHECK(kick.value("title").toString() == "Kick");
+    CHECK(kick.value("keyLink").toString() == "https://kick.com/dashboard/settings/stream");
+    CHECK(kick.value("servers").toList().first().toMap().value("id").toString() ==
+          "rtmps://fa723fc1b171.global-contribute.live-video.net");
+    CHECK(rumble.value("title").toString() == "Rumble");
+    CHECK(rumble.value("keyLink").toString() == "https://rumble.com/account/static-stream-key");
+    CHECK(rumble.value("servers").toList().first().toMap().value("id").toString() ==
+          "rtmp://rtmp.rumble.com/live");
+}
+
 LTEST_CASE(unsupported_oauth_and_cancel_never_authorize_an_output) {
     int argc = 1;
     char name[] = "test_connectors";

@@ -4,6 +4,7 @@
 #include "shortcuts.hpp"
 
 #include "document.hpp"
+#include "preview.hpp"
 #include "workspace.hpp"
 
 #include "lcore/atomic_file.hpp"
@@ -24,7 +25,7 @@ QString qstr(const std::string& s) { return QString::fromStdString(s); }
 bool shell_performs(const std::string& action) {
     if (action.starts_with("transform."))
         return true;
-    return action == "edit.copy" || action == "edit.paste" || action == "edit.group" ||
+    return action == "output.save-replay" || action == "output.toggle-replay-buffer" || action == "edit.copy" || action == "edit.paste" || action == "edit.group" ||
            action == "edit.ungroup" || action == "edit.select-all" || action == "layer.delete" ||
            action == "layer.move-forward" || action == "layer.move-back" ||
            action == "layer.move-to-front" || action == "layer.move-to-back";
@@ -177,6 +178,16 @@ void Shortcuts::perform(const QString& ref) {
     const auto parsed = lsession::ActionRef::parse(to_std(ref));
     if (!parsed || !document_)
         return;
+
+    if (parsed->action == "output.save-replay" || parsed->action == "output.toggle-replay-buffer") {
+        auto* engine = qmlEngine(this);
+        auto* preview = engine ? engine->singletonInstance<Preview*>("Libertas", "Preview") : nullptr;
+        if (!preview) return;
+        if (parsed->action == "output.save-replay") preview->saveReplay(document_->replayPath());
+        else if (preview->replayActive()) preview->stopReplay();
+        else preview->startReplay();
+        return;
+    }
 
     // Workspace actions are the one family that does not touch the document, because the layout
     // is not part of it (ADR-0021). Routed by prefix rather than one case each, so adding a

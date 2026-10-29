@@ -1485,3 +1485,15 @@ LTEST_CASE(project_settings_are_undoable_and_bounded) {
 }
 
 LTEST_MAIN("command")
+
+LTEST_CASE(replay_can_be_enabled_without_a_network_address) {
+    Fixture f;
+    auto replay = f.project.outputs.front();
+    replay.destination.kind = DestinationKind::Replay;
+    replay.destination.url.clear();
+    replay.enabled = true;
+    const auto applied = apply(f.project, SetOutput{replay});
+    REQUIRE_MSG(applied.has_value(), "{}", applied.error());
+    CHECK(f.project.outputs.front().enabled);
+    CHECK(f.project.outputs.front().destination.url.empty());
+}

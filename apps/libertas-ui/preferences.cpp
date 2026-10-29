@@ -19,6 +19,7 @@ int g_gpu_budget_mib = 0;
 /// resolved default would freeze a path that XDG is allowed to move.
 QString g_cache_dir;
 bool g_caching_enabled = false;
+bool g_show_output_missed_frames = false;
 
 QString default_cache_dir() {
     const auto base = QStandardPaths::writableLocation(QStandardPaths::GenericCacheLocation);
@@ -54,7 +55,8 @@ bool save() {
     file.write(QJsonDocument(QJsonObject{{"version", 1},
                                          {"gpuBudgetMib", g_gpu_budget_mib},
                                          {"cacheDir", g_cache_dir},
-                                         {"cachingEnabled", g_caching_enabled}})
+                                         {"cachingEnabled", g_caching_enabled},
+                                         {"showOutputMissedFrames", g_show_output_missed_frames}})
                    .toJson());
     return file.commit();
 }
@@ -62,6 +64,7 @@ bool save() {
 
 void Preferences::configure(std::filesystem::path path) {
     g_path = QString::fromStdString(path.string());
+    g_show_output_missed_frames = false;
     QFile file(g_path);
     if (file.open(QIODevice::ReadOnly) && file.size() <= 64 * 1024) {
         const auto json = QJsonDocument::fromJson(file.readAll()).object();
@@ -70,6 +73,7 @@ void Preferences::configure(std::filesystem::path path) {
         const auto dir = json.value("cacheDir").toString();
         g_cache_dir = valid_cache_dir(dir) ? dir : QString{};
         g_caching_enabled = json.value("cachingEnabled").toBool(false);
+        g_show_output_missed_frames = json.value("showOutputMissedFrames").toBool(false);
     }
     export_budget();
 }
@@ -125,6 +129,20 @@ bool Preferences::setCachingEnabled(bool on) {
     g_caching_enabled = on;
     if (!save()) {
         g_caching_enabled = !on;
+        return false;
+    }
+    emit changed();
+    return true;
+}
+
+bool Preferences::showOutputMissedFrames() const { return g_show_output_missed_frames; }
+
+bool Preferences::setShowOutputMissedFrames(bool on) {
+    if (on == g_show_output_missed_frames)
+        return true;
+    g_show_output_missed_frames = on;
+    if (!save()) {
+        g_show_output_missed_frames = !on;
         return false;
     }
     emit changed();

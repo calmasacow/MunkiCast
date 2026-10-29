@@ -1,0 +1,23 @@
+{
+  "name": "libertas-studio",
+  "version": "1.0.1",
+  "private": true,
+  "type": "module",
+  "main": "main.js",
+  "license": "GPL-3.0-or-later",
+  "engines": {
+    "node": ">=22.18"
+  },
+  "scripts": {
+    "test": "node --test test.js",
+    "build": "node --check main.js",
+    "package": "npm run build && companion-module-build --ignore-license-rules && node --test package-test.js"
+  },
+  "dependencies": {
+    "@companion-module/base": "~1.13.2",
+    "obs-websocket-js": "5.0.8"
+  },
+  "devDependencies": {
+    "@companion-module/tools": "^2.6.0"
+  }
+}

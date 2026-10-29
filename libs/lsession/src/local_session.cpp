@@ -15,6 +15,19 @@ namespace {
 // Expand cues before history and journaling, so replay and undo restore explicit deck states
 // without firing cues again. Generated deck identities are recorded in the expanded command.
 Command with_scene_links(const Project& project, const Command& command) {
+    if (const auto* batch = std::get_if<ldoc::Batch>(&command); batch && batch->body) {
+        auto staged = project;
+        std::vector<Command> steps;
+        for (const auto& step : batch->body->commands) {
+            auto expanded = with_scene_links(staged, step);
+            if (!ldoc::apply(staged, expanded)) return command;
+            if (const auto* linked = std::get_if<ldoc::Batch>(&expanded); linked && linked->body)
+                steps.insert(steps.end(), linked->body->commands.begin(), linked->body->commands.end());
+            else
+                steps.push_back(std::move(expanded));
+        }
+        return ldoc::make_batch(std::move(steps), batch->description);
+    }
     const ldoc::Deck* source = nullptr;
     std::optional<ldoc::Id> scene_id;
     if (const auto* set = std::get_if<ldoc::SetDeckProgram>(&command)) {

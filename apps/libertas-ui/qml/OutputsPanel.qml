@@ -131,7 +131,8 @@ Item {
                                 height: 24
                                 anchors.left: parent.left
                                 anchors.verticalCenter: parent.verticalCenter
-                                label: output.destinationKind === "file" ? "REC" : "LIVE"
+                                label: output.destinationKind === "file" ? "REC"
+                                     : output.destinationKind === "replay" ? "CLIP" : "LIVE"
                                 tip: qsTr("Settings for %1").arg(output.name)
                                 onClicked: Workspace.openEncode(output.outputId)
                             }
@@ -171,13 +172,21 @@ Item {
                                 height: 26
                                 label: output.destinationKind === "file"
                                      ? (Preview.recording ? "\u25a0" : "\u25cf") : "\u25b6"
-                                enabled: output.destinationKind === "file" &&
+                                enabled: output.destinationKind === "replay"
+                                       ? Preview.replayActive && !Preview.replaySaving &&
+                                         !Preview.outputPending && Preview.replayDurationMs > 0
+                                       : output.destinationKind === "file" &&
                                          !Preview.recordingPending &&
                                          (Preview.recording || output.encodeId === panel.recordTarget)
-                                tip: output.destinationKind === "file"
+                                tip: output.destinationKind === "replay" ? qsTr("Save replay clip")
+                                     : output.destinationKind === "file"
                                      ? (Preview.recording ? qsTr("Stop recording") : qsTr("Start recording"))
                                      : qsTr("Streaming is not connected yet")
                                 onClicked: {
+                                    if (output.destinationKind === "replay") {
+                                        Preview.saveReplay(Document.replayPath());
+                                        return;
+                                    }
                                     if (Preview.recording) Preview.stopRecording(output.encodeId);
                                     else Preview.startRecording(output.encodeId,
                                         Document.recordingPathFor(output.encodeId));
@@ -191,7 +200,7 @@ Item {
             }
 
             Repeater {
-                model: [qsTr("Built-in backtrack"), qsTr("Built-in virtual camera")]
+                model: [qsTr("Built-in virtual camera")]
                 delegate: Item {
                     required property string modelData
                     width: content.width

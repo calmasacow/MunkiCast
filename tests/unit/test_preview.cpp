@@ -988,6 +988,123 @@ LTEST_CASE(native_alpha_media_crosses_worker_and_keeps_authored_box_and_letterbo
     CHECK(ink);
 }
 
+LTEST_CASE(manual_fades_render_intermediate_frames_and_can_be_reversed) {
+    auto ends = lipc::Channel::pair();
+    REQUIRE(ends);
+    auto child = lcomp::spawn_renderer(LIBERTAS_RENDER, std::move(ends->second).take_socket());
+    REQUIRE(child);
+    lcomp::PreviewLink link{std::move(ends->first)};
+    REQUIRE(link.take_hello(2000));
+    auto blue = colour_source(0, 0, 255), green = colour_source(0, 255, 0);
+    ldoc::Scene before;
+    before.id = ldoc::Id::generate(); before.roots = {bound_to(blue)};
+    auto project = show(before, {blue, green});
+    project.canvases.front().width = 4; project.canvases.front().height = 4;
+    auto after = project.scenes.front();
+    after.id = ldoc::Id::generate(); after.roots = {bound_to(green)};
+    project.scenes.push_back(after);
+    const auto before_id = project.decks.front().program_scene;
+    commit(link, project);
+    auto& deck = project.decks.front();
+    deck.preview_scene = before_id;
+    deck.program_scene = after.id;
+    deck.transition = "transition.fade";
+    const auto key = "ui.manual." + deck.id.to_string();
+    for (double progress : {0.0, 0.5, 1.0, 0.5, 0.0}) {
+        project.settings.extra[key] = progress;
+        const auto frame = commit(link, project);
+        const auto [r, g, b, a] = pixel(frame, 0, 0);
+        CHECK(r == 0 && a == 255);
+        if (progress == 0) CHECK(g == 0 && b == 255);
+        else if (progress == 1) CHECK(g == 255 && b == 0);
+        else CHECK(g > 100 && g < 230 && b > 100 && b < 230);
+    }
+    project.settings.extra[key] = 0.5;
+    commit(link, project);
+    project.settings.extra.erase(key);
+    deck.transition_ms = 100;
+    CHECK_EQ(pixel(commit(link, project), 0, 0), std::make_tuple(0, 0, 255, 255));
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    CHECK_EQ(pixel(commit(link, project), 0, 0), std::make_tuple(0, 255, 0, 255));
+    deck.transition = "transition.fade-to-black";
+    project.settings.extra[key] = 0.5;
+    CHECK_EQ(pixel(commit(link, project), 0, 0), std::make_tuple(0, 0, 0, 255));
+    project.settings.extra.erase(key);
+    project.settings.extra["ui.immediate." + deck.id.to_string()] = true;
+    deck.program_scene = before_id;
+    CHECK_EQ(pixel(commit(link, project), 0, 0), std::make_tuple(0, 0, 255, 255));
+    project.settings.extra.erase("ui.immediate." + deck.id.to_string());
+    deck.transition = "transition.fade";
+    deck.transition_ms = 600;
+    deck.program_scene = after.id;
+    CHECK_EQ(pixel(commit(link, project), 0, 0), std::make_tuple(0, 0, 255, 255));
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    const auto middle = pixel(commit(link, project), 0, 0);
+    CHECK(std::get<1>(middle) > 30 && std::get<2>(middle) > 30);
+    std::this_thread::sleep_for(std::chrono::milliseconds(650));
+    CHECK_EQ(pixel(commit(link, project), 0, 0), std::make_tuple(0, 255, 0, 255));
+    link.quit(); link.close();
+    CHECK_EQ(reap(*child, 3000), 0);
+}
+
+LTEST_CASE(manual_fades_scale_audio_and_preview_decks_stay_silent) {
+    auto ends = lipc::Channel::pair();
+    REQUIRE(ends);
+    auto child = lcomp::spawn_renderer(LIBERTAS_RENDER, std::move(ends->second).take_socket());
+    REQUIRE(child);
+    lcomp::PreviewLink link{std::move(ends->first)};
+    REQUIRE(link.take_hello(2000));
+    auto tone = colour_source(0, 0, 0);
+    tone.type = "source.media";
+    tone.settings["localFile"] = std::string(LIBERTAS_IMAGE_FIXTURES) + "/alpha-tone.webm";
+    tone.settings["loop"] = true;
+    ldoc::Scene audible;
+    audible.id = ldoc::Id::generate(); audible.roots = {bound_to(tone)};
+    auto project = show(audible, {tone});
+    const auto tone_node = project.scenes.front().roots.front().id;
+    std::get<ldoc::SourceData>(project.scenes.front().roots.front().data).audio.bus = project.buses.front().id;
+    ldoc::Scene quiet;
+    quiet.id = ldoc::Id::generate(); quiet.canvas = project.canvases.front().id;
+    project.scenes.push_back(quiet);
+    const auto peak = [&](int milliseconds) {
+        float loudest = 0;
+        const auto until = std::chrono::steady_clock::now() + std::chrono::milliseconds(milliseconds);
+        do {
+            REQUIRE(link.send_project(project));
+            for (;;) {
+                const auto event = link.receive(2000);
+                REQUIRE(event && event->has_value());
+                REQUIRE((**event).kind != lcomp::PreviewEvent::Kind::Fault);
+                if ((**event).kind == lcomp::PreviewEvent::Kind::Audio)
+                    for (const auto& level : (**event).audio)
+                        if (level.available && level.node == tone_node) loudest = std::max({loudest, level.left, level.right});
+                if ((**event).kind == lcomp::PreviewEvent::Kind::Ack) break;
+            }
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        } while (std::chrono::steady_clock::now() < until);
+        return loudest;
+    };
+    const float full = peak(3000);
+    REQUIRE(full > 0.01f);
+    auto& deck = project.decks.front();
+    deck.preview_scene = deck.program_scene;
+    deck.program_scene = quiet.id;
+    project.settings.extra["ui.manual." + deck.id.to_string()] = 0.5;
+    (void)peak(200);
+    const float half = peak(400);
+    CHECK(half > full * 0.4f && half < full * 0.6f);
+    project.settings.extra.erase("ui.manual." + deck.id.to_string());
+    ldoc::Deck preview = deck;
+    preview.id = ldoc::Id::generate();
+    preview.program_scene = audible.id;
+    project.settings.extra["ui.studio-preview-deck"] = preview.id.to_string();
+    project.decks.push_back(preview);
+    (void)peak(200);
+    CHECK(peak(300) < 0.001f);
+    link.quit(); link.close();
+    CHECK_EQ(reap(*child, 3000), 0);
+}
+
 LTEST_CASE(stinger_overlays_alpha_switches_at_cut_and_routes_audio) {
     auto ends = lipc::Channel::pair();
     REQUIRE(ends);
@@ -1727,6 +1844,17 @@ LTEST_CASE(measure_saved_scene_through_real_renderer) {
             REQUIRE(link.refresh(960));
     }
     REQUIRE(last.rendered_frames > baseline.rendered_frames);
+    if (const auto* frame_path = std::getenv("LIBERTAS_BENCH_FRAME")) {
+        std::ofstream image(frame_path, std::ios::binary);
+        image << "P6\n" << last.width << ' ' << last.height << "\n255\n";
+        for (int y = 0; y < last.height; ++y)
+            for (int x = 0; x < last.width; ++x) {
+                const auto i = static_cast<std::size_t>(y) * last.stride + static_cast<std::size_t>(x) * 4;
+                for (const auto channel : {2u, 1u, 0u}) image.put(static_cast<char>(last.bytes()[i + channel]));
+            }
+        REQUIRE(image.good());
+        std::fprintf(stderr, "saved frame: %s, status %d, %u gaps\n", frame_path, int(last.status), last.gaps);
+    }
     const auto count = last.rendered_frames - baseline.rendered_frames;
     std::fprintf(
         stderr, "%s live: %.3f ms/frame, %llu rendered, %llu missed after warmup\n",
@@ -1740,6 +1868,10 @@ LTEST_CASE(measure_saved_scene_through_real_renderer) {
 }
 
 int main() {
+    if (std::getenv("LIBERTAS_TEST_STUDIO"))
+        std::erase_if(ltest::registry(), [](const auto& test) {
+            return !test.name.starts_with("manual_fades_");
+        });
     if (std::getenv("LIBERTAS_BENCH_PROJECT"))
         std::erase_if(ltest::registry(), [](const auto& test) {
             return test.name != "measure_saved_scene_through_real_renderer";

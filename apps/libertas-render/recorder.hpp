@@ -4,14 +4,13 @@
 
 #include "audio_sources.hpp"
 
+#include <chrono>
+#include <cmath>
 #include <lcomp/composite.hpp>
 #include <lcomp/preview.hpp>
 #include <lcore/log.hpp>
 #include <ldoc/document.hpp>
 #include <lencode/encoder.hpp>
-
-#include <chrono>
-#include <cmath>
 #include <string>
 
 /// One shared encode feeding independently controlled recording and RTMP destinations.
@@ -24,7 +23,8 @@ class Recorder {
 
     ~Recorder() {
         const auto error = stop();
-        if (!error.empty()) lc::error("Recording did not close cleanly: {}", error);
+        if (!error.empty())
+            lc::error("Recording did not close cleanly: {}", error);
     }
 
     [[nodiscard]] bool running() const { return encoder_ != nullptr; }
@@ -33,13 +33,37 @@ class Recorder {
     /// canvas has to be composited at full size as well as preview size.
     [[nodiscard]] const ldoc::Id& canvas() const { return canvas_; }
 
-    lcomp::RecordState control(const lcomp::RecordRequest& request,
-                               const ldoc::Project& project) {
+    lcomp::RecordState control(const lcomp::RecordRequest& request, const ldoc::Project& project) {
+        using lcomp::RecordOperation;
+        if (request.operation == RecordOperation::ReplaySave) {
+            std::string error;
+            if (!encoder_ || !replay_output_)
+                error = "Start the replay buffer first.";
+            else
+                libertas::encode::encoder_save_replay(*encoder_, request.path, error);
+            auto state = status(running(), error);
+            if (!error.empty())
+                state.clip_path = request.path;
+            return state;
+        }
+        if (request.operation == RecordOperation::ReplayStop) {
+            if (encoder_ && libertas::encode::encoder_replay_stats(*encoder_).saving)
+                return status(running(), "Wait for the replay clip to finish saving.");
+            if (replay_output_) {
+                if (!recording_output_ && !streaming_output_)
+                    return status(false, stop());
+                std::string error;
+                libertas::encode::encoder_set_replay(*encoder_, 0, 0, error);
+                replay_output_.reset();
+            }
+            return status(running(), {});
+        }
         if (!request.start) {
             std::string error;
             auto& target = request.output.is_nil() ? recording_output_ : streaming_output_;
             if ((request.encode.is_nil() && request.output.is_nil()) ||
-                (target && !(request.output.is_nil() ? streaming_output_ : recording_output_))) {
+                (target && !replay_output_ &&
+                 !(request.output.is_nil() ? streaming_output_ : recording_output_))) {
                 error = stop();
             } else if (target && encoder_) {
                 libertas::encode::encoder_remove_output(*encoder_, *target, error);
@@ -53,7 +77,8 @@ class Recorder {
             return status(running(), "that encode is not in this project");
         const ldoc::Canvas* canvas = project.canvas(encode->canvas);
         if (!canvas)
-            return status(running(), std::format("encode '{}' has no canvas to record", encode->name));
+            return status(running(),
+                          std::format("encode '{}' has no canvas to record", encode->name));
 
         const ldoc::Output* destination = nullptr;
         for (const auto& o : project.outputs) {
@@ -64,7 +89,12 @@ class Recorder {
                 break;
             }
         }
-        const bool streaming = !request.output.is_nil();
+        const bool replay = request.operation == RecordOperation::ReplayStart;
+        if (replay &&
+            (!destination || destination->destination.kind != ldoc::DestinationKind::Replay ||
+             !destination->enabled || destination->encode != encode->id))
+            return status(running(), "Enable a connected Replay destination first.");
+        const bool streaming = !replay && !request.output.is_nil();
         if (streaming &&
             (!destination || !destination->enabled || destination->encode != encode->id ||
              (destination->destination.kind != ldoc::DestinationKind::Rtmp &&
@@ -86,26 +116,38 @@ class Recorder {
                 }
         if (streaming && (encode->encoder.codec != "h264" || !audio || audio->codec != "aac" ||
                           !project.bus(audio->bus)))
-            return status(running(), "Basic RTMP needs H.264 video and a connected AAC audio encoder.");
+            return status(running(),
+                          "Basic RTMP needs H.264 video and a connected AAC audio encoder.");
         ldoc::AudioEncode silent;
         silent.bitrate_kbps = 0;
 
-        auto cfg = libertas::encode::runtime_config(*encode, audio ? *audio : silent,
-                                                    *canvas, request.path);
+        auto cfg = libertas::encode::runtime_config(*encode, audio ? *audio : silent, *canvas,
+                                                    request.path);
         if (!audio) {
             cfg.audio_channels = 0; // no audio stream at all, rather than a silent one
             cfg.audio_bitrate = 0;
         }
 
-        auto& target = streaming ? streaming_output_ : recording_output_;
-        if (target) return status(running(), "That destination is already running.");
+        auto& target = replay ? replay_output_ : streaming ? streaming_output_ : recording_output_;
+        if (target)
+            return status(running(), "That destination is already running.");
         const auto audio_id = audio ? audio->id : ldoc::Id::nil();
         if (encoder_) {
             if (encode->id != encode_ || audio_id != audio_encode_)
-                return status(true, "Concurrent destinations must share their video and audio encodes.");
+                return status(true,
+                              "Concurrent destinations must share their video and audio encodes.");
             std::string error;
-            target = libertas::encode::encoder_add_output(*encoder_, request.path, error);
-            if (target && streaming) streaming_id_ = request.output;
+            if (replay) {
+                if (libertas::encode::encoder_set_replay(
+                        *encoder_, destination->destination.replay_seconds,
+                        static_cast<std::uint64_t>(destination->destination.replay_memory_mb) *
+                            1048576,
+                        error))
+                    target = 0;
+            } else
+                target = libertas::encode::encoder_add_output(*encoder_, request.path, error);
+            if (target && streaming)
+                streaming_id_ = request.output;
             return status(true, error);
         }
         std::string error;
@@ -115,10 +157,19 @@ class Recorder {
             audio_.tap(ldoc::Id::nil());
             return {false, error.empty() ? std::string{"the encoder would not open"} : error};
         }
+        if (replay &&
+            !libertas::encode::encoder_set_replay(
+                *encoder_, destination->destination.replay_seconds,
+                static_cast<std::uint64_t>(destination->destination.replay_memory_mb) * 1048576,
+                error)) {
+            encoder_.reset();
+            return status(false, error);
+        }
         target = 0;
         encode_ = encode->id;
         audio_encode_ = audio_id;
-        if (streaming) streaming_id_ = request.output;
+        if (streaming)
+            streaming_id_ = request.output;
         canvas_ = canvas->id;
         width_ = cfg.source_width;
         height_ = cfg.source_height;
@@ -145,8 +196,10 @@ class Recorder {
             const auto pts =
                 std::chrono::duration_cast<std::chrono::nanoseconds>(frame_time - started_).count();
             // Match the encoder time base; early ticks must not submit duplicate timestamps.
-            if (video_origin_ < 0) video_origin_ = pts;
-            const auto slot = std::llround(static_cast<double>(pts - video_origin_) * frame_rate_ / 1e9);
+            if (video_origin_ < 0)
+                video_origin_ = pts;
+            const auto slot =
+                std::llround(static_cast<double>(pts - video_origin_) * frame_rate_ / 1e9);
             if (slot > last_video_slot_) {
                 const auto gap = static_cast<std::uint64_t>(slot - last_video_slot_ - 1);
                 missed_ += gap;
@@ -177,7 +230,8 @@ class Recorder {
         }
         if (!error.empty()) {
             const auto finish_error = stop();
-            if (!finish_error.empty()) error += " " + finish_error;
+            if (!finish_error.empty())
+                error += " " + finish_error;
             auto state = status(false, error);
             state.control_reply = false;
             return state;
@@ -185,12 +239,19 @@ class Recorder {
         for (auto* output : {&recording_output_, &streaming_output_}) {
             if (*output && !libertas::encode::encoder_output_active(*encoder_, **output)) {
                 const auto failure = libertas::encode::encoder_output_error(*encoder_, **output);
-                if (!error.empty()) error += " ";
+                if (!error.empty())
+                    error += " ";
                 error += failure;
                 output->reset();
             }
         }
-        if (error.empty() || recording_output_ || streaming_output_) {
+        if (const auto saved = libertas::encode::encoder_poll_replay(*encoder_)) {
+            auto state = status(true, saved->error);
+            state.clip_path = saved->path;
+            state.control_reply = false;
+            return state;
+        }
+        if (error.empty() || recording_output_ || streaming_output_ || replay_output_) {
             auto state = status(true, error);
             state.control_reply = false;
             return state;
@@ -208,15 +269,19 @@ class Recorder {
             return {};
         std::string error;
         pump_audio(std::chrono::duration_cast<std::chrono::nanoseconds>(
-                       std::chrono::steady_clock::now() - started_).count(), error);
+                       std::chrono::steady_clock::now() - started_)
+                       .count(),
+                   error);
         std::string finish_error;
         if (!libertas::encode::encoder_finish(*encoder_, finish_error)) {
-            if (!error.empty()) error += " ";
+            if (!error.empty())
+                error += " ";
             error += finish_error;
         }
         encoder_.reset();
         recording_output_.reset();
         streaming_output_.reset();
+        replay_output_.reset();
         canvas_ = ldoc::Id::nil();
         audio_.tap(ldoc::Id::nil());
         return error;
@@ -224,8 +289,21 @@ class Recorder {
 
   private:
     lcomp::RecordState status(bool running, const std::string& error) const {
-        return {running, error, frames_, missed_, encode_lag_,
-                recording_output_.has_value(), streaming_output_.has_value()};
+        lcomp::RecordState state{running,
+                                 error,
+                                 frames_,
+                                 missed_,
+                                 encode_lag_,
+                                 recording_output_.has_value(),
+                                 streaming_output_.has_value()};
+        if (encoder_) {
+            const auto replay = libertas::encode::encoder_replay_stats(*encoder_);
+            state.replay = replay.active;
+            state.replay_saving = replay.saving;
+            state.replay_bytes = replay.bytes;
+            state.replay_duration_ms = replay.duration_ms;
+        }
+        return state;
     }
 
     void pump_audio(std::int64_t pts_ns, std::string& error) {
@@ -238,7 +316,7 @@ class Recorder {
 
     AudioSources& audio_;
     libertas::encode::EncoderPtr encoder_;
-    std::optional<std::size_t> recording_output_, streaming_output_;
+    std::optional<std::size_t> recording_output_, streaming_output_, replay_output_;
     ldoc::Id encode_ = ldoc::Id::nil(), audio_encode_ = ldoc::Id::nil();
     ldoc::Id streaming_id_ = ldoc::Id::nil();
     ldoc::Id canvas_ = ldoc::Id::nil();

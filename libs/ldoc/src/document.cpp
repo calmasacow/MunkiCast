@@ -753,7 +753,7 @@ private:
                                       o.name, o.audio_encode->to_string()));
             else if (!o.audio_encode && o.enabled)
                 warn(o.id, std::format("output '{}' carries no audio", o.name));
-            if (o.enabled && o.destination.url.empty())
+            if (o.enabled && o.destination.url.empty() && o.destination.kind != DestinationKind::Replay)
                 err(o.id, std::format("output '{}' is enabled but has no destination", o.name));
         }
     }

@@ -417,6 +417,39 @@ LTEST_CASE(a_session_refuses_newer_schema_without_rewriting_it) {
     CHECK_EQ(lc::read_file(scratch.project() / "project.json"), bytes);
 }
 
+LTEST_CASE(studio_take_batch_fires_linked_canvases_and_undoes_as_one_action) {
+    auto p = starter();
+    auto before = p.scenes.front();
+    before.id = Id::generate();
+    before.roots.clear();
+    p.scenes.push_back(before);
+    ldoc::Canvas vertical;
+    vertical.id = Id::generate();
+    p.canvases.push_back(vertical);
+    auto linked = p.scenes.front();
+    linked.id = Id::generate(); linked.canvas = vertical.id;
+    linked.roots.clear();
+    p.scenes.push_back(linked);
+    p.scene_links.push_back({Id::generate(), p.scenes.front().id, linked.id});
+    auto& deck = p.decks.front();
+    deck.program_scene = before.id;
+    deck.preview_scene = p.scenes.front().id;
+    deck.studio_mode = true;
+    const auto command = ldoc::make_batch({ldoc::SetDeckProgram{deck.id, deck.preview_scene},
+        ldoc::SetDeckPreview{deck.id, deck.program_scene}}, "Take preview");
+    auto session = LocalSession::in_memory(p);
+    const auto taken = session->run(command);
+    REQUIRE_MSG(taken, "{}", taken.error());
+    REQUIRE(session->project().decks.size() == 2);
+    CHECK(session->project().decks[0].program_scene == p.scenes.front().id);
+    CHECK(session->project().decks[0].preview_scene == before.id);
+    CHECK(session->project().decks[1].program_scene == linked.id);
+    REQUIRE(session->undo());
+    CHECK(session->project() == p);
+    REQUIRE(session->redo());
+    CHECK(session->project().decks[1].program_scene == linked.id);
+}
+
 LTEST_CASE(main_program_activation_fires_links_and_replays_exact_deck_states) {
     ScratchDir scratch{"scene-links"};
     auto p = starter();

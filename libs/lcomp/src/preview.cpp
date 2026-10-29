@@ -339,7 +339,7 @@ std::expected<void, std::string> PreviewLink::send_record(const RecordRequest& r
     if (request.path.size() > 32768)
         return std::unexpected(std::string{"that path is too long to record to"});
     std::vector<std::byte> payload{static_cast<std::byte>(Kind::Record)};
-    payload.push_back(static_cast<std::byte>(request.start ? 1 : 0));
+    payload.push_back(static_cast<std::byte>((request.start ? 1 : 0) | (static_cast<unsigned>(request.operation) << 1)));
     for (char c : request.encode.to_string())
         payload.push_back(static_cast<std::byte>(c));
     for (char c : request.output.to_string())
@@ -408,7 +408,7 @@ std::expected<PreviewEvent, std::string> PreviewLink::decode(lipc::Message messa
         return event;
     }
     if (kind == Kind::RecordState) {
-        if (payload.size() < 27)
+        if (payload.size() < 47)
             return std::unexpected(std::string{"a recording state was cut short"});
         PreviewEvent event;
         event.kind = PreviewEvent::Kind::Record;
@@ -419,10 +419,19 @@ std::expected<PreviewEvent, std::string> PreviewLink::decode(lipc::Message messa
             !take_u64(payload, at, event.record.encode_lag))
             return std::unexpected(std::string{"recording counters were cut short"});
         const auto flags = std::to_integer<unsigned>(payload[at++]);
-        if (flags > 7) return std::unexpected(std::string{"invalid output state flags"});
+        if (flags > 31) return std::unexpected(std::string{"invalid output state flags"});
         event.record.recording = (flags & 1) != 0;
         event.record.streaming = (flags & 2) != 0;
         event.record.control_reply = (flags & 4) != 0;
+        event.record.replay = (flags & 8) != 0;
+        event.record.replay_saving = (flags & 16) != 0;
+        std::uint32_t path_size = 0;
+        if (!take_u64(payload, at, event.record.replay_bytes) ||
+            !take_u64(payload, at, event.record.replay_duration_ms) ||
+            !take_u32(payload, at, path_size) || path_size > 32768 || path_size > payload.size() - at)
+            return std::unexpected(std::string{"invalid replay state"});
+        event.record.clip_path.assign(reinterpret_cast<const char*>(payload.data() + at), path_size);
+        at += path_size;
         event.record.error.assign(reinterpret_cast<const char*>(payload.data() + at),
                                   payload.size() - at);
         return event;
@@ -640,7 +649,12 @@ std::expected<void, std::string> serve_preview(lipc::Channel channel, FrameSourc
         append_u64(reply, state.missed);
         append_u64(reply, state.encode_lag);
         reply.push_back(static_cast<std::byte>((state.recording ? 1 : 0) |
-            (state.streaming ? 2 : 0) | (state.control_reply ? 4 : 0)));
+            (state.streaming ? 2 : 0) | (state.control_reply ? 4 : 0) |
+            (state.replay ? 8 : 0) | (state.replay_saving ? 16 : 0)));
+        append_u64(reply, state.replay_bytes);
+        append_u64(reply, state.replay_duration_ms);
+        append_u32(reply, static_cast<std::uint32_t>(state.clip_path.size()));
+        for (char c : state.clip_path) reply.push_back(static_cast<std::byte>(c));
         for (char c : state.error)
             reply.push_back(static_cast<std::byte>(c));
         return channel.send(reply);
@@ -773,6 +787,10 @@ std::expected<void, std::string> serve_preview(lipc::Channel channel, FrameSourc
                 if (const auto state =
                         record.frame(canvas.id, full_output ? full : picture, frame_time)) {
                     latest_record = *state;
+                    if (!state->clip_path.empty()) {
+                        if (auto sent = send_record_state(*state); !sent) return sent;
+                        latest_record.reset();
+                    }
                     if (!state->running) {
                         output_period.reset();
                         if (!publish) {
@@ -876,7 +894,10 @@ std::expected<void, std::string> serve_preview(lipc::Channel channel, FrameSourc
                     state.error = "that is not an encode or output id";
                 } else {
                     RecordRequest request;
-                    request.start = std::to_integer<unsigned>(payload[1]) != 0;
+                    const auto flags = std::to_integer<unsigned>(payload[1]);
+                    if (flags > 7) return std::unexpected(std::string{"invalid output operation"});
+                    request.start = (flags & 1) != 0;
+                    request.operation = static_cast<RecordOperation>(flags >> 1);
                     request.encode = *id;
                     request.output = *output;
                     request.path.assign(reinterpret_cast<const char*>(payload.data() + 54),

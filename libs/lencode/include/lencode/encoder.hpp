@@ -83,10 +83,26 @@ EncoderPtr encoder_open(const RuntimeConfig& cfg, std::string& error);
 /// Add a muxer sharing the existing compressed streams; starts on the next keyframe.
 /// Destination 0 is the original output. Removing a destination leaves other outputs running.
 std::optional<std::size_t> encoder_add_output(Encoder& enc, const std::string& path,
-                                             std::string& error);
+                                              std::string& error);
 bool encoder_remove_output(Encoder& enc, std::size_t id, std::string& error);
 bool encoder_output_active(const Encoder& enc, std::size_t id);
 std::string encoder_output_error(const Encoder& enc, std::size_t id);
+
+struct ReplayStats {
+    std::uint64_t bytes = 0, duration_ms = 0;
+    bool active = false, saving = false;
+};
+
+struct ReplayResult {
+    std::string path, error;
+};
+
+/// Zero seconds disables buffering. Stored packets share this encode with every other output.
+bool encoder_set_replay(Encoder& enc, std::uint32_t seconds, std::uint64_t bytes,
+                        std::string& error);
+ReplayStats encoder_replay_stats(const Encoder& enc);
+bool encoder_save_replay(Encoder& enc, const std::string& path, std::string& error);
+std::optional<ReplayResult> encoder_poll_replay(Encoder& enc);
 
 /// Submits one BGRA frame, or RGBA when source_rgba is set in RuntimeConfig.
 /// `pts_ns` is on the SAME clock as encoder_audio's - see ADR-0017: the

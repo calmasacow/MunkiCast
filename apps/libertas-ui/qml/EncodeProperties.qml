@@ -664,6 +664,12 @@ Item {
                     onCommitted: value => Document.renameOutput(panel.selectedId, value)
                 }
 
+                ReplaySettings {
+                    width: parent.width
+                    visible: panel.destination.destinationKind === "replay"
+                    outputId: panel.selectedId
+                }
+
                 TextLine {
                     objectName: "recordingDirectory"
                     width: parent.width

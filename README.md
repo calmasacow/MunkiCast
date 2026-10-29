@@ -56,13 +56,41 @@ Streaming and recording can run together when connected to the same video and au
 The encode runs once; each destination starts and stops independently. Destination connection or
 write failures report an error while the other destination continues. Reconnect manually with
 **Go Live!**. RTMPS uses FFmpeg's installed TLS support. Separate concurrent encodes, multistreaming,
-replay buffering, automatic reconnect, and streaming after closing the app remain pending.
+automatic reconnect, and streaming after closing the app remain pending.
 
 New video capture sources default to **Match incoming signal** for resolution and frame rate.
 This requires the device to report its incoming timing. Studio selects a capture rate within
 0.5% of that signal and follows timing changes. If detection is unavailable, select an explicit
 mode; Studio reports the limitation rather than guessing. **Use current device mode** preserves
 the existing USB capture settings. Existing saved sources keep their selected modes.
+
+## Replay / Backtrack
+
+The Backtrack node buffers its connected video/audio encode in RAM. Select it, then enable
+**Replay Buffer** in its Properties panel. This enables the **Replay** toolbar button without
+starting buffering. Click **Replay** to start or stop the buffer. Defaults: **20s**, **512MB**. Stop buffering to edit either
+integer limit with the field's up/down arrows. The same compressed encode feeds replay, recording,
+and streaming; connect them to the same video/audio encoders when running together.
+
+Click **Clip** to the right of **Replay**, or bind **Save Replay** in Shortcuts. The buffered segment is
+written in the background to the recording output folder using the normal filename plus
+`_clip.mkv`. Clips begin at a keyframe; a time-limited buffer can include up to one extra keyframe
+interval. A lower memory limit can shorten the retained segment. A failed write reports an error
+and leaves the buffer running. Existing files are never overwritten.
+
+For OBS-compatible websocket Replay requests, open **Tools > WebSocket Server Settings**,
+enable the server, choose a port and password, then click **Apply**. Changes take effect immediately
+and persist in an owner-only `websocket.json` file beside the application preferences. The server
+starts disabled; authentication is required. It binds to `0.0.0.0` (all IPv4 interfaces),
+port `4455` by default. Connect to `ws://<studio-machine-ip>:4455`.
+`LIBERTAS_WEBSOCKET_PASSWORD` and `LIBERTAS_WEBSOCKET_PORT` can override startup settings.
+It implements OBS
+WebSocket v5 authentication and `StartReplayBuffer`, `StopReplayBuffer`, `SaveReplayBuffer`,
+`GetReplayBufferStatus`, `GetLastReplayBufferReplay`, and `GetVersion`, plus `ReplayBufferSaved`
+events. Other OBS requests are not implemented. The server uses the system `libsoup3` library.
+
+Run the focused end-to-end check with
+`./build/linux/apps/libertas-ui/libertas-ui --check --check-replay`.
 
 ## Why
 
@@ -109,7 +137,7 @@ sudo pacman -S --needed base-devel cmake ninja vulkan-headers vulkan-icd-loader 
 Plus Qt 6.8+, Qt Multimedia/WebEngine, jsoncpp and tomlplusplus:
 
 ```sh
-sudo pacman -S --needed qt6-base qt6-declarative qt6-wayland qt6-multimedia qt6-webengine \
+sudo pacman -S --needed qt6-base qt6-declarative qt6-wayland qt6-multimedia qt6-webengine libsoup3 \
                         jsoncpp tomlplusplus
 ```
 
@@ -202,3 +230,13 @@ than silently degrading.
 
 GPL-3.0-or-later. See [`docs/adr/0002-gpl3.md`](docs/adr/0002-gpl3.md) for why, including the
 rejected permissive options.
+
+## Remote control
+
+The WebSocket settings include **Libertas Studio** and **OBS** modes. Existing
+Companion OBS connections can use OBS mode; a native Companion module lives under
+`integrations/companion`. **Tools > MCP Server Settings** runs an independent native
+MCP server with app-wide editing and UI controls, its own port/token, and no
+WebSocket dependency. `integrations/mcp` provides optional stdio compatibility. See [remote control setup, compatibility,
+installation and remaining features](docs/remote-control.md). Building the UI now
+also requires `msgpack-c` for Companion's binary OBS WebSocket transport.

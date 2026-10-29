@@ -232,6 +232,8 @@ struct Destination {
 
     /// Catalog service or custom transport ID; empty in older projects.
     std::string service;
+    std::uint32_t replay_seconds = 20;
+    std::uint32_t replay_memory_mb = 512;
 
     friend bool operator==(const Destination&, const Destination&) = default;
 };

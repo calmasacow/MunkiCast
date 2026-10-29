@@ -17,6 +17,12 @@ import Libertas
 Item {
     id: panel
 
+    SceneReorder {
+        id: reorder
+        view: list
+        favourites: true
+    }
+
     ListView {
         id: list
 
@@ -36,6 +42,7 @@ Item {
         delegate: Rectangle {
             id: row
 
+            required property int index
             required property string sceneId
             required property string name
             required property bool isProgram
@@ -51,15 +58,53 @@ Item {
                  : row.selected ? Theme.c.accent
                  : mouse.containsMouse ? Theme.c.panelHeaderActive
                  : "transparent"
-            border.width: row.isProgram ? 1 : 0
-            border.color: Theme.c.error
+            border.width: row.activeFocus || row.isProgram ? 1 : 0
+            border.color: row.activeFocus ? Theme.c.text : Theme.c.error
+
+            opacity: reorder.dragging && reorder.sceneId === row.sceneId ? 0.45 : 1
+            activeFocusOnTab: true
+            Accessible.role: Accessible.ListItem
+            Accessible.name: row.name
+            Accessible.description: qsTr("Drag to reorder, or use Ctrl+Up and Ctrl+Down")
+            Keys.onEscapePressed: reorder.cancel()
+            Keys.onPressed: event => {
+                if ((event.modifiers & Qt.ControlModifier) &&
+                    (event.key === Qt.Key_Up || event.key === Qt.Key_Down)) {
+                    reorder.step(row.sceneId, row.index, event.key === Qt.Key_Up ? -1 : 1);
+                    event.accepted = true;
+                }
+            }
+            Keys.onReturnPressed: Document.activateScene(row.sceneId)
+            Keys.onSpacePressed: Document.activateScene(row.sceneId)
 
             MouseArea {
                 id: mouse
 
                 anchors.fill: parent
                 hoverEnabled: true
-                onClicked: Document.activateScene(row.sceneId)
+                property bool suppressClick: false
+                cursorShape: reorder.dragging ? Qt.ClosedHandCursor : Qt.ArrowCursor
+                onPressed: event => {
+                    suppressClick = false;
+                    if (event.button === Qt.LeftButton) {
+                        row.forceActiveFocus();
+                        reorder.begin(row.sceneId, mapToItem(reorder, event.x, event.y));
+                    }
+                }
+                onPositionChanged: event => {
+                    if (pressed && (pressedButtons & Qt.LeftButton)) {
+                        reorder.move(mapToItem(reorder, event.x, event.y));
+                        suppressClick = suppressClick || reorder.dragging;
+                    }
+                }
+                onReleased: event => {
+                    if (event.button === Qt.LeftButton) {
+                        suppressClick = suppressClick || reorder.dragging;
+                        reorder.finish();
+                    }
+                }
+                onCanceled: reorder.cancel()
+                onClicked: if (!suppressClick) Document.activateScene(row.sceneId)
             }
 
             Text {

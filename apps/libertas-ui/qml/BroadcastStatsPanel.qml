@@ -11,6 +11,7 @@ import Libertas
 /// Render counters measure compositing; output counters measure delivered frames and stalls.
 Item {
     id: panel
+    objectName: "broadcastStatsPanel"
 
     function bytesLabel(n) {
         if (n >= 1024 * 1024 * 1024 * 1024)
@@ -46,6 +47,7 @@ Item {
     /// The panel folds rather than demanding width, because its minimum size constrains every
     /// panel docked near it, not just itself.
     readonly property bool wideEnough: panel.width >= 340
+    readonly property int statsColumns: panel.width >= 640 ? 2 : 1
 
     Flickable {
         anchors.left: parent.left
@@ -69,88 +71,106 @@ Item {
             width: parent.width - 20
             spacing: 2
 
-            Text {
+            Grid {
+                id: machineGrid
+                objectName: "machineStatsGrid"
                 width: parent.width
-                text: qsTr("This machine")
-                font.pixelSize: 10
-                font.weight: Font.DemiBold
-                color: Theme.c.accent
-                bottomPadding: 4
-            }
+                columns: panel.statsColumns
+                columnSpacing: 24
+                rowSpacing: 10
 
-            StatRow {
-                width: parent.width
-                label: qsTr("CPU usage")
-                value: Telemetry.cpuAvailable
-                    ? Telemetry.cpuPercent.toFixed(1) + " %" : panel.unavailable
-            }
+                Column {
+                    width: (machineGrid.width - machineGrid.columnSpacing * (machineGrid.columns - 1)) / machineGrid.columns
+                    spacing: 2
+                    Text {
+                        width: parent.width
+                        text: qsTr("This machine")
+                        font.pixelSize: 10
+                        font.weight: Font.DemiBold
+                        color: Theme.c.accent
+                        bottomPadding: 4
+                    }
 
-            StatRow {
-                width: parent.width
-                label: qsTr("Memory usage")
-                value: Telemetry.memoryAvailable
-                    ? panel.bytesLabel(Telemetry.memoryBytes) : panel.unavailable
-            }
+                    StatRow {
+                        width: parent.width
+                        label: qsTr("CPU usage")
+                        value: Telemetry.cpuAvailable
+                            ? Telemetry.cpuPercent.toFixed(1) + " %" : panel.unavailable
+                    }
 
-            StatRow {
-                width: parent.width
-                label: qsTr("Disk space available")
-                value: Telemetry.diskAvailable
-                    ? panel.bytesLabel(Telemetry.diskFreeBytes) : panel.unavailable
-            }
+                    StatRow {
+                        width: parent.width
+                        label: qsTr("Memory usage")
+                        value: Telemetry.memoryAvailable
+                            ? panel.bytesLabel(Telemetry.memoryBytes) : panel.unavailable
+                    }
 
-            StatRow {
-                width: parent.width
-                label: qsTr("Disk full in (approx.)")
-                // Needs a recording bitrate to divide by, and there is no recording.
-                value: panel.unavailable
-            }
+                    StatRow {
+                        width: parent.width
+                        label: qsTr("Disk space available")
+                        value: Telemetry.diskAvailable
+                            ? panel.bytesLabel(Telemetry.diskFreeBytes) : panel.unavailable
+                    }
 
-            Text {
-                width: parent.width
-                text: Telemetry.gpuAvailable
-                    ? qsTr("Graphics — %1").arg(Telemetry.gpuName)
-                    : qsTr("Graphics")
-                font.pixelSize: 10
-                font.weight: Font.DemiBold
-                color: Theme.c.accent
-                topPadding: 10
-                bottomPadding: 4
-                elide: Text.ElideRight
-            }
+                    StatRow {
+                        width: parent.width
+                        label: qsTr("Disk full in (approx.)")
+                        // Needs a recording bitrate to divide by, and there is no recording.
+                        value: panel.unavailable
+                    }
 
-            StatRow {
-                width: parent.width
-                label: qsTr("GPU usage")
-                value: Telemetry.gpuAvailable
-                    ? Telemetry.gpuPercent.toFixed(0) + " %" : panel.unavailable
-            }
+                }
 
-            StatRow {
-                width: parent.width
-                label: qsTr("Encoder usage")
-                value: Telemetry.encoderAvailable
-                    ? Telemetry.encoderPercent.toFixed(0) + " %" : panel.unavailable
-            }
+                Column {
+                    width: (machineGrid.width - machineGrid.columnSpacing * (machineGrid.columns - 1)) / machineGrid.columns
+                    spacing: 2
+                    Text {
+                        width: parent.width
+                        text: Telemetry.gpuAvailable
+                            ? qsTr("Graphics — %1").arg(Telemetry.gpuName)
+                            : qsTr("Graphics")
+                        font.pixelSize: 10
+                        font.weight: Font.DemiBold
+                        color: Theme.c.accent
+                        bottomPadding: 4
+                        elide: Text.ElideRight
+                    }
 
-            StatRow {
-                width: parent.width
-                label: qsTr("VRAM usage")
-                value: Telemetry.gpuAvailable && Telemetry.vramTotalBytes > 0
-                    ? panel.bytesLabel(Telemetry.vramUsedBytes) + " / " +
-                      panel.bytesLabel(Telemetry.vramTotalBytes) +
-                      "  (" + (Telemetry.vramUsedBytes / Telemetry.vramTotalBytes * 100).toFixed(0) + " %)"
-                    : panel.unavailable
-            }
+                    StatRow {
+                        width: parent.width
+                        label: qsTr("GPU usage")
+                        value: Telemetry.gpuAvailable
+                            ? Telemetry.gpuPercent.toFixed(0) + " %" : panel.unavailable
+                    }
 
-            Text {
-                width: parent.width
-                visible: !Telemetry.gpuAvailable && Telemetry.gpuNote !== ""
-                text: Telemetry.gpuNote
-                wrapMode: Text.WordWrap
-                font.pixelSize: 9
-                color: Theme.c.textMuted
-                bottomPadding: 2
+                    StatRow {
+                        width: parent.width
+                        label: qsTr("Encoder usage")
+                        value: Telemetry.encoderAvailable
+                            ? Telemetry.encoderPercent.toFixed(0) + " %" : panel.unavailable
+                    }
+
+                    StatRow {
+                        width: parent.width
+                        label: qsTr("VRAM usage")
+                        value: Telemetry.gpuAvailable && Telemetry.vramTotalBytes > 0
+                            ? panel.bytesLabel(Telemetry.vramUsedBytes) + " / " +
+                              panel.bytesLabel(Telemetry.vramTotalBytes) +
+                              "  (" + (Telemetry.vramUsedBytes / Telemetry.vramTotalBytes * 100).toFixed(0) + " %)"
+                            : panel.unavailable
+                    }
+
+                    Text {
+                        width: parent.width
+                        visible: !Telemetry.gpuAvailable && Telemetry.gpuNote !== ""
+                        text: Telemetry.gpuNote
+                        wrapMode: Text.WordWrap
+                        font.pixelSize: 9
+                        color: Theme.c.textMuted
+                        bottomPadding: 2
+                    }
+
+                }
             }
 
             Text {
@@ -163,122 +183,83 @@ Item {
                 bottomPadding: 4
             }
 
-            Repeater {
-                model: Document.canvases
-                delegate: Column {
-                    id: canvasStats
-                    required property string canvasId
-                    required property string name
-                    required property double fps
-                    property var stats: Preview.renderStats(canvasId)
-                    Timer {
-                        interval: 250
-                        repeat: true
-                        running: panel.visible
-                        onTriggered: canvasStats.stats = Preview.renderStats(canvasStats.canvasId)
-                    }
-                    Connections {
-                        target: Preview
-                        function onChanged() {
-                            canvasStats.stats = Preview.renderStats(canvasStats.canvasId);
+            Grid {
+                id: canvasGrid
+                objectName: "canvasStatsGrid"
+                width: parent.width
+                columns: panel.statsColumns
+                columnSpacing: 24
+                rowSpacing: 8
+
+                Repeater {
+                    model: Document.canvases
+                    delegate: Column {
+                        id: canvasStats
+                        required property string canvasId
+                        required property string name
+                        required property double fps
+                        property var stats: Preview.renderStats(canvasId)
+                        Timer {
+                            interval: 250
+                            repeat: true
+                            running: panel.visible
+                            onTriggered: canvasStats.stats = Preview.renderStats(canvasStats.canvasId)
+                        }
+                        Connections {
+                            target: Preview
+                            function onChanged() {
+                                canvasStats.stats = Preview.renderStats(canvasStats.canvasId);
+                            }
+                        }
+                        objectName: "canvasStatsCard"
+                        width: (canvasGrid.width - canvasGrid.columnSpacing * (canvasGrid.columns - 1)) / canvasGrid.columns
+                        spacing: 1
+                        Text {
+                            width: parent.width
+                            text: name
+                            font.pixelSize: 9
+                            font.weight: Font.DemiBold
+                            color: Theme.c.textMuted
+                            topPadding: 5
+                        }
+                        StatRow {
+                            objectName: "canvasTargetFps"
+                            width: parent.width
+                            label: qsTr("Canvas target FPS")
+                            value: canvasStats.fps.toFixed(1)
+                        }
+                        StatRow {
+                            objectName: "canvasRenderTime"
+                            width: parent.width
+                            label: qsTr("Average time to render frame (500 ms)")
+                            value: stats.available
+                                ? stats.renderMs.toFixed(2) + " ms" : panel.unavailable
+                        }
+                        StatRow {
+                            objectName: "canvasRenderedFrames"
+                            width: parent.width
+                            label: qsTr("Frames rendered since reset")
+                            value: stats.available ? stats.frames : panel.unavailable
+                        }
+                        StatRow {
+                            objectName: "canvasMissedFrames"
+                            width: parent.width
+                            label: qsTr("Frames missed due to rendering lag")
+                            value: stats.available
+                                ? stats.missed + " (" + (stats.frames + stats.missed > 0
+                                    ? 100 * stats.missed / (stats.frames + stats.missed) : 0).toFixed(1) + "%)"
+                                : panel.unavailable
                         }
                     }
-                    width: body.width
-                    spacing: 1
-                    Text {
-                        width: parent.width
-                        text: name
-                        font.pixelSize: 9
-                        font.weight: Font.DemiBold
-                        color: Theme.c.textMuted
-                        topPadding: 5
-                    }
-                    StatRow {
-                        objectName: "canvasTargetFps"
-                        width: parent.width
-                        label: qsTr("Canvas target FPS")
-                        value: canvasStats.fps.toFixed(1)
-                    }
-                    StatRow {
-                        objectName: "canvasRenderTime"
-                        width: parent.width
-                        label: qsTr("Average time to render frame (500 ms)")
-                        value: stats.available
-                            ? stats.renderMs.toFixed(2) + " ms" : panel.unavailable
-                    }
-                    StatRow {
-                        objectName: "canvasRenderedFrames"
-                        width: parent.width
-                        label: qsTr("Frames rendered since reset")
-                        value: stats.available ? stats.frames : panel.unavailable
-                    }
-                    StatRow {
-                        objectName: "canvasMissedFrames"
-                        width: parent.width
-                        label: qsTr("Frames missed due to rendering lag")
-                        value: stats.available
-                            ? stats.missed + " (" + (stats.frames + stats.missed > 0
-                                ? 100 * stats.missed / (stats.frames + stats.missed) : 0).toFixed(1) + "%)"
-                            : panel.unavailable
-                    }
                 }
-            }
 
-            Repeater {
-                model: panel.captures
-                delegate: Column {
-                    required property var modelData
-                    width: body.width
-                    Text {
-                        width: parent.width
-                        text: modelData.name + qsTr(" capture")
-                        color: Theme.c.accent
-                        font.pixelSize: 10
-                        topPadding: 6
-                    }
-                    StatRow {
-                        width: parent.width
-                        label: qsTr("Requested FPS")
-                        value: modelData.requested
-                    }
-                    StatRow {
-                        width: parent.width
-                        label: qsTr("Device negotiated FPS")
-                        value: modelData.negotiated > 0 ? modelData.negotiated.toFixed(3) : panel.unavailable
-                    }
-                    StatRow {
-                        width: parent.width
-                        label: qsTr("Received FPS (1 second)")
-                        value: modelData.received.toFixed(3)
-                    }
-                    Text {
-                        width: parent.width
-                        text: modelData.error || qsTr("Arrival rate; repeated images still count as frames.")
-                        color: modelData.error ? Theme.c.warning : Theme.c.textMuted
-                        font.pixelSize: 9
-                        wrapMode: Text.WordWrap
-                    }
-                }
-            }
-
-            StatRow {
-                width: parent.width
-                objectName: "encoderSkippedFrames"
-                label: qsTr("Skipped frames due to encoding lag")
-                value: panel.output.available ? panel.frameCount(panel.output.lag) : panel.unavailable
-            }
-
-            StatRow {
-                width: parent.width
-                label: qsTr("Output frames missed (all causes)")
-                value: panel.output.available ? panel.frameCount(panel.output.missed) : panel.unavailable
             }
 
             Text {
                 width: parent.width
                 wrapMode: Text.WordWrap
                 text: Preview.rendererAttached
-                    ? qsTr("Render counters include full-size compositing for active outputs. Encoding lag counts output frames missed while encoding or writing packets. All causes also includes scheduling and rendering delays.")
+                    ? qsTr("Render counters include full-size compositing for active outputs. Encoding lag counts output frames missed while encoding or writing packets.")
                     : qsTr("Waiting for renderer statistics.")
                 font.pixelSize: 9
                 color: Theme.c.textMuted
@@ -450,6 +431,68 @@ Item {
                 font.pixelSize: 10
                 color: Theme.c.textMuted
                 topPadding: 4
+            }
+
+            Text {
+                width: parent.width
+                text: qsTr("Capture Devices")
+                font.pixelSize: 10
+                font.weight: Font.DemiBold
+                color: Theme.c.accent
+                topPadding: 10
+                visible: panel.captures.length > 0
+            }
+
+            Repeater {
+                model: panel.captures
+                delegate: Column {
+                    required property var modelData
+                    width: body.width
+                    Text {
+                        width: parent.width
+                        text: modelData.name + qsTr(" capture")
+                        color: Theme.c.accent
+                        font.pixelSize: 10
+                        topPadding: 6
+                    }
+                    StatRow {
+                        width: parent.width
+                        label: qsTr("Requested FPS")
+                        value: modelData.requested
+                    }
+                    StatRow {
+                        width: parent.width
+                        label: qsTr("Device negotiated FPS")
+                        value: modelData.negotiated > 0 ? modelData.negotiated.toFixed(3) : panel.unavailable
+                    }
+                    StatRow {
+                        width: parent.width
+                        label: qsTr("Received FPS (1 second)")
+                        value: modelData.received.toFixed(3)
+                    }
+                    Text {
+                        width: parent.width
+                        text: modelData.error || qsTr("Arrival rate; repeated images still count as frames.")
+                        color: modelData.error ? Theme.c.warning : Theme.c.textMuted
+                        font.pixelSize: 9
+                        wrapMode: Text.WordWrap
+                    }
+                }
+            }
+
+            StatRow {
+                width: parent.width
+                objectName: "encoderSkippedFrames"
+                label: qsTr("Skipped frames due to encoding lag")
+                value: panel.output.available ? panel.frameCount(panel.output.lag) : panel.unavailable
+            }
+
+            StatRow {
+                width: parent.width
+                objectName: "outputMissedFrames"
+                visible: Preferences.showOutputMissedFrames
+                label: qsTr("Output frames missed (all causes)")
+                value: panel.output.available ? panel.frameCount(panel.output.missed) : panel.unavailable
             }
         }
     }

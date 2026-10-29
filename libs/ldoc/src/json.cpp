@@ -330,6 +330,10 @@ Jv enc(const Destination& d) {
     // here to put the secret itself.
     o["credential_ref"] = d.credential_ref;
     if (!d.service.empty()) o["service"] = d.service;
+    if (d.kind == DestinationKind::Replay) {
+        o["replay_seconds"] = d.replay_seconds;
+        o["replay_memory_mb"] = d.replay_memory_mb;
+    }
     return o;
 }
 
@@ -971,6 +975,13 @@ Output dec_output(Rd& rd, const Jv& v, std::string_view path) {
         o.destination.url = rd.text(*d, "url", path);
         o.destination.credential_ref = rd.text(*d, "credential_ref", path);
         if (d->isMember("service")) o.destination.service = rd.text(*d, "service", path);
+        if (d->isMember("replay_seconds"))
+            o.destination.replay_seconds = static_cast<std::uint32_t>(rd.integer32(*d, "replay_seconds", path, 20));
+        if (d->isMember("replay_memory_mb"))
+            o.destination.replay_memory_mb = static_cast<std::uint32_t>(rd.integer32(*d, "replay_memory_mb", path, 512));
+        if (o.destination.replay_seconds < 1 || o.destination.replay_seconds > 86400 ||
+            o.destination.replay_memory_mb < 1 || o.destination.replay_memory_mb > 1048576)
+            rd.fail(path, "replay duration or memory limit is out of range");
     }
     // Absent before version 4, where audio was four string keys inside the video encode; the
     // migration fills it in.

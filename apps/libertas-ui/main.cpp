@@ -1,6 +1,9 @@
 // SPDX-FileCopyrightText: Libertas-Studio contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include "replaywebsocket.hpp"
+#include "mcpserver.hpp"
+#include "connectors.hpp"
 #include "assetcache.hpp"
 #include "document.hpp"
 #include "lcomp/composite.hpp"
@@ -15,6 +18,7 @@
 #include "workspace.hpp"
 
 #include <QApplication>
+#include <QTcpServer>
 #include <QCommandLineOption>
 #include <QCommandLineParser>
 #include <QCoreApplication>
@@ -31,11 +35,14 @@
 #include <QMouseEvent>
 #include <QObject>
 #include <QProcess>
+#include <QProcessEnvironment>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
+#include <QQmlComponent>
 #include <QQmlExpression>
 #include <QQuickImageProvider>
 #include <QQuickItem>
+#include <QQuickItemGrabResult>
 #include <QQuickWindow>
 #include <QSet>
 #include <QSize>
@@ -163,6 +170,18 @@ int main(int argc, char** argv) {
         QStringList{QStringLiteral("check-browser-url")},
         QStringLiteral("With --check, test only a browser dock using this URL."),
         QStringLiteral("url")};
+    const QCommandLineOption replay_check_opt{QStringLiteral("check-replay"),
+        QStringLiteral("With --check, run only the replay buffer and websocket integration checks.")};
+    const QCommandLineOption mcp_check_opt{QStringLiteral("check-mcp"),
+        QStringLiteral("With --check, run the independent native MCP server integration checks.")};
+    parser.addOption(mcp_check_opt);
+    const QCommandLineOption studio_check_opt{QStringLiteral("check-studio"),
+        QStringLiteral("With --check, run only Studio Mode interaction checks.")};
+    const QCommandLineOption scene_reorder_check_opt{QStringLiteral("check-scene-reorder"),
+        QStringLiteral("With --check, run scene and favourites reorder gesture checks.")};
+    parser.addOption(scene_reorder_check_opt);
+    parser.addOption(studio_check_opt);
+    parser.addOption(replay_check_opt);
     parser.addOption(browser_check_opt);
     parser.addOption(layout_opt);
     parser.addOption(project_opt);
@@ -254,6 +273,12 @@ int main(int argc, char** argv) {
     QObject::connect(&theme, &libertas::ui::Theme::notice, &app, say);
     QObject::connect(&document, &libertas::ui::Document::notice, &app, say);
     QObject::connect(&preview, &libertas::ui::Preview::notice, &app, say);
+    auto* websocket = engine.singletonInstance<libertas::ui::WebsocketServer*>("Libertas", "WebsocketServer");
+    if (!websocket) return fail("the WebSocket settings could not be created");
+    websocket->initialize(preview, document,
+        (check ? std::filesystem::path(checkPreferences.path().toStdString()) : config_dir()) /
+            "websocket.json", !check, &shortcuts);
+    if (!websocket->error().isEmpty()) say(websocket->error());
     QObject::connect(&shortcuts, &libertas::ui::Shortcuts::notice, &app, say);
     auto* preferences =
         engine.singletonInstance<libertas::ui::Preferences*>("Libertas", "Preferences");
@@ -322,6 +347,16 @@ int main(int argc, char** argv) {
     if (engine.rootObjects().isEmpty())
         return fail("the QML shell failed to load");
 
+    auto* mcp = engine.singletonInstance<libertas::ui::McpServer*>("Libertas", "McpServer");
+    if (!mcp) return fail("the MCP server could not be created");
+    mcp->initialize(engine, document,
+        (check ? std::filesystem::path(checkPreferences.path().toStdString()) : config_dir()) / "mcp.json",
+        {{"document", &document}, {"workspace", &workspace}, {"preview", &preview},
+         {"preferences", preferences}, {"shortcuts", &shortcuts}, {"cache", cache},
+         {"theme", &theme}, {"connectors", document.connectors()}, {"websocket", websocket},
+         {"telemetry", engine.singletonInstance<libertas::ui::Telemetry*>("Libertas", "Telemetry")}});
+    if (!mcp->error().isEmpty()) say(mcp->error());
+
     if (check) {
         // Headless self-check. The point is to exercise the Workspace API that QML drives, in a
         // real event loop, with the real QML tree instantiated -- the parts the headless llayout
@@ -355,6 +390,509 @@ int main(int argc, char** argv) {
             }
             return found;
         };
+
+        if (parser.isSet(mcp_check_opt)) {
+            const auto pump = [](int ms = 30) {
+                QEventLoop loop;
+                QTimer::singleShot(ms, &loop, &QEventLoop::quit);
+                loop.exec();
+            };
+            pump(300);
+            report(!websocket->running() && !mcp->running(), "MCP and WebSocket default to stopped");
+            auto* menu = window->findChild<QObject*>(QStringLiteral("menuMcpSettings"));
+            report(menu && QMetaObject::invokeMethod(menu, "triggered"), "Tools > MCP Server Settings opens its own panel");
+            pump(100);
+            auto* dialog = window->findChild<QObject*>(QStringLiteral("mcpSettingsDialog"));
+            auto* enabled = window->findChild<QObject*>(QStringLiteral("mcpEnabled"));
+            auto* apply = window->findChild<QObject*>(QStringLiteral("applyMcpSettings"));
+            report(dialog && dialog->property("visible").toBool() && enabled && apply &&
+                       window->findChild<QObject*>(QStringLiteral("mcpToken")), "MCP settings expose their own port, token and enable control");
+            report(!mcp->apply(true, 4466, QStringLiteral("short")) && !mcp->running(), "MCP rejects weak tokens");
+            QTcpServer reservation;
+            report(reservation.listen(QHostAddress::LocalHost, 0), "MCP check reserves an independent port");
+            const auto port = reservation.serverPort();
+            reservation.close();
+            if (dialog && enabled && apply) {
+                dialog->setProperty("serverPort", port);
+                enabled->setProperty("checked", true);
+                dialog->setProperty("serverToken", mcp->token());
+                QMetaObject::invokeMethod(apply, "clicked");
+                pump(100);
+                if (parser.isSet(shot_opt)) {
+                    QDir().mkpath(parser.value(shot_opt));
+                    if (auto* settingsWindow = qobject_cast<QQuickWindow*>(dialog))
+                        settingsWindow->grabWindow().save(parser.value(shot_opt) + "/mcp-settings.png");
+                }
+                QMetaObject::invokeMethod(dialog, "close");
+            }
+            report(mcp->running() && !websocket->running(), "Native MCP listens with WebSocket completely disabled");
+            QFile settings(checkPreferences.filePath(QStringLiteral("mcp.json")));
+            report(settings.open(QIODevice::ReadOnly) &&
+                       QJsonDocument::fromJson(settings.readAll()).object().value("enabled").toBool() &&
+                       !(settings.permissions() & (QFileDevice::ReadGroup | QFileDevice::ReadOther)),
+                   "Independent MCP settings persist with owner-only permissions");
+            QProcess client;
+            auto environment = QProcessEnvironment::systemEnvironment();
+            environment.insert("LIBERTAS_MCP_URL", mcp->endpoint());
+            environment.insert("LIBERTAS_MCP_TOKEN", mcp->token());
+            client.setProcessEnvironment(environment);
+            client.setProcessChannelMode(QProcess::MergedChannels);
+            client.start(QStringLiteral("node"),
+                {QFileInfo(QStringLiteral(LIBERTAS_REPLAY_CHECK_SCRIPT)).dir().filePath(QStringLiteral("../../integrations/mcp/native-test.js")), parser.value(shot_opt)});
+            QElapsedTimer deadline;
+            deadline.start();
+            while (client.state() != QProcess::NotRunning && deadline.elapsed() < 60000) pump(20);
+            if (client.state() != QProcess::NotRunning) { client.kill(); client.waitForFinished(5000); }
+            const auto output = client.readAll();
+            std::fprintf(stderr, "%s", output.constData());
+            report(client.exitStatus() == QProcess::NormalExit && client.exitCode() == 0,
+                   "Official MCP SDK exercises native editing, UI controls, security and stdio compatibility");
+            report(mcp->apply(false, port, mcp->token()) && !mcp->running() && !websocket->running(),
+                   "Disabling MCP closes only the independent MCP listener");
+            report(reservation.listen(QHostAddress::LocalHost, port), "Disabled MCP releases its port");
+            report(!mcp->apply(true, port, mcp->token()) && !mcp->running() && !mcp->error().isEmpty(),
+                   "MCP reports occupied ports");
+            reservation.close();
+            report(mcp->apply(true, port, mcp->token()) && mcp->running(), "MCP can restart after a port conflict");
+            mcp->apply(false, port, mcp->token());
+            std::fprintf(stderr, "%s\n", rc == 0 ? "native MCP check passed" : "NATIVE MCP CHECK FAILED");
+            return rc;
+        }
+
+        if (parser.isSet(scene_reorder_check_opt)) {
+            const auto pump = [](int ms = 30) {
+                QEventLoop loop;
+                QTimer::singleShot(ms, &loop, &QEventLoop::quit);
+                loop.exec();
+            };
+            for (const auto* name : {"Drag A", "Drag B", "Drag C"}) document.addScene(name);
+            const auto canvas = document.canvasIds().front();
+            auto* scenes = document.scenesFor(canvas);
+            const auto ids = [](QAbstractItemModel* model) {
+                QStringList result;
+                for (int i = 0; i < model->rowCount(); ++i)
+                    result.append(model->data(model->index(i, 0), libertas::ui::SceneModel::IdRole).toString());
+                return result;
+            };
+            const auto original = ids(scenes);
+            for (const auto& id : original) document.setSceneFavourite(id, true);
+            const auto selected = document.selectedScene();
+            const auto program = document.mainDeck().value("program");
+            QQmlComponent sceneComponent(&engine,
+                QUrl(QStringLiteral("qrc:/qt/qml/Libertas/qml/ScenesPanel.qml")));
+            QQmlComponent favouriteComponent(&engine,
+                QUrl(QStringLiteral("qrc:/qt/qml/Libertas/qml/FavouritesPanel.qml")));
+            std::unique_ptr<QObject> sceneInstance(sceneComponent.create());
+            std::unique_ptr<QObject> favouriteInstance(favouriteComponent.create());
+            auto* scenePanel = qobject_cast<QQuickItem*>(sceneInstance.get());
+            auto* favouritePanel = qobject_cast<QQuickItem*>(favouriteInstance.get());
+            report(scenePanel && favouritePanel, "scene reorder panel fixtures open");
+            if (scenePanel && favouritePanel) {
+                for (auto* panel : {scenePanel, favouritePanel}) {
+                    panel->setParentItem(window->contentItem());
+                    panel->setWidth(300); panel->setHeight(230);
+                    panel->setY(60); panel->setZ(1000);
+                }
+                scenePanel->setX(20); favouritePanel->setX(340);
+                pump(100);
+                const auto drag = [&](QQuickItem* panel, const char* rowName, bool cancel = false) {
+                    auto rows = collect(panel, rowName);
+                    std::sort(rows.begin(), rows.end(), [](const auto* a, const auto* b) {
+                        return a->y() < b->y();
+                    });
+                    if (rows.size() < 3) return false;
+                    const auto from = rows.front()->mapToScene(QPointF(50, rows.front()->height() / 2));
+                    const auto to = rows.back()->mapToScene(QPointF(50, rows.back()->height() - 3));
+                    const auto post = [&](QEvent::Type type, QPointF at, Qt::MouseButton button,
+                                          Qt::MouseButtons buttons) {
+                        QMouseEvent event(type, at, at, button, buttons, Qt::NoModifier);
+                        QCoreApplication::sendEvent(window, &event);
+                        pump();
+                    };
+                    post(QEvent::MouseButtonPress, from, Qt::LeftButton, Qt::LeftButton);
+                    for (int i = 1; i <= 5; ++i)
+                        post(QEvent::MouseMove, from + (to - from) * (i / 5.0), Qt::NoButton, Qt::LeftButton);
+                    if (cancel) {
+                        QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+                        QCoreApplication::sendEvent(window, &escape);
+                    }
+                    post(QEvent::MouseButtonRelease, to, Qt::LeftButton, Qt::NoButton);
+                    return true;
+                };
+                report(drag(scenePanel, "sceneRow", true) && ids(scenes) == original &&
+                           document.mainDeck().value("program") == program,
+                       "Escape cancels a scene drag without taking it to Program");
+                auto expected = original;
+                expected.move(0, expected.size() - 1);
+                report(drag(scenePanel, "sceneRow") && ids(scenes) == expected,
+                       "dragging a scene moves it to the marked insertion point");
+                report(ids(document.favouriteScenesModel()) == original,
+                       "scene reordering preserves the independent favourites order");
+                report(document.selectedScene() == selected && document.mainDeck().value("program") == program,
+                       "scene dragging neither selects nor activates a scene");
+                document.undo(); pump();
+                report(ids(scenes) == original, "one undo restores scene order");
+                report(drag(favouritePanel, "favouriteRow") && ids(document.favouriteScenesModel()) == expected,
+                       "dragging a favourite reorders the favourites panel");
+                report(ids(scenes) == original && document.selectedScene() == selected &&
+                           document.mainDeck().value("program") == program,
+                       "favourite dragging preserves scene order, selection and Program");
+                const auto saved = ldoc::project_from_json(ldoc::project_to_json(document.projectForBindings()));
+                report(saved && saved->project.settings.extra == document.projectForBindings().settings.extra,
+                       "the independent favourites order survives project serialization");
+                document.undo(); pump();
+                report(ids(document.favouriteScenesModel()) == original,
+                       "one undo restores favourites order");
+                document.moveSceneInList(original.front(), 1, false);
+                auto keyboard = original; keyboard.move(0, 1);
+                report(ids(scenes) == keyboard, "keyboard scene reordering uses the same command");
+                document.undo();
+                document.moveSceneInList(original.front(), 1, true);
+                report(ids(document.favouriteScenesModel()) == keyboard,
+                       "keyboard favourites reordering uses the same command");
+                document.undo();
+            }
+            std::fprintf(stderr, "%s\n", rc == 0 ? "scene reorder check passed" : "SCENE REORDER CHECK FAILED");
+            return rc;
+        }
+
+        if (parser.isSet(studio_check_opt)) {
+            const auto pump = [](int ms) {
+                QEventLoop loop;
+                QTimer::singleShot(ms, &loop, &QEventLoop::quit);
+                loop.exec();
+            };
+            const auto initial = document.projectForBindings();
+            const auto deckId = document.mainDeck().value("id").toString();
+            const auto before = QString::fromStdString(initial.scenes.front().id.to_string());
+            const auto canvas = QString::fromStdString(initial.canvases.front().id.to_string());
+            document.setCanvasSize(canvas, 256, 144);
+            document.setDeckProgram(deckId, before);
+            document.addScene(QStringLiteral("Studio staged"));
+            const auto staged = document.selectedScene();
+            document.addNewSourceToScene(QStringLiteral("Preview colour"), QStringLiteral("source.color"));
+            document.setDeckProgram(deckId, before);
+            document.setSceneFavourite(staged, true);
+            const auto badge = [](QAbstractItemModel* model, const QString& id, int role) {
+                for (int row = 0; row < model->rowCount(); ++row) {
+                    const auto index = model->index(row, 0);
+                    if (model->data(index, libertas::ui::SceneModel::IdRole).toString() == id)
+                        return model->data(index, role).toBool();
+                }
+                return false;
+            };
+            const auto refreshing = [&preview] {
+                const auto timers = preview.findChildren<QTimer*>(QString{}, Qt::FindDirectChildrenOnly);
+                return std::ranges::any_of(timers, [](QTimer* timer) { return timer->isActive(); });
+            };
+            const auto studioButtons = collect(window->contentItem(), "studioModeButton");
+            report(!studioButtons.isEmpty() && QMetaObject::invokeMethod(studioButtons.front(), "clicked"),
+                   "the upper-left Studio Mode button enables Main Studio Mode");
+            document.activateScene(staged);
+            pump(600);
+            report(document.mainDeck().value("program").toString() == before &&
+                       document.mainDeck().value("preview").toString() == staged,
+                   "scene clicks stage Preview without changing Program");
+            report(badge(document.scenesModel(), staged, libertas::ui::SceneModel::IsPreviewRole) &&
+                       badge(document.favouriteScenesModel(), staged, libertas::ui::SceneModel::IsPreviewRole),
+                   "Scenes and Favourites identify staged Preview while Studio Mode is enabled");
+            QElapsedTimer deadline;
+            deadline.start();
+            while (!preview.hasFrame(preview.studioPreviewKey()) && deadline.elapsed() < 5000) pump(20);
+            report(preview.hasFrame(preview.studioPreviewKey()),
+                   "the renderer publishes a separate Main Preview picture");
+            report(collect(window->contentItem(), "studioModeView").size() == 1,
+                   "Main has one Studio Mode control surface");
+            report(workspace.title("controls") == "Transitions",
+                   "the existing Controls dock is renamed Transitions");
+            workspace.openPanel("controls");
+            workspace.activate("controls");
+            pump(100);
+            const auto blocks = collect(window->contentItem(), "deckBlock");
+            report(!blocks.isEmpty() && collect(blocks.front(), "takeButton").isEmpty(),
+                   "Transitions has settings without Take or program/preview controls");
+            const auto quick = document.quickTransitions();
+            document.setQuickTransition(0, "transition.fade", 500);
+            report(document.quickTransitions().front().toMap().value("durationMs").toInt() == 500,
+                   "quick transitions can be assigned a type and duration");
+            document.undo();
+            report(document.quickTransitions() == quick, "quick-transition assignments undo");
+            QQmlComponent component(&engine,
+                QUrl(QStringLiteral("qrc:/qt/qml/Libertas/qml/StudioModeView.qml")));
+            std::unique_ptr<QObject> instance(component.create());
+            auto* view = qobject_cast<QQuickItem*>(instance.get());
+            report(view != nullptr, "Studio Mode preview/program controls load");
+            if (view) {
+                view->setParentItem(window->contentItem());
+                view->setWidth(1000); view->setHeight(500);
+                pump(200);
+                const auto sliders = collect(view, "manualTransitionSlider");
+                report(sliders.size() == 1 && sliders.front()->isEnabled(),
+                       "Main exposes an enabled manual transition slider");
+                if (!sliders.empty()) {
+                    sliders.front()->setProperty("value", 0.5);
+                    report(QMetaObject::invokeMethod(sliders.front(), "moved"),
+                           "the manual slider sends an intermediate transition");
+                    pump(200);
+                    report(document.mainDeck().value("program").toString() == before,
+                           "partial manual transitions do not commit Program");
+                    if (parser.isSet(shot_opt)) {
+                        QDir().mkpath(parser.value(shot_opt));
+                        const auto shot = view->grabToImage();
+                        for (int i = 0; shot && shot->image().isNull() && i < 25; ++i) pump(20);
+                        report(shot && shot->saveToFile(parser.value(shot_opt) + "/studio-mode.png"),
+                               "Studio Mode screenshot saved");
+                    }
+                    sliders.front()->setProperty("value", 1.0);
+                    QMetaObject::invokeMethod(sliders.front(), "moved");
+                    pump(200);
+                    report(document.mainDeck().value("program").toString() == staged &&
+                               document.mainDeck().value("preview").toString() == before,
+                           "finishing the slider takes Preview and swaps the previous Program back");
+                }
+                document.triggerQuickTransition(0);
+                pump(100);
+                report(document.mainDeck().value("program").toString() == before,
+                       "a quick Cut button takes the staged scene");
+            }
+            instance.reset();
+            document.setDeckStudioMode(deckId, false);
+            document.activateScene(staged);
+            pump(100);
+            report(document.mainDeck().value("program").toString() == staged &&
+                       collect(window->contentItem(), "studioModeView").isEmpty(),
+                   "disabling Studio Mode restores direct scene activation and one Program view");
+            report(!badge(document.scenesModel(), before, libertas::ui::SceneModel::IsPreviewRole) &&
+                       !badge(document.favouriteScenesModel(), staged, libertas::ui::SceneModel::IsPreviewRole) &&
+                       badge(document.scenesModel(), staged, libertas::ui::SceneModel::IsProgramRole),
+                   "Studio Mode off hides Preview badges and preserves the live Program indicator");
+            document.setDeckTransition(deckId, QStringLiteral("transition.fade"), 300);
+            report(!document.hasLiveSource() && !refreshing(),
+                   "selecting Fade on static scenes does not continuously refresh");
+            document.setDeckProgram(deckId, before);
+            report(refreshing(), "an actual static-scene Fade starts temporary refresh polling");
+            pump(900);
+            report(!refreshing(), "static-scene refresh polling stops after Fade completes");
+            auto source = document.projectForBindings().sources.back();
+            source.settings["countdown.enabled"] = true;
+            document.runCommand(ldoc::SetSource{source});
+            report(!document.hasLiveSource(), "a saved live Preview scene is idle with Studio Mode off");
+            document.setDeckStudioMode(deckId, true);
+            document.activateScene(staged);
+            report(document.hasLiveSource(), "Studio Mode enables polling for a live Preview scene");
+            document.setDeckStudioMode(deckId, false);
+            report(!document.hasLiveSource() && !refreshing(),
+                   "disabling Studio Mode stops Preview-only polling");
+            document.initializeEncodeGraph();
+            workspace.openEncode();
+            pump(1000);
+            const auto thumbnails = collect(window->contentItem(), "encodeCanvasPreview");
+            QSize thumbnailSize;
+            auto* provider = static_cast<QQuickImageProvider*>(engine.imageProvider("program"));
+            if (provider) provider->requestImage(preview.canvasKey(canvas), &thumbnailSize, {});
+            report(!thumbnails.isEmpty() && thumbnailSize.width() > 100 && thumbnailSize.height() > 50,
+                   "Encoder Flow requests useful thumbnail resolution while Program is hidden");
+            report(collect(window->contentItem(), "studioModeView").isEmpty(),
+                   "Encoder Flow does not instantiate hidden Studio Mode views");
+            std::fprintf(stderr, "%s\n", rc == 0 ? "studio check passed" : "STUDIO CHECK FAILED");
+            return rc;
+        }
+
+        if (parser.isSet(replay_check_opt)) {
+            const auto pump = [](int ms) {
+                QEventLoop loop;
+                QTimer::singleShot(ms, &loop, &QEventLoop::quit);
+                loop.exec();
+            };
+            document.initializeEncodeGraph();
+            const auto project = document.projectForBindings();
+            const auto canvasId = QString::fromStdString(project.canvases.front().id.to_string());
+            document.setCanvasSize(canvasId, 256, 256);
+            document.setCanvasFps(canvasId, 30, 1);
+            document.addNewSourceToScene(QStringLiteral("Replay check"), QStringLiteral("source.color"));
+            const auto replayId = document.replayOutputId();
+            report(!replayId.isEmpty(), "Replay destination exists");
+            document.setOutputEncoder(replayId, QStringLiteral("h264"), QStringLiteral("x264"));
+            const auto defaults = document.outputEncoderSettings(replayId);
+            document.setEncodeRescale(defaults.value("id").toString(), 0, 0);
+            report(defaults.value("replaySeconds").toInt() == 20 &&
+                       defaults.value("replayMemoryMB").toInt() == 512,
+                   "Replay defaults to 20 seconds and 512 MB");
+            document.setReplaySettings(replayId, 1, 16);
+            const auto beforeInvalid = document.outputEncoderSettings(replayId);
+            document.setReplaySettings(replayId, 0, -1);
+            report(document.outputEncoderSettings(replayId) == beforeInvalid,
+                   "Invalid replay limits do not change the document");
+            QTemporaryDir outputDirectory;
+            for (const auto& output : project.outputs)
+                if (output.destination.kind == ldoc::DestinationKind::File)
+                    document.setRecordingDirectory(QString::fromStdString(output.id.to_string()), outputDirectory.path());
+            workspace.openEncode(replayId);
+            pump(1000);
+            const auto replayNodes = collect(window->contentItem(), QStringLiteral("outputNode_") + replayId);
+            report(!replayNodes.isEmpty(), "Backtrack node is present in the encoder graph");
+            report(!replayNodes.isEmpty() &&
+                       collect(replayNodes.front(), QStringLiteral("replaySeconds")).isEmpty() &&
+                       collect(replayNodes.front(), QStringLiteral("replayMemoryMB")).isEmpty(),
+                   "Replay parameter fields are absent from the graph node");
+            const auto graphs = collect(window->contentItem(), QStringLiteral("encodeGraph"));
+            if (!graphs.isEmpty()) {
+                QMetaObject::invokeMethod(graphs.front(), "revealOutput", Q_ARG(QVariant, replayId));
+                pump(100);
+            }
+            const auto seconds = collect(window->contentItem(), QStringLiteral("replaySeconds"));
+            const auto memory = collect(window->contentItem(), QStringLiteral("replayMemoryMB"));
+            const auto integerSpinner = [](const auto& fields, const QString& suffix) {
+                return !fields.isEmpty() && std::all_of(fields.begin(), fields.end(), [&](auto* field) {
+                    return field->property("decimals").toInt() == 0 && field->property("steppers").toBool() &&
+                           field->property("suffix").toString() == suffix;
+                });
+            };
+            report(seconds.size() == 1 && memory.size() == 1 &&
+                       integerSpinner(seconds, QStringLiteral("s")) && integerSpinner(memory, QStringLiteral("MB")),
+                   "Replay fields are integer spinners with seconds and MB suffixes");
+            const auto replayButtons = collect(window->contentItem(), QStringLiteral("replayButton"));
+            const auto clipButtons = collect(window->contentItem(), QStringLiteral("clipButton"));
+            const auto replayChecks = collect(window->contentItem(), QStringLiteral("enableReplayBuffer"));
+            report(!replayButtons.isEmpty() && !clipButtons.isEmpty() &&
+                       !replayButtons.front()->isEnabled() && !clipButtons.front()->isEnabled() &&
+                       !preview.replayActive(), "Replay and Clip start disabled");
+            report(!replayChecks.isEmpty() && QMetaObject::invokeMethod(replayChecks.front(), "toggled"),
+                   "Replay Properties checkbox can arm the toolbar");
+            pump(1000);
+            report(!replayButtons.isEmpty() && replayButtons.front()->isEnabled() &&
+                       !preview.replayActive() && !clipButtons.isEmpty() && !clipButtons.front()->isEnabled(),
+                   "Enable checkbox enables Replay without starting the buffer");
+            report(!clipButtons.isEmpty() && !replayButtons.isEmpty() &&
+                       clipButtons.front()->property("label").toString() == QLatin1String("Clip") &&
+                       clipButtons.front()->x() > replayButtons.front()->x(),
+                   "Clip button sits to the right of Replay");
+            if (parser.isSet(shot_opt)) {
+                QDir().mkpath(parser.value(shot_opt));
+                window->grabWindow().save(parser.value(shot_opt) + QStringLiteral("/replay-settings.png"));
+            }
+            QTcpServer portReservation;
+            report(portReservation.listen(QHostAddress::LocalHost, 0), "Replay websocket test reserves a local port");
+            const auto port = portReservation.serverPort();
+            portReservation.close();
+            qputenv("LIBERTAS_WEBSOCKET_PASSWORD", "local-replay-check-password");
+            auto* websocketMenu = window->findChild<QObject*>(QStringLiteral("menuWebsocketSettings"));
+            report(websocketMenu && websocketMenu->property("enabled").toBool() &&
+                       QMetaObject::invokeMethod(websocketMenu, "triggered"),
+                   "Tools > WebSocket Server Settings is enabled and opens");
+            pump(100);
+            auto* websocketDialog = window->findChild<QObject*>(QStringLiteral("websocketSettingsDialog"));
+            auto* websocketEnabled = window->findChild<QObject*>(QStringLiteral("websocketEnabled"));
+            auto* websocketPassword = window->findChild<QObject*>(QStringLiteral("websocketPassword"));
+            auto* websocketApply = window->findChild<QObject*>(QStringLiteral("applyWebsocketSettings"));
+            auto* websocketMode = window->findChild<QObject*>(QStringLiteral("websocketMode"));
+            report(websocketDialog && websocketDialog->property("visible").toBool() &&
+                       websocketEnabled && websocketPassword && websocketApply && websocketMode &&
+                       websocketMode->property("y").toDouble() > websocketPassword->property("y").toDouble(),
+                   "WebSocket settings expose mode directly below password");
+            report(!websocket->apply(true, port, {}) && !websocket->running(),
+                   "WebSocket settings reject enabling without a password");
+            if (websocketDialog && websocketEnabled && websocketPassword && websocketApply) {
+                websocketDialog->setProperty("serverPort", port);
+                websocketEnabled->setProperty("checked", true);
+                websocketDialog->setProperty("serverPassword", QStringLiteral("local-replay-check-password"));
+                QMetaObject::invokeMethod(websocketApply, "clicked");
+                pump(100);
+                if (parser.isSet(shot_opt)) {
+                    auto* settingsWindow = qobject_cast<QQuickWindow*>(websocketDialog);
+                    if (settingsWindow)
+                        settingsWindow->grabWindow().save(parser.value(shot_opt) + QStringLiteral("/websocket-settings.png"));
+                }
+                QMetaObject::invokeMethod(websocketDialog, "close");
+            }
+            report(websocket->running() && websocket->port() == port && websocket->error().isEmpty(),
+                   "Apply starts the local WebSocket server immediately");
+            QFile websocketFile(checkPreferences.filePath(QStringLiteral("websocket.json")));
+            report(websocketFile.open(QIODevice::ReadOnly) &&
+                       QJsonDocument::fromJson(websocketFile.readAll()).object().value("enabled").toBool() &&
+                       !(websocketFile.permissions() & (QFileDevice::ReadGroup | QFileDevice::ReadOther)),
+                   "WebSocket settings persist with owner-only permissions");
+            QProcess client;
+            client.setProcessChannelMode(QProcess::MergedChannels);
+            client.start(QStringLiteral("python3"), {QStringLiteral(LIBERTAS_REPLAY_CHECK_SCRIPT), QString::number(port), outputDirectory.path()});
+            QElapsedTimer deadline;
+            deadline.start();
+            while (client.state() != QProcess::NotRunning && deadline.elapsed() < 45000) pump(20);
+            if (client.state() != QProcess::NotRunning) { client.kill(); client.waitForFinished(5000); }
+            const auto output = client.readAll();
+            std::fprintf(stderr, "%s", output.constData());
+            report(client.exitStatus() == QProcess::NormalExit && client.exitCode() == 0,
+                   "OBS websocket replay requests authenticate and save a playable clip");
+            report(!websocket->applyMode(true, port, QStringLiteral("local-replay-check-password"), QStringLiteral("invalid")) && websocket->running(),
+                   "Invalid WebSocket mode preserves the listener");
+            report(websocket->applyMode(true, port, QStringLiteral("local-replay-check-password"), QStringLiteral("obs")) && websocket->mode() == QStringLiteral("obs"),
+                   "OBS mode restarts the listener");
+            QProcess obsClient;
+            auto obsEnvironment = QProcessEnvironment::systemEnvironment();
+            obsEnvironment.insert(QStringLiteral("LIBERTAS_TEST_OBS"), QStringLiteral("1"));
+            obsClient.setProcessEnvironment(obsEnvironment);
+            obsClient.setProcessChannelMode(QProcess::MergedChannels);
+            obsClient.start(QStringLiteral("python3"), {QStringLiteral(LIBERTAS_REPLAY_CHECK_SCRIPT), QString::number(port), outputDirectory.path()});
+            deadline.restart();
+            while (obsClient.state() != QProcess::NotRunning && deadline.elapsed() < 15000) pump(20);
+            if (obsClient.state() != QProcess::NotRunning) { obsClient.kill(); obsClient.waitForFinished(5000); }
+            std::fprintf(stderr, "%s", obsClient.readAll().constData());
+            report(obsClient.exitStatus() == QProcess::NormalExit && obsClient.exitCode() == 0,
+                   "OBS mode serves Companion bootstrap and source settings");
+            report(websocket->applyMode(false, port, QStringLiteral("local-replay-check-password"), QStringLiteral("libertas")),
+                   "Native mode can be restored");
+            report(websocket->apply(false, port, QStringLiteral("local-replay-check-password")) &&
+                       !websocket->running(), "Apply disables the WebSocket listener immediately");
+            report(portReservation.listen(QHostAddress::LocalHost, port),
+                   "Disabling WebSocket releases its port");
+            report(!websocket->apply(true, port, QStringLiteral("local-replay-check-password")) &&
+                       !websocket->running() && !websocket->error().isEmpty(),
+                   "WebSocket settings report an occupied port");
+            portReservation.close();
+            report(websocket->apply(true, port, QStringLiteral("local-replay-check-password")) &&
+                       websocket->running(), "WebSocket can restart after a port conflict");
+            shortcuts.perform(QStringLiteral("output.toggle-replay-buffer"));
+            pump(3000);
+            report(preview.replayActive(), "Replay buffer starts through its hotkey action");
+            const auto previousClip = preview.lastReplayPath();
+            shortcuts.perform(QStringLiteral("output.save-replay"));
+            deadline.restart();
+            while (preview.lastReplayPath() == previousClip && deadline.elapsed() < 10000) pump(20);
+            report(preview.lastReplayPath() != previousClip && QFile::exists(preview.lastReplayPath()),
+                   "Save Replay hotkey writes a new clip");
+            const auto hotkeyClip = preview.lastReplayPath();
+            report(!clipButtons.isEmpty() && clipButtons.front()->isEnabled() &&
+                       QMetaObject::invokeMethod(clipButtons.front(), "clicked"),
+                   "Clip toolbar button triggers a save");
+            deadline.restart();
+            while (preview.lastReplayPath() == hotkeyClip && deadline.elapsed() < 10000) pump(20);
+            report(preview.lastReplayPath() != hotkeyClip && QFile::exists(preview.lastReplayPath()),
+                   "Clip toolbar button writes a new clip");
+            report(!replayButtons.isEmpty() && replayButtons.front()->isEnabled() &&
+                       QMetaObject::invokeMethod(replayButtons.front(), "clicked"),
+                   "Replay toolbar button requests stopping the buffer");
+            deadline.restart();
+            while (preview.replayActive() && deadline.elapsed() < 5000) pump(20);
+            pump(300);
+            report(!preview.replayActive() && replayButtons.front()->isEnabled() &&
+                       document.outputEncoderSettings(replayId).value("enabled").toBool(),
+                   "Replay stops while the Properties checkbox remains enabled");
+            QMetaObject::invokeMethod(replayButtons.front(), "clicked");
+            deadline.restart();
+            while (!preview.replayActive() && deadline.elapsed() < 5000) pump(20);
+            report(preview.replayActive(), "Replay toolbar button restarts the buffer");
+            shortcuts.perform(QStringLiteral("output.toggle-replay-buffer"));
+            deadline.restart();
+            while (preview.replayActive() && deadline.elapsed() < 5000) pump(20);
+            report(!preview.replayActive(), "Replay buffer stops through its hotkey action");
+            if (!replayChecks.isEmpty()) QMetaObject::invokeMethod(replayChecks.front(), "toggled");
+            pump(300);
+            report(!replayButtons.isEmpty() && !replayButtons.front()->isEnabled() &&
+                       !clipButtons.isEmpty() && !clipButtons.front()->isEnabled(),
+                   "Clearing the Properties checkbox disables Replay and Clip");
+            std::fprintf(stderr, "%s\n", rc == 0 ? "replay check passed" : "REPLAY CHECK FAILED");
+            return rc;
+        }
 
         // Exercise the actual menu, editor and embedded Chromium view. The regular check uses
         // an in-memory page; --check-browser-url opts into a real network smoke test.
@@ -5281,6 +5819,26 @@ int main(int argc, char** argv) {
                     if (item->isVisible()) return item;
                 return nullptr;
             };
+            report(preferences && !preferences->showOutputMissedFrames() &&
+                       !stat("outputMissedFrames"),
+                   "Output frames missed is hidden by default");
+            report(preferences && preferences->setShowOutputMissedFrames(true),
+                   "the output missed statistic can be enabled");
+            settle();
+            report(stat("outputMissedFrames") != nullptr,
+                   "the enabled output missed statistic appears immediately");
+            if (preferences) {
+                libertas::ui::Preferences::configure(
+                    std::filesystem::path(checkPreferences.path().toStdString()) /
+                    "preferences.json");
+                report(preferences->showOutputMissedFrames(),
+                       "the output missed preference survives reloading");
+                report(preferences->setShowOutputMissedFrames(false),
+                       "the output missed statistic can be disabled again");
+            }
+            settle();
+            report(!stat("outputMissedFrames"),
+                   "disabling the output missed statistic hides it immediately");
             auto* target = stat("canvasTargetFps");
             auto* duration = stat("canvasRenderTime");
             auto* renderedFrames = stat("canvasRenderedFrames");
@@ -5322,6 +5880,57 @@ int main(int argc, char** argv) {
                            target->property("value").toString() == "30.0",
                        "Broadcast Stats reset immediately displays zeros and keeps canvas target FPS");
                 document.undo();
+                settle();
+            }
+        }
+
+        // Stats use paired cards, including the last unpaired canvas.
+        {
+            QQmlComponent component(&engine,
+                QUrl(QStringLiteral("qrc:/qt/qml/Libertas/qml/BroadcastStatsPanel.qml")));
+            std::unique_ptr<QObject> instance(component.create());
+            auto* panel = qobject_cast<QQuickItem*>(instance.get());
+            report(panel != nullptr, "Broadcast Stats layout fixture opens");
+            if (panel) {
+                panel->setParentItem(window->contentItem());
+                panel->setWidth(700);
+                panel->setHeight(800);
+                auto* grid = panel->findChild<QQuickItem*>("canvasStatsGrid");
+                const auto savedCanvas = document.currentCanvas();
+                const auto savedScene = document.selectedScene();
+                const auto originalCount = document.canvasIds().size();
+                for (auto count = originalCount; count < 5; ++count)
+                    document.addCanvas(QStringLiteral("Stats canvas %1").arg(count + 1));
+                settle();
+                auto cards = collect(grid, QStringLiteral("canvasStatsCard"));
+                std::sort(cards.begin(), cards.end(), [](const auto* a, const auto* b) {
+                    return a->y() == b->y() ? a->x() < b->x() : a->y() < b->y();
+                });
+                bool paired = cards.size() >= 5 && grid->property("columns").toInt() == 2;
+                for (qsizetype i = 0; i < cards.size() && paired; ++i) {
+                    paired = std::abs(cards[i]->x() - (i % 2 == 0 ? 0 : cards[i]->width() + 24)) < 1 &&
+                             (i < 2 || cards[i]->y() >= cards[i - 2]->y() + cards[i - 2]->height());
+                    if (i % 2 == 1)
+                        paired = paired && std::abs(cards[i]->y() - cards[i - 1]->y()) < 1;
+                }
+                report(paired, "five canvases fill two columns and three rows without overlap");
+                if (parser.isSet(shot_opt)) {
+                    const auto shot = panel->grabToImage();
+                    for (int i = 0; shot && shot->image().isNull() && i < 25; ++i) pump(20);
+                    report(shot && shot->saveToFile(parser.value(shot_opt) +
+                               QStringLiteral("/broadcast-stats-paired.png")),
+                           "paired Broadcast Stats screenshot saved");
+                }
+                panel->setWidth(400);
+                settle();
+                bool stacked = grid->property("columns").toInt() == 1;
+                for (qsizetype i = 1; i < cards.size(); ++i)
+                    stacked = stacked && cards[i]->x() == 0 &&
+                              cards[i]->y() >= cards[i - 1]->y() + cards[i - 1]->height();
+                report(stacked, "narrow Broadcast Stats stacks canvases without overlap");
+                for (auto count = originalCount; count < 5; ++count) document.undo();
+                document.selectCanvas(savedCanvas);
+                document.selectScene(savedScene);
                 settle();
             }
         }

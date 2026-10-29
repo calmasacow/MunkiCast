@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "document.hpp"
+#include <QJsonArray>
+#include <QJsonDocument>
 
 #include "assetcache.hpp"
 #include "lcomp/composite.hpp"
@@ -930,7 +932,8 @@ void Document::rebuild() {
         row.nodeCount = count;
         for (const ldoc::Deck& d : p.decks) {
             row.isProgram = row.isProgram || (d.program_scene && *d.program_scene == s.id);
-            row.isPreview = row.isPreview || (d.preview_scene && *d.preview_scene == s.id);
+            row.isPreview = row.isPreview || (d.studio_mode && d.canvas == main_canvas &&
+                                              d.preview_scene && *d.preview_scene == s.id);
         }
         for (const ldoc::Canvas& c : p.canvases)
             row.isEmergency = row.isEmergency || (c.emergency_scene && *c.emergency_scene == s.id);
@@ -959,6 +962,19 @@ void Document::rebuild() {
             favourites.push_back(row);
         scenes_per_canvas[id_str(s.canvas)].push_back(std::move(row));
     }
+    if (const auto order = p.settings.extra.find("ui.favourite-scene-order");
+        order != p.settings.extra.end())
+        if (const auto* json = std::get_if<std::string>(&order->second)) {
+            const auto ids = QJsonDocument::fromJson(QByteArray::fromStdString(*json)).array();
+            std::map<QString, int> ranks;
+            for (int i = 0; i < ids.size(); ++i) ranks.try_emplace(ids[i].toString(), i);
+            const auto rank = [&](const SceneRow& row) {
+                const auto it = ranks.find(row.id);
+                return it == ranks.end() ? ids.size() : it->second;
+            };
+            std::stable_sort(favourites.begin(), favourites.end(),
+                [&](const auto& a, const auto& b) { return rank(a) < rank(b); });
+        }
     favourites_.set_rows(std::move(favourites));
     for (auto& [canvas, rows] : scenes_per_canvas) {
         auto* model = static_cast<SceneModel*>(scenesFor(canvas));
@@ -1717,7 +1733,11 @@ void Document::activateScene(const QString& id) {
     std::optional<ldoc::Command> command;
     for (const auto& deck : project.decks) {
         if (deck.canvas != canvas) continue;
-        if (deck.program_scene != parsed || needs_cue)
+        if (deck.studio_mode && !project.canvases.empty() &&
+            canvas == project.canvases.front().id) {
+            if (deck.preview_scene != parsed)
+                command = ldoc::SetDeckPreview{deck.id, *parsed};
+        } else if (deck.program_scene != parsed || needs_cue)
             command = ldoc::SetDeckProgram{deck.id, *parsed};
         selectSceneOn(id_str(canvas), id);
         if (command) run(*command);
@@ -1789,6 +1809,62 @@ void Document::setSceneFavourite(const QString& id, bool favourite) {
     const auto parsed = parse_id(id);
     if (parsed)
         run(ldoc::SetSceneFavourite{*parsed, favourite});
+}
+
+void Document::reorderScene(const QString& id, const QString& target, bool after, bool favourites) {
+    const auto source_id = parse_id(id), target_id = parse_id(target);
+    const auto& project = session_->project();
+    const auto* source = source_id ? project.scene(*source_id) : nullptr;
+    const auto* destination = target_id ? project.scene(*target_id) : nullptr;
+    if (!source || !destination || id == target ||
+        (favourites ? !source->favourite || !destination->favourite
+                    : source->canvas != destination->canvas)) return;
+    QStringList order;
+    if (favourites) {
+        for (const auto& row : favourites_.rows()) order.append(row.id);
+    } else {
+        for (const auto& scene : project.scenes) order.append(id_str(scene.id));
+    }
+    const auto from = order.indexOf(id);
+    auto to = order.indexOf(target) + (after ? 1 : 0);
+    if (from < 0 || order.indexOf(target) < 0) return;
+    if (from < to) --to;
+    if (from == to) return;
+    order.move(from, to);
+    if (!favourites) {
+        QStringList saved_favourites;
+        for (const auto& row : favourites_.rows()) saved_favourites.append(row.id);
+        auto settings = project.settings;
+        settings.extra["ui.favourite-scene-order"] = QJsonDocument(QJsonArray::fromStringList(saved_favourites))
+            .toJson(QJsonDocument::Compact).toStdString();
+        if (saved_favourites.isEmpty() || settings == project.settings)
+            run(ldoc::MoveScene{*source_id, static_cast<std::size_t>(to)});
+        else
+            run(ldoc::make_batch({ldoc::MoveScene{*source_id, static_cast<std::size_t>(to)},
+                                 ldoc::SetProjectSettings{std::move(settings)}}, "Reorder scenes"));
+        return;
+    }
+    auto settings = project.settings;
+    settings.extra["ui.favourite-scene-order"] =
+        QJsonDocument(QJsonArray::fromStringList(order)).toJson(QJsonDocument::Compact).toStdString();
+    run(ldoc::SetProjectSettings{std::move(settings)});
+}
+
+void Document::moveSceneInList(const QString& id, int delta, bool favourites) {
+    const auto parsed = parse_id(id);
+    const auto& project = session_->project();
+    const auto* source = parsed ? project.scene(*parsed) : nullptr;
+    if (!source || (delta != -1 && delta != 1)) return;
+    QStringList order;
+    if (favourites) {
+        for (const auto& row : favourites_.rows()) order.append(row.id);
+    } else {
+        for (const auto& scene : project.scenes)
+            if (scene.canvas == source->canvas) order.append(id_str(scene.id));
+    }
+    const auto from = order.indexOf(id), to = from + delta;
+    if (from >= 0 && to >= 0 && to < order.size())
+        reorderScene(id, order[to], delta > 0, favourites);
 }
 
 void Document::moveScene(const QString& id, int delta) {
@@ -2519,19 +2595,14 @@ QVariantMap Document::screenDetails(const QString& connector) const {
 
 bool Document::hasLiveSource() const {
     const ldoc::Project& project = session_->project();
-    for (const auto& deck : project.decks)
-        if (deck.transition.starts_with("transition.stinger:")) return true;
-    // Walks every deck's program *and* preview scene, because any canvas being live is enough to
-    // keep the preview republishing -- the renderer composites all of them on one commit. The
-    // preview scene counts for the same reason the program one does: it is on screen, so a
-    // countdown sitting in the scene being built has to tick there too, not only once it is cut
-    // to air.
     std::vector<const ldoc::Scene*> watched;
-    for (const ldoc::Deck& deck : project.decks)
-        for (const auto& which : {deck.program_scene, deck.preview_scene})
-            if (which)
-                if (const ldoc::Scene* found = project.scene(*which))
-                    watched.push_back(found);
+    for (const auto& deck : project.decks) {
+        if (deck.program_scene)
+            if (const auto* scene = project.scene(*deck.program_scene)) watched.push_back(scene);
+        if (deck.studio_mode && !project.canvases.empty() &&
+            deck.canvas == project.canvases.front().id && deck.preview_scene)
+            if (const auto* scene = project.scene(*deck.preview_scene)) watched.push_back(scene);
+    }
     for (const ldoc::Scene* scene : watched) {
         bool live = false;
         std::unordered_set<ldoc::Id> visited{scene->id};
@@ -3417,7 +3488,7 @@ QVariantList Document::transitions() const {
         m["title"] = QString::fromLatin1(e.title);
         // A cut needs nothing from a renderer; the rest do, and the panel marks them so an
         // operator is not told a fade works when nothing can draw one yet.
-        m["implemented"] = std::string_view{e.id} == "transition.cut";
+        m["implemented"] = std::string_view{e.id} != "transition.slide";
         out.append(m);
     }
     for (const auto& source : session_->project().sources) {
@@ -3571,6 +3642,76 @@ void Document::setDeckPreview(const QString& deckId, const QString& sceneId) {
     run(ldoc::SetDeckPreview{*deck, sceneId.isEmpty() ? std::nullopt : parse_id(sceneId)});
 }
 
+QVariantMap Document::mainDeck() const {
+    const auto& project = session_->project();
+    if (project.canvases.empty()) return {};
+    for (const auto& deck : project.decks) {
+        if (deck.canvas != project.canvases.front().id) continue;
+        return {{"id", id_str(deck.id)}, {"studio", deck.studio_mode},
+                {"program", deck.program_scene ? id_str(*deck.program_scene) : QString{}},
+                {"preview", deck.preview_scene ? id_str(*deck.preview_scene) : QString{}},
+                {"transition", qstr(deck.transition)}, {"durationMs", deck.transition_ms},
+                {"canTake", deck.preview_scene && deck.preview_scene != deck.program_scene}};
+    }
+    return {};
+}
+
+QVariantList Document::quickTransitions() const {
+    const auto& extra = session_->project().settings.extra;
+    if (const auto it = extra.find("studio.quick-transitions"); it != extra.end())
+        if (const auto* json = std::get_if<std::string>(&it->second))
+            return QJsonDocument::fromJson(QByteArray::fromStdString(*json)).array().toVariantList();
+    return {QVariantMap{{"transition", "transition.cut"}, {"durationMs", 0}},
+            QVariantMap{{"transition", "transition.fade"}, {"durationMs", 300}},
+            QVariantMap{{"transition", "transition.fade-to-black"}, {"durationMs", 300}}};
+}
+
+void Document::setQuickTransition(int index, const QString& transition, int durationMs) {
+    auto quick = quickTransitions();
+    if (index < 0 || index > quick.size() || (index == quick.size() && quick.size() >= 32) ||
+        durationMs < 0 || durationMs > 600000) return;
+    const auto available = transitions();
+    if (std::ranges::none_of(available, [&](const auto& value) {
+            const auto entry = value.toMap();
+            return entry.value("id") == transition && entry.value("implemented").toBool();
+        })) return;
+    const QVariantMap entry{{"transition", transition}, {"durationMs", durationMs}};
+    if (index == quick.size()) quick.append(entry);
+    else quick[index] = entry;
+    auto settings = session_->project().settings;
+    settings.extra["studio.quick-transitions"] = QJsonDocument(QJsonArray::fromVariantList(quick))
+        .toJson(QJsonDocument::Compact).toStdString();
+    run(ldoc::SetProjectSettings{std::move(settings)});
+}
+
+void Document::removeQuickTransition(int index) {
+    auto quick = quickTransitions();
+    if (index < 0 || index >= quick.size()) return;
+    quick.removeAt(index);
+    auto settings = session_->project().settings;
+    settings.extra["studio.quick-transitions"] = QJsonDocument(QJsonArray::fromVariantList(quick))
+        .toJson(QJsonDocument::Compact).toStdString();
+    run(ldoc::SetProjectSettings{std::move(settings)});
+}
+
+void Document::triggerQuickTransition(int index) {
+    const auto quick = quickTransitions();
+    const auto deck = mainDeck();
+    if (index < 0 || index >= quick.size() || !deck.value("studio").toBool() ||
+        !deck.value("canTake").toBool()) return;
+    const auto entry = quick[index].toMap();
+    const auto available = transitions();
+    if (entry.value("durationMs").toInt() < 0 || entry.value("durationMs").toInt() > 600000 ||
+        std::ranges::none_of(available, [&](const auto& value) {
+            const auto option = value.toMap();
+            return option.value("id") == entry.value("transition") &&
+                   option.value("implemented").toBool();
+        })) return;
+    setDeckTransition(deck.value("id").toString(), entry.value("transition").toString(),
+                      entry.value("durationMs").toInt());
+    takeDeck(deck.value("id").toString());
+}
+
 void Document::takeDeck(const QString& deckId) {
     const auto parsed = parse_id(deckId);
     if (!parsed)
@@ -3584,13 +3725,21 @@ void Document::takeDeck(const QString& deckId) {
         }
         if (d.program_scene && *d.program_scene == *d.preview_scene)
             return; // already on air; a take would be a no-op on the undo stack
-        run(ldoc::SetDeckProgram{d.id, d.preview_scene});
+        if (d.studio_mode)
+            run(ldoc::make_batch({ldoc::SetDeckProgram{d.id, d.preview_scene},
+                                 ldoc::SetDeckPreview{d.id, d.program_scene}}, "Take preview"));
+        else
+            run(ldoc::SetDeckProgram{d.id, d.preview_scene});
         return;
     }
 }
 
 void Document::setDeckStudioMode(const QString& deckId, bool studio) {
-    edit_deck(deckId, [studio](ldoc::Deck& d) { d.studio_mode = studio; });
+    if (mainDeck().value("id").toString() != deckId) return;
+    edit_deck(deckId, [studio](ldoc::Deck& d) {
+        d.studio_mode = studio;
+        if (studio && !d.preview_scene) d.preview_scene = d.program_scene;
+    });
 }
 
 void Document::setDeckTransition(const QString& deckId, const QString& transition,
@@ -4223,6 +4372,34 @@ QString Document::recordingDirectory() const {
                                    : qstr(session_->path().parent_path().string());
 }
 
+QString Document::replayOutputId() const {
+    for (const auto& output : session_->project().outputs)
+        if (output.destination.kind == ldoc::DestinationKind::Replay) return id_str(output.id);
+    return {};
+}
+
+void Document::setReplaySettings(const QString& id, int seconds, int memoryMB) {
+    if (seconds < 1 || seconds > 86400 || memoryMB < 1 || memoryMB > 1048576) {
+        emit notice(tr("Replay requires 1–86400 seconds and 1–1048576 MB."));
+        return;
+    }
+    edit_output(id, [&](ldoc::Output& output) {
+        if (output.destination.kind != ldoc::DestinationKind::Replay) return;
+        output.destination.replay_seconds = static_cast<std::uint32_t>(seconds);
+        output.destination.replay_memory_mb = static_cast<std::uint32_t>(memoryMB);
+    });
+}
+
+QString Document::replayPath() const {
+    for (const auto& output : session_->project().outputs) {
+        if (output.destination.kind != ldoc::DestinationKind::Replay) continue;
+        auto path = recordingPathFor(id_str(output.encode));
+        if (!path.isEmpty()) path.insert(path.size() - 4, QStringLiteral("_clip"));
+        return path;
+    }
+    return {};
+}
+
 QString Document::recordingPathFor(const QString& encodeId) const {
     const auto parsed = parse_id(encodeId);
     if (!parsed)
@@ -4431,6 +4608,9 @@ QVariantMap Document::outputEncoderSettings(const QString& id) const {
             settings["destinationKind"] = QString::fromUtf8(kind.data(), static_cast<qsizetype>(kind.size()));
             settings["url"] = qstr(o.destination.url);
             settings["credentialRef"] = qstr(o.destination.credential_ref);
+            settings["enabled"] = o.enabled;
+            settings["replaySeconds"] = o.destination.replay_seconds;
+            settings["replayMemoryMB"] = o.destination.replay_memory_mb;
             const auto fallback = o.destination.kind == ldoc::DestinationKind::Rtmps
                 ? QStringLiteral("rtmp") : settings["destinationKind"].toString();
             settings["service"] = o.destination.service.empty() ? fallback : qstr(o.destination.service);
@@ -5504,3 +5684,8 @@ void Document::save() {
 }
 
 } // namespace libertas::ui
+
+std::expected<std::string, std::string> libertas::ui::Document::remoteCommand(
+    const ldoc::Command& command) {
+    return session_->run(command);
+}

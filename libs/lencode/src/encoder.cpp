@@ -17,11 +17,14 @@
 #include "lencode/encoder.hpp"
 
 #include <algorithm>
+#include <atomic>
 #include <cerrno>
 #include <chrono>
 #include <cstring>
+#include <deque>
 #include <fcntl.h>
 #include <format>
+#include <future>
 #include <lcore/log.hpp>
 #include <limits>
 #include <mutex>
@@ -52,6 +55,13 @@ const char* tier_name(VideoTier t) {
         return "none";
     }
 }
+
+struct ReplayPacket {
+    std::shared_ptr<AVPacket> packet;
+    AVRational time_base;
+    std::int64_t time_ns = 0;
+    bool video = false;
+};
 
 struct Encoder {
     RuntimeConfig cfg;
@@ -85,6 +95,13 @@ struct Encoder {
     std::int64_t output_origin_ns = 0;
     bool rebase_output = false;
     bool force_keyframe = false;
+    std::deque<ReplayPacket> replay;
+    std::uint32_t replay_seconds = 0;
+    std::uint64_t replay_limit = 0;
+    std::shared_ptr<std::atomic<std::uint64_t>> replay_bytes =
+        std::make_shared<std::atomic<std::uint64_t>>(0);
+    std::future<ReplayResult> replay_save;
+    std::int64_t replay_latest_ns = 0;
 };
 
 namespace {
@@ -135,7 +152,7 @@ int file_write(void* opaque, const std::uint8_t* data, int size) {
 std::int64_t file_seek(void* opaque, std::int64_t offset, int whence) {
     const int fd = static_cast<Encoder*>(opaque)->file_fd;
     if (whence == AVSEEK_SIZE) {
-        struct stat info {};
+        struct stat info{};
         return ::fstat(fd, &info) == 0 ? info.st_size : AVERROR(errno);
     }
     const auto result = ::lseek(fd, offset, whence & ~AVSEEK_FORCE);
@@ -201,9 +218,59 @@ bool open_muxer(Encoder* enc, std::string& error) {
     return true;
 }
 
+// Keep the keyframe preceding the time cutoff. Memory pressure drops whole GOPs; a GOP
+// larger than the cap is discarded until another keyframe arrives. Audio cannot lead its video.
+void buffer_packet(Encoder& enc, AVCodecContext* ctx) {
+    if (!enc.replay_seconds)
+        return;
+    const bool video = ctx == enc.vctx;
+    const bool key = video && (enc.pkt->flags & AV_PKT_FLAG_KEY);
+    const auto time = av_rescale_q(enc.pkt->dts, ctx->time_base, AVRational{1, 1000000000});
+    if (video)
+        enc.replay_latest_ns = time;
+    const auto drop_gop = [&] {
+        if (enc.replay.empty())
+            return;
+        enc.replay.pop_front();
+        while (!enc.replay.empty() &&
+               !(enc.replay.front().video && (enc.replay.front().packet->flags & AV_PKT_FLAG_KEY)))
+            enc.replay.pop_front();
+    };
+    for (;;) {
+        const auto next = std::find_if(
+            enc.replay.begin() + (enc.replay.empty() ? 0 : 1), enc.replay.end(),
+            [](const auto& p) { return p.video && (p.packet->flags & AV_PKT_FLAG_KEY); });
+        if (next == enc.replay.end() ||
+            next->time_ns >
+                enc.replay_latest_ns - static_cast<std::int64_t>(enc.replay_seconds) * 1000000000LL)
+            break;
+        drop_gop();
+    }
+    std::uint64_t charge = (enc.pkt->buf ? static_cast<std::uint64_t>(enc.pkt->buf->size)
+                                         : static_cast<std::uint64_t>(enc.pkt->size)) +
+                           sizeof(AVPacket) + sizeof(ReplayPacket) + 128;
+    for (int i = 0; i < enc.pkt->side_data_elems; ++i)
+        charge += enc.pkt->side_data[i].size;
+    while (!enc.replay.empty() && enc.replay_bytes->load() + charge > enc.replay_limit)
+        drop_gop();
+    if ((enc.replay.empty() && !key) || charge > enc.replay_limit ||
+        enc.replay_bytes->load() > enc.replay_limit - charge)
+        return;
+    auto* copy = av_packet_clone(enc.pkt);
+    if (!copy)
+        return;
+    enc.replay_bytes->fetch_add(charge);
+    enc.replay.push_back(
+        {std::shared_ptr<AVPacket>(copy,
+                                   [bytes = enc.replay_bytes, charge](AVPacket* p) {
+                                       av_packet_free(&p);
+                                       bytes->fetch_sub(charge);
+                                   }),
+         ctx->time_base, time, video});
+}
+
 /// Drains packets from an encoder into the muxer.
-bool drain(Encoder& enc, AVCodecContext* ctx, AVStream*, std::uint64_t& bytes,
-           std::string& error) {
+bool drain(Encoder& enc, AVCodecContext* ctx, AVStream*, std::uint64_t& bytes, std::string& error) {
     for (;;) {
         const int r = avcodec_receive_packet(ctx, enc.pkt);
         if (r == AVERROR(EAGAIN) || r == AVERROR_EOF)
@@ -213,18 +280,22 @@ bool drain(Encoder& enc, AVCodecContext* ctx, AVStream*, std::uint64_t& bytes,
             return false;
         }
         bytes += static_cast<std::uint64_t>(enc.pkt->size);
+        buffer_packet(enc, ctx);
         const bool video = ctx == enc.vctx;
         const auto write = [&](Encoder& output) {
-            if (!output.header_written) return;
+            if (!output.header_written)
+                return;
             NetworkOperation operation(output);
             if (output.output_origin_ns == AV_NOPTS_VALUE) {
-                if (!video || !(enc.pkt->flags & AV_PKT_FLAG_KEY)) return;
-                output.output_origin_ns = av_rescale_q(enc.pkt->dts, ctx->time_base,
-                                                       AVRational{1, 1000000000});
+                if (!video || !(enc.pkt->flags & AV_PKT_FLAG_KEY))
+                    return;
+                output.output_origin_ns =
+                    av_rescale_q(enc.pkt->dts, ctx->time_base, AVRational{1, 1000000000});
             }
-            const auto origin = av_rescale_q(output.output_origin_ns,
-                                             AVRational{1, 1000000000}, ctx->time_base);
-            if (output.rebase_output && enc.pkt->dts < origin) return;
+            const auto origin =
+                av_rescale_q(output.output_origin_ns, AVRational{1, 1000000000}, ctx->time_base);
+            if (output.rebase_output && enc.pkt->dts < origin)
+                return;
             AVPacket* packet = av_packet_clone(enc.pkt);
             int result = AVERROR(ENOMEM);
             if (packet) {
@@ -245,10 +316,13 @@ bool drain(Encoder& enc, AVCodecContext* ctx, AVStream*, std::uint64_t& bytes,
             }
         };
         write(enc);
-        for (auto& output : enc.outputs) if (output) write(*output);
+        for (auto& output : enc.outputs)
+            if (output)
+                write(*output);
         av_packet_unref(enc.pkt);
-        if (!enc.header_written && std::ranges::none_of(enc.outputs,
-                [](const auto& output) { return output && output->header_written; })) {
+        if (!enc.replay_seconds && !enc.header_written &&
+            std::ranges::none_of(
+                enc.outputs, [](const auto& output) { return output && output->header_written; })) {
             error = enc.output_error.empty() ? "No output destinations remain" : enc.output_error;
             return false;
         }
@@ -382,8 +456,11 @@ EncoderPtr encoder_open(const RuntimeConfig& cfg, std::string& error) {
     if (enc->cfg.source_height == 0)
         enc->cfg.source_height = cfg.height;
 
-    int r = avformat_alloc_output_context2(&enc->fmt, nullptr, enc->network ? "flv" : nullptr,
-                                           cfg.path.c_str());
+    int r = avformat_alloc_output_context2(&enc->fmt, nullptr,
+                                           enc->network       ? "flv"
+                                           : cfg.path.empty() ? "matroska"
+                                                              : nullptr,
+                                           cfg.path.empty() ? nullptr : cfg.path.c_str());
     if (r < 0 || enc->fmt == nullptr) {
         error = std::format("avformat_alloc_output_context2: {}", av_err(r));
         return nullptr;
@@ -524,16 +601,17 @@ EncoderPtr encoder_open(const RuntimeConfig& cfg, std::string& error) {
                  enc->actx->frame_size);
     }
 
-    if (!open_muxer(enc.get(), error)) return nullptr;
+    if (!cfg.path.empty() && !open_muxer(enc.get(), error))
+        return nullptr;
     enc->pkt = av_packet_alloc();
     return enc;
 }
 
-std::optional<std::size_t> encoder_add_output(Encoder& enc, const std::string& path,
-                                               std::string& error) {
+namespace {
+EncoderPtr copy_output(Encoder& enc, const std::string& path, std::string& error) {
     if (path.empty() || path.find('\0') != std::string::npos) {
         error = "Invalid output path";
-        return std::nullopt;
+        return nullptr;
     }
     auto output = EncoderPtr(new Encoder());
     output->cfg = enc.cfg;
@@ -543,14 +621,15 @@ std::optional<std::size_t> encoder_add_output(Encoder& enc, const std::string& p
     output->rebase_output = true;
     NetworkOperation operation(*output);
     int result = avformat_alloc_output_context2(&output->fmt, nullptr,
-        output->network ? "flv" : nullptr, path.c_str());
+                                                output->network ? "flv" : nullptr, path.c_str());
     if (result < 0 || !output->fmt) {
         error = "Cannot create output container";
-        return std::nullopt;
+        return nullptr;
     }
     const auto stream = [&](AVStream* source) -> AVStream* {
         auto* copy = avformat_new_stream(output->fmt, nullptr);
-        if (!copy || avcodec_parameters_copy(copy->codecpar, source->codecpar) < 0) return nullptr;
+        if (!copy || avcodec_parameters_copy(copy->codecpar, source->codecpar) < 0)
+            return nullptr;
         copy->codecpar->codec_tag = 0;
         copy->time_base = source->time_base;
         copy->avg_frame_rate = source->avg_frame_rate;
@@ -558,50 +637,156 @@ std::optional<std::size_t> encoder_add_output(Encoder& enc, const std::string& p
         return copy;
     };
     output->vst = stream(enc.vst);
-    if (enc.ast) output->ast = stream(enc.ast);
+    if (enc.ast)
+        output->ast = stream(enc.ast);
     if (!output->vst || (enc.ast && !output->ast)) {
         error = "Cannot copy output stream parameters";
-        return std::nullopt;
+        return nullptr;
     }
-    if (!open_muxer(output.get(), error)) return std::nullopt;
+    if (!open_muxer(output.get(), error))
+        return nullptr;
+    return output;
+}
+} // namespace
+
+std::optional<std::size_t> encoder_add_output(Encoder& enc, const std::string& path,
+                                              std::string& error) {
+    auto output = copy_output(enc, path, error);
+    if (!output)
+        return std::nullopt;
     enc.outputs.push_back(std::move(output));
     enc.force_keyframe = true;
     return enc.outputs.size();
 }
 
+bool encoder_set_replay(Encoder& enc, std::uint32_t seconds, std::uint64_t bytes,
+                        std::string& error) {
+    if (seconds > 86400 || (seconds && (bytes < 1048576 || bytes > 1099511627776ULL))) {
+        error = "Replay requires 1–86400 seconds and 1–1048576 MB.";
+        return false;
+    }
+    enc.replay.clear();
+    enc.replay_seconds = seconds;
+    enc.replay_limit = bytes;
+    enc.force_keyframe = true;
+    return true;
+}
+
+ReplayStats encoder_replay_stats(const Encoder& enc) {
+    const auto duration =
+        enc.replay.empty() ? 0
+                           : std::max<std::int64_t>(
+                                 0, (enc.replay_latest_ns - enc.replay.front().time_ns) / 1000000);
+    return {enc.replay_bytes->load(), static_cast<std::uint64_t>(duration), enc.replay_seconds != 0,
+            enc.replay_save.valid()};
+}
+
+std::optional<ReplayResult> encoder_poll_replay(Encoder& enc) {
+    if (!enc.replay_save.valid() ||
+        enc.replay_save.wait_for(std::chrono::seconds(0)) != std::future_status::ready)
+        return std::nullopt;
+    return enc.replay_save.get();
+}
+
+bool encoder_save_replay(Encoder& enc, const std::string& path, std::string& error) {
+    if (enc.replay.empty() || !enc.replay_seconds) {
+        error = "Replay buffer is not ready yet.";
+        return false;
+    }
+    if (enc.replay_save.valid()) {
+        error = "A replay clip is already being saved.";
+        return false;
+    }
+    if (path.empty() || network_path(path) || !path.ends_with(".mkv")) {
+        error = "A replay clip requires a local MKV path.";
+        return false;
+    }
+    auto output = copy_output(enc, path, error);
+    if (!output)
+        return false;
+    auto snapshot = enc.replay;
+    try {
+        enc.replay_save = std::async(std::launch::async, [output = std::move(output),
+                                                          snapshot = std::move(snapshot),
+                                                          path]() mutable {
+            ReplayResult result{path, {}};
+            const auto origin = snapshot.front().time_ns;
+            for (const auto& stored : snapshot) {
+                if (stored.time_ns < origin)
+                    continue;
+                auto* packet = av_packet_clone(stored.packet.get());
+                if (!packet) {
+                    result.error = "Cannot allocate replay packet.";
+                    break;
+                }
+                auto* stream = stored.video ? output->vst : output->ast;
+                const auto base = av_rescale_q(origin, AVRational{1, 1000000000}, stored.time_base);
+                packet->pts -= base;
+                packet->dts -= base;
+                packet->stream_index = stream->index;
+                av_packet_rescale_ts(packet, stored.time_base, stream->time_base);
+                const int written = av_interleaved_write_frame(output->fmt, packet);
+                av_packet_free(&packet);
+                if (written < 0) {
+                    result.error = "Could not write replay clip: " + av_err(written);
+                    break;
+                }
+            }
+            std::string closed;
+            if (!encoder_remove_output(*output, 0, closed)) {
+                if (!result.error.empty())
+                    result.error += " ";
+                result.error += closed;
+            }
+            return result;
+        });
+    } catch (const std::exception& e) {
+        error = std::string("Cannot start replay writer: ") + e.what();
+        return false;
+    }
+    return true;
+}
+
 bool encoder_output_active(const Encoder& enc, std::size_t id) {
-    if (id == 0) return enc.header_written;
+    if (id == 0)
+        return enc.header_written;
     return id <= enc.outputs.size() && enc.outputs[id - 1] && enc.outputs[id - 1]->header_written;
 }
 
 std::string encoder_output_error(const Encoder& enc, std::size_t id) {
-    if (id == 0) return enc.output_error;
-    return id <= enc.outputs.size() && enc.outputs[id - 1]
-        ? enc.outputs[id - 1]->output_error : std::string{};
+    if (id == 0)
+        return enc.output_error;
+    return id <= enc.outputs.size() && enc.outputs[id - 1] ? enc.outputs[id - 1]->output_error
+                                                           : std::string{};
 }
 
 bool encoder_remove_output(Encoder& enc, std::size_t id, std::string& error) {
-    Encoder* output = id == 0 ? &enc :
-        id <= enc.outputs.size() ? enc.outputs[id - 1].get() : nullptr;
-    if (!output || !output->header_written) return true;
+    Encoder* output = id == 0                    ? &enc
+                      : id <= enc.outputs.size() ? enc.outputs[id - 1].get()
+                                                 : nullptr;
+    if (!output || !output->header_written)
+        return true;
     NetworkOperation operation(*output);
     int result = av_write_trailer(output->fmt);
     output->header_written = false;
     if (output->fmt->pb) {
         avio_flush(output->fmt->pb);
-        if (result >= 0 && output->fmt->pb->error < 0) result = output->fmt->pb->error;
+        if (result >= 0 && output->fmt->pb->error < 0)
+            result = output->fmt->pb->error;
     }
     if (result >= 0 && output->file_fd >= 0 && ::fsync(output->file_fd) < 0)
         result = AVERROR(errno);
     if (output->network) {
         const int closed = avio_closep(&output->fmt->pb);
-        if (result >= 0) result = closed;
+        if (result >= 0)
+            result = closed;
     } else if (output->fmt->pb) {
         av_freep(&output->fmt->pb->buffer);
         avio_context_free(&output->fmt->pb);
     }
     if (output->file_fd >= 0) {
-        if (::close(output->file_fd) < 0 && result >= 0) result = AVERROR(errno);
+        if (::close(output->file_fd) < 0 && result >= 0)
+            result = AVERROR(errno);
         output->file_fd = -1;
     }
     if (result < 0) {
@@ -739,7 +924,8 @@ bool encoder_finish(Encoder& enc, std::string& error) {
     for (std::size_t i = 0; i < enc.outputs.size(); ++i) {
         std::string output_error;
         if (!encoder_remove_output(enc, i + 1, output_error)) {
-            if (!error.empty()) error += " ";
+            if (!error.empty())
+                error += " ";
             error += output_error;
             success = false;
         }

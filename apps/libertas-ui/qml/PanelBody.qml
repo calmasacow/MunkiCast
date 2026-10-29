@@ -167,7 +167,7 @@ Item {
     Item {
         id: programView
 
-        visible: body.panelKind === "program"
+        visible: body.panelKind === "program" && !studioLoader.active
         /// The canvas this picture is of. Read again on every document change, because a
         /// canvas can be resized or renamed while its panel is open.
         readonly property size canvasSize: {
@@ -181,7 +181,7 @@ Item {
         /// `caption` and `hasFrame` are calls. A bare statement is not a dependency — the QML
         /// compiler drops it — so the generation has to be used in the value.
         readonly property int previewGeneration: Preview.generation
-        readonly property bool frameReady: programView.previewGeneration >= 0 &&
+        readonly property bool frameReady: programView.visible && programView.previewGeneration >= 0 &&
                                             Preview.hasFrame(body.panelCanvas)
         readonly property string liveCaption: programView.previewGeneration < 0
                                               ? ""
@@ -198,6 +198,7 @@ Item {
                                        : 16 / 9
         anchors.fill: parent
         anchors.margins: 10
+        onVisibleChanged: Preview.requestSize(canvasFrame, visible ? canvasFrame.previewEdge : 0)
 
         Rectangle {
             id: canvasFrame
@@ -209,8 +210,8 @@ Item {
             width: Math.max(fit * programView.aspect, 1)
             height: Math.max(fit, 1)
             readonly property int previewEdge: Math.ceil(Math.max(width, height) * Screen.devicePixelRatio)
-            onPreviewEdgeChanged: Preview.requestSize(canvasFrame, previewEdge)
-            Component.onCompleted: Preview.requestSize(canvasFrame, previewEdge)
+            onPreviewEdgeChanged: Preview.requestSize(canvasFrame, programView.visible ? previewEdge : 0)
+            Component.onCompleted: Preview.requestSize(canvasFrame, programView.visible ? previewEdge : 0)
             color: Theme.c.window
             border.width: 1
             border.color: Theme.c.border
@@ -311,6 +312,15 @@ Item {
                 }
             }
         }
+    }
+
+    Loader {
+        id: studioLoader
+        anchors.fill: parent
+        anchors.margins: 10
+        active: body.visible && body.panelKind === "program" && !!Document.mainDeck.studio &&
+            (body.panelCanvas === "" || Preview.canvasKey(body.panelCanvas) === Preview.canvasKey(""))
+        sourceComponent: Component { StudioModeView {} }
     }
 
     // A panel this build has no body for. Every panel in the default layout has one now, so

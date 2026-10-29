@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "preview.hpp"
+#include <cmath>
 
 #include "assetcache.hpp"
 #include "lcomp/countdown.hpp"
@@ -202,6 +203,13 @@ int Preview::generation() const {
 
 bool Preview::rendererAttached() const { return link_ && link_->alive; }
 
+QImage Preview::snapshot(const QString& canvasId) const {
+    const auto key = resolve(canvasId);
+    std::lock_guard lock(state_->mu);
+    const auto found = state_->frames.find(key);
+    return found == state_->frames.end() ? QImage{} : found->second.image;
+}
+
 QVariantMap Preview::renderStats(const QString& canvasId) const {
     const QString key = resolve(canvasId);
     std::lock_guard lock(state_->mu);
@@ -343,8 +351,9 @@ QString Preview::caption(const QString& canvasId) const {
 
 void Preview::setLive(bool live, ldoc::Fps rate) {
     program_live_ = live;
-    live = live || recording_ || streaming_ || !filter_target_.isEmpty();
-    if ((recording_ || streaming_) && recording_rate_.valid() && (!rate.valid() || recording_rate_.hz() > rate.hz()))
+    live = live || recording_ || streaming_ || replay_ || !filter_target_.isEmpty() ||
+           std::chrono::steady_clock::now() < transition_until_;
+    if ((recording_ || streaming_ || replay_) && recording_rate_.valid() && (!rate.valid() || recording_rate_.hz() > rate.hz()))
         rate = recording_rate_;
     if (!live) {
         if (link_) link_->refresh_pending = false;
@@ -362,7 +371,9 @@ void Preview::setLive(bool live, ldoc::Fps rate) {
             live_deadline_ += live_period_;
             if (live_deadline_ <= now)
                 live_deadline_ += live_period_ * ((now - live_deadline_) / live_period_ + 1);
-            schedule_tick();
+            if (program_live_ || recording_ || streaming_ || replay_ || !filter_target_.isEmpty() ||
+                now < transition_until_)
+                schedule_tick();
         });
     }
     // Absolute deadlines retain fractional milliseconds and never accumulate timer drift.
@@ -410,7 +421,7 @@ void Preview::requestSize(QObject* owner, int edge) {
             update_size();
         });
     }
-    preview_sizes_[owner] = std::clamp(edge, 1, lcomp::kMaxPreviewEdge);
+    preview_sizes_[owner] = std::clamp(edge, 0, lcomp::kMaxPreviewEdge);
     update_size();
 }
 
@@ -427,11 +438,137 @@ void Preview::update_size() {
         publish(latest_);
 }
 
+QString Preview::studioPreviewKey() const {
+    return QString::fromStdString(studio_canvas_.to_string());
+}
+
+void Preview::setManualTransition(double progress) {
+    if (!std::isfinite(progress) || progress < -1 || progress > 1 || latest_.canvases.empty())
+        return;
+    if (progress < 0) {
+        for (const auto& deck : latest_.decks)
+            if (manual_targets_.contains(deck.id)) immediate_targets_[deck.id] = deck.program_scene;
+        manual_targets_.clear();
+        manual_progress_ = -1;
+    } else {
+        if (manual_progress_ < 0) {
+            const auto main = std::ranges::find(latest_.decks, latest_.canvases.front().id,
+                                                &ldoc::Deck::canvas);
+            if (main == latest_.decks.end() || !main->studio_mode || !main->preview_scene ||
+                main->preview_scene == main->program_scene ||
+                (main->transition != "transition.cut" && main->transition != "transition.fade" &&
+                 main->transition != "transition.fade-to-black")) return;
+            manual_project_ = latest_.id;
+            manual_targets_[main->id] = {main->program_scene, *main->preview_scene};
+            for (const auto& link : latest_.scene_links) {
+                if (link.from != *main->preview_scene) continue;
+                const auto* scene = latest_.scene(link.to);
+                const auto* canvas = scene ? latest_.canvas(scene->canvas) : nullptr;
+                if (!scene || !canvas || canvas->emergency_scene == link.to) continue;
+                if (scene->canvas == main->canvas) continue;
+                const auto target = std::ranges::find(latest_.decks, scene->canvas, &ldoc::Deck::canvas);
+                if (target != latest_.decks.end())
+                    manual_targets_[target->id] = {target->program_scene, link.to};
+                else
+                    manual_targets_[ldoc::Id::generate()] = {std::nullopt, link.to};
+            }
+        }
+        manual_progress_ = progress;
+    }
+    publish(latest_);
+}
+
 void Preview::publish(const ldoc::Project& project) {
+    if (latest_.id != project.id) transition_until_ = {};
+    else for (const auto& deck : project.decks) {
+        const auto previous = std::ranges::find(latest_.decks, deck.id, &ldoc::Deck::id);
+        if (previous == latest_.decks.end() || previous->program_scene == deck.program_scene ||
+            manual_targets_.contains(deck.id)) continue;
+        std::int64_t duration = 0;
+        if (deck.transition == "transition.fade" || deck.transition == "transition.fade-to-black")
+            duration = deck.transition_ms;
+        else if (deck.transition.starts_with("transition.stinger:")) {
+            const auto id = ldoc::Id::parse(deck.transition.substr(19));
+            if (const auto* source = id ? project.source(*id) : nullptr) {
+                duration = lcomp::timer_number(source->settings, "stingerDurationMs", 1000);
+            }
+        }
+        if (duration > 0)
+            transition_until_ = std::max(transition_until_, std::chrono::steady_clock::now() +
+                std::chrono::milliseconds(std::clamp<std::int64_t>(duration, 0, 600000) + 200));
+    }
     latest_ = project;
+    if (!project.canvases.empty()) setLive(program_live_, project.canvases.front().fps);
     if (!link_ || !link_->alive)
         return;
     link_->pending = project;
+    const auto main = project.canvases.empty() ? project.decks.end() :
+        std::ranges::find(project.decks, project.canvases.front().id, &ldoc::Deck::canvas);
+    if (manual_project_ != project.id) {
+        manual_targets_.clear();
+        immediate_targets_.clear();
+        manual_progress_ = -1;
+        manual_project_ = project.id;
+    }
+    if (manual_progress_ >= 0 && (main == project.decks.end() || !main->studio_mode)) {
+        for (const auto& deck : project.decks)
+            if (manual_targets_.contains(deck.id)) immediate_targets_[deck.id] = deck.program_scene;
+        manual_targets_.clear();
+        manual_progress_ = -1;
+    }
+    if (manual_progress_ >= 0)
+        for (const auto& [id, target] : manual_targets_) {
+            const auto* scene = project.scene(target.second);
+            if (!scene || std::ranges::any_of(link_->pending.decks,
+                    [&](const auto& deck) { return deck.canvas == scene->canvas; })) continue;
+            ldoc::Deck deck;
+            deck.id = id;
+            deck.canvas = scene->canvas;
+            link_->pending.decks.push_back(std::move(deck));
+        }
+    for (auto& deck : link_->pending.decks) {
+        if (const auto it = immediate_targets_.find(deck.id); it != immediate_targets_.end()) {
+            if (it->second == deck.program_scene)
+                link_->pending.settings.extra["ui.immediate." + deck.id.to_string()] = true;
+            else immediate_targets_.erase(it);
+        }
+        if (manual_progress_ < 0) continue;
+        const auto it = manual_targets_.find(deck.id);
+        if (it == manual_targets_.end()) continue;
+        const auto& [from, to] = it->second;
+        if (deck.program_scene == from) {
+            deck.preview_scene = from;
+            deck.program_scene = to;
+            link_->pending.settings.extra["ui.manual." + deck.id.to_string()] = manual_progress_;
+        } else if (deck.program_scene == to) {
+            link_->pending.settings.extra["ui.immediate." + deck.id.to_string()] = true;
+        }
+    }
+    if (!project.canvases.empty()) {
+        if (main != project.decks.end() && main->studio_mode) {
+            auto canvas = project.canvases.front();
+            canvas.id = studio_canvas_;
+            canvas.name = "Main Preview";
+            canvas.emergency_scene.reset();
+            ldoc::Scene scene;
+            scene.id = studio_scene_;
+            scene.canvas = canvas.id;
+            auto node = ldoc::make_node(ldoc::NodeKind::Precomp, "Main Preview");
+            node.id = studio_node_;
+            if (main->preview_scene) {
+                std::get<ldoc::PrecompData>(node.data).scene = *main->preview_scene;
+                scene.roots.push_back(std::move(node));
+            }
+            ldoc::Deck deck;
+            deck.id = studio_deck_;
+            deck.canvas = canvas.id;
+            deck.program_scene = scene.id;
+            link_->pending.settings.extra["ui.studio-preview-deck"] = deck.id.to_string();
+            link_->pending.canvases.push_back(std::move(canvas));
+            link_->pending.scenes.push_back(std::move(scene));
+            link_->pending.decks.push_back(std::move(deck));
+        }
+    }
     // The one place a prepared path is substituted. Done on the copy that goes to the renderer
     // and nowhere else, so the saved project keeps the operator's own paths, the two worker
     // processes need no new path logic -- they receive the prepared path as if it had been
@@ -650,7 +787,8 @@ void Preview::on_readable() {
             if (!got.record.error.empty())
                 report(QString::fromStdString(got.record.error));
             const bool state_changed = recording_ != got.record.recording ||
-                streaming_ != got.record.streaming ||
+                streaming_ != got.record.streaming || replay_ != got.record.replay ||
+                replay_saving_ != got.record.replay_saving || !got.record.clip_path.empty() ||
                 (recording_pending_ && got.record.control_reply);
             if (got.record.frames < base_output_frames_ ||
                 got.record.missed < base_output_missed_ || got.record.encode_lag < base_output_lag_)
@@ -661,8 +799,25 @@ void Preview::on_readable() {
             output_lag_ = got.record.encode_lag;
             if (got.record.control_reply) recording_pending_ = false;
             const bool was_recording = recording_, was_streaming = streaming_;
+            const bool was_replay_saving = replay_saving_;
             recording_ = got.record.recording;
             streaming_ = got.record.streaming;
+            replay_ = got.record.replay;
+            replay_saving_ = got.record.replay_saving;
+            replay_bytes_ = got.record.replay_bytes;
+            replay_duration_ms_ = got.record.replay_duration_ms;
+            if (!got.record.clip_path.empty()) {
+                const auto path = QString::fromStdString(got.record.clip_path);
+                if (got.record.error.empty()) {
+                    replay_path_ = path;
+                    report(QStringLiteral("Replay saved to %1").arg(path));
+                }
+                emit replaySaved(path, QString::fromStdString(got.record.error));
+            } else if (was_replay_saving && !replay_saving_ && !replay_) {
+                emit replaySaved({}, got.record.error.empty()
+                    ? QStringLiteral("The encoder stopped while saving replay.")
+                    : QString::fromStdString(got.record.error));
+            }
             if (recording_ && !was_recording)
                 report(QStringLiteral("Recording to %1").arg(recording_path_));
             if (streaming_ && !was_streaming)
@@ -672,9 +827,9 @@ void Preview::on_readable() {
             if (!streaming_ && was_streaming && got.record.error.empty())
                 report(QStringLiteral("Stream stopped."));
             emit changed();
-            if (!state_changed)
-                break;
+            if (!state_changed && !replay_) break;
             emit recordingChanged();
+            QTimer::singleShot(0, this, &Preview::syncReplay);
             setLive(program_live_, latest_.canvases.empty() ? ldoc::Fps{}
                                                           : latest_.canvases.front().fps);
             break;
@@ -744,6 +899,12 @@ void Preview::on_readable() {
                     recording_pending_ = false;
                     emit recordingChanged();
                     report(QString::fromStdString(sent.error()));
+                }
+            } else if (!recording_pending_) {
+                syncReplay();
+                if (link_->refresh_pending && !recording_pending_) {
+                    link_->refresh_only = true;
+                    try_send();
                 }
             } else if (link_->refresh_pending) {
                 link_->refresh_only = true;
@@ -903,8 +1064,52 @@ void Preview::stopRecording(const QString& encodeId) {
         : QString::fromStdString(recording_encode_.to_string()), {}, false);
 }
 
+void Preview::syncReplay() {
+    if (!rendererAttached() || recording_pending_) return;
+    const auto output = std::find_if(latest_.outputs.begin(), latest_.outputs.end(),
+        [](const auto& o) { return o.destination.kind == ldoc::DestinationKind::Replay; });
+    const bool enabled = output != latest_.outputs.end() && output->enabled;
+    if (!enabled && replay_ && !replay_saving_) stopReplay();
+}
+
+void Preview::startReplay() {
+    if (replay_ || recording_pending_) return;
+    const auto output = std::find_if(latest_.outputs.begin(), latest_.outputs.end(),
+        [](const auto& o) { return o.destination.kind == ldoc::DestinationKind::Replay && o.enabled; });
+    const auto* encode = output == latest_.outputs.end() ? nullptr : latest_.encode(output->encode);
+    const auto* canvas = encode ? latest_.canvas(encode->canvas) : nullptr;
+    if (!canvas) { report(QStringLiteral("Enable and connect the Replay destination first.")); return; }
+    streaming_mode_ = false;
+    recording_rate_ = canvas->fps;
+    send_record(QString::fromStdString(encode->id.to_string()), {}, true, output->id,
+                lcomp::RecordOperation::ReplayStart);
+}
+
+void Preview::stopReplay() {
+    if (!replay_ || recording_pending_ || replay_saving_) return;
+    streaming_mode_ = false;
+    send_record({}, {}, false, {}, lcomp::RecordOperation::ReplayStop);
+}
+
+void Preview::saveReplay(const QString& path) {
+    if (!replay_ || replay_saving_ || recording_pending_ || path.isEmpty()) {
+        const auto error = QStringLiteral("Replay is unavailable, still warming up, or already saving.");
+        report(error);
+        emit replaySaved(path, error);
+        return;
+    }
+    replay_saving_ = true;
+    streaming_mode_ = false;
+    send_record({}, path, false, {}, lcomp::RecordOperation::ReplaySave);
+    if (!recording_pending_) {
+        replay_saving_ = false;
+        emit replaySaved(path, QStringLiteral("Could not send the replay save request to the renderer."));
+    }
+    emit recordingChanged();
+}
+
 void Preview::send_record(const QString& encodeId, const QString& path, bool start,
-                          const ldoc::Id& output) {
+                          const ldoc::Id& output, lcomp::RecordOperation operation) {
     if (!link_ || !link_->channel || !link_->alive) {
         report(QStringLiteral("The renderer is not running, so there is nothing to record."));
         return;
@@ -920,6 +1125,7 @@ void Preview::send_record(const QString& encodeId, const QString& path, bool sta
     request.encode = id.value_or(ldoc::Id::nil());
     request.path = path.toStdString();
     request.output = output;
+    request.operation = operation;
     if (recording_pending_)
         return;
     // Start after the renderer has acknowledged the latest encoder and routing settings.
@@ -958,7 +1164,10 @@ void Preview::lose(const QString& why) {
     link_->dirty = false;
     // A renderer that died took the file with it. Saying otherwise would leave a Record
     // button latched over a recording that stopped some time ago.
-    if (recording_ || streaming_ || recording_pending_) {
+    if (recording_ || streaming_ || replay_ || recording_pending_) {
+        if (replay_saving_) emit replaySaved({}, QStringLiteral("The renderer disconnected while saving replay."));
+        replay_ = replay_saving_ = false;
+        replay_bytes_ = replay_duration_ms_ = 0;
         recording_ = false;
         streaming_ = false;
         recording_pending_ = false;

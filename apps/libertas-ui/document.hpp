@@ -290,6 +290,9 @@ public:
     Q_INVOKABLE void duplicateScene(const QString& id);
     /// Negative moves it towards the top of the list.
     Q_INVOKABLE void moveScene(const QString& id, int delta);
+    Q_INVOKABLE void reorderScene(const QString& id, const QString& target, bool after,
+                                 bool favourites = false);
+    Q_INVOKABLE void moveSceneInList(const QString& id, int delta, bool favourites = false);
     /// Mark a scene as one to reach for. Favourites are part of the document, not the layout:
     /// they travel with the project and are the same set whichever workspace is on screen.
     Q_INVOKABLE void setSceneFavourite(const QString& id, bool favourite);
@@ -511,6 +514,13 @@ public:
     Q_INVOKABLE void setDeckPreview(const QString& deckId, const QString& sceneId);
     /// Put what is on preview onto program. The transition itself is the renderer's job; what
     /// this does is move the pointer, which is the part that lives in the document.
+    Q_PROPERTY(QVariantMap mainDeck READ mainDeck NOTIFY changed)
+    [[nodiscard]] QVariantMap mainDeck() const;
+    Q_PROPERTY(QVariantList quickTransitions READ quickTransitions NOTIFY changed)
+    [[nodiscard]] QVariantList quickTransitions() const;
+    Q_INVOKABLE void setQuickTransition(int index, const QString& transition, int durationMs);
+    Q_INVOKABLE void removeQuickTransition(int index);
+    Q_INVOKABLE void triggerQuickTransition(int index);
     Q_INVOKABLE void takeDeck(const QString& deckId);
     Q_INVOKABLE void setDeckStudioMode(const QString& deckId, bool studio);
     Q_INVOKABLE void setDeckTransition(const QString& deckId, const QString& transition,
@@ -523,6 +533,9 @@ public:
     Q_INVOKABLE void removeOutput(const QString& id);
     Q_INVOKABLE void renameOutput(const QString& id, const QString& name);
     Q_INVOKABLE void setOutputEnabled(const QString& id, bool enabled);
+    Q_INVOKABLE void setReplaySettings(const QString& id, int seconds, int memoryMB);
+    Q_INVOKABLE QString replayOutputId() const;
+    Q_INVOKABLE QString replayPath() const;
     Q_INVOKABLE void setOutputBitrate(const QString& id, int kbps);
     Q_INVOKABLE void setOutputEncoder(const QString& id, const QString& codec,
                                       const QString& implementation);
@@ -706,6 +719,7 @@ public:
 
     [[nodiscard]] const ldoc::Project& projectForBindings() const;
     void runCommand(const ldoc::Command& command);
+    std::expected<std::string, std::string> remoteCommand(const ldoc::Command& command);
     /// Rebuilds the row models without the project having changed. For `AssetCache`: a prepared
     /// file appearing or going stale changes what a Sources row's indicator should say, and
     /// nothing in the document moved to make the usual rebuild happen.

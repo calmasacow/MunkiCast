@@ -66,13 +66,49 @@ class Renderer {
         for (const auto& deck : project.decks) {
             auto [it, inserted] = transitions_.try_emplace(deck.id);
             auto& state = it->second;
-            if (inserted) { state.target = deck.program_scene; continue; }
+            if (inserted) state.target = deck.program_scene;
+            const auto manual = project.settings.extra.find("ui.manual." + deck.id.to_string());
+            if (manual != project.settings.extra.end()) {
+                const auto* progress = std::get_if<double>(&manual->second);
+                if (progress && std::isfinite(*progress)) {
+                    state.target = deck.program_scene;
+                    state.from = deck.preview_scene;
+                    state.playing = false;
+                    state.manual = true;
+                    if (!effective_) effective_ = project;
+                    mix_transition(*effective_, deck, state, deck.preview_scene, deck.program_scene,
+                                   deck.transition == "transition.fade-to-black", *progress);
+                    continue;
+                }
+            }
+            const bool immediate = lcomp::timer_flag(project.settings.extra,
+                ("ui.immediate." + deck.id.to_string()).c_str());
+            if (state.manual && !immediate) {
+                state.manual = false;
+                state.target = state.from;
+            }
+            if (immediate) {
+                transition_dirty_ = transition_dirty_ || state.manual || state.playing ||
+                                    state.target != deck.program_scene;
+                state.manual = state.playing = false;
+                state.target = deck.program_scene;
+                continue;
+            }
+            if (inserted) continue;
             const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - state.start).count();
             auto previous = state.playing && elapsed < state.cut_ms ? state.from : state.target;
             if (state.target != deck.program_scene) {
                 transition_dirty_ = true;
                 state.target = deck.program_scene;
                 state.playing = false;
+                state.kind = deck.transition;
+                if (previous && state.target && project.scene(*previous) &&
+                    (deck.transition == "transition.fade" || deck.transition == "transition.fade-to-black")) {
+                    state.from = previous;
+                    state.start = now;
+                    state.duration_ms = std::clamp<std::int64_t>(deck.transition_ms, 0, 600000);
+                    state.playing = state.duration_ms > 0;
+                }
                 if (previous && state.target && project.scene(*previous) &&
                     deck.transition.starts_with("transition.stinger:")) {
                     const auto id = ldoc::Id::parse(deck.transition.substr(19));
@@ -97,12 +133,19 @@ class Renderer {
             }
             if (!state.playing) continue;
             const auto position = std::chrono::duration_cast<std::chrono::milliseconds>(now - state.start).count();
-            if (position >= state.duration_ms || !project.source(state.source)) {
+            const bool fade = state.kind == "transition.fade" || state.kind == "transition.fade-to-black";
+            if (position >= state.duration_ms || (!fade && !project.source(state.source))) {
                 state.playing = false;
                 transition_dirty_ = true;
                 continue;
             }
             if (!effective_) effective_ = project;
+            if (fade) {
+                mix_transition(*effective_, deck, state, state.from, state.target,
+                               state.kind == "transition.fade-to-black",
+                               static_cast<double>(position) / static_cast<double>(state.duration_ms));
+                continue;
+            }
             auto selected = std::ranges::find(effective_->decks, deck.id, &ldoc::Deck::id);
             const auto scene_id = position < state.cut_ms ? state.from : state.target;
             const auto* source = effective_->source(state.source);
@@ -296,8 +339,37 @@ class Renderer {
                  underlay = ldoc::Id::generate(), scene = ldoc::Id::generate();
         std::chrono::steady_clock::time_point start{};
         std::int64_t cut_ms = 500, duration_ms = 1000;
-        bool playing = false;
+        bool playing = false, manual = false;
+        std::string kind;
     };
+
+    static void mix_transition(ldoc::Project& project, const ldoc::Deck& deck,
+                               const Transition& state, std::optional<ldoc::Id> from,
+                               std::optional<ldoc::Id> to, bool black, double progress) {
+        progress = std::clamp(progress, 0.0, 1.0);
+        const double incoming = black ? std::max(0.0, progress * 2 - 1) : progress;
+        const double outgoing = black ? std::max(0.0, 1 - progress * 2) : 1;
+        ldoc::Scene scene;
+        scene.id = state.scene;
+        scene.canvas = deck.canvas;
+        scene.name = "Live transition";
+        const auto add = [&](std::optional<ldoc::Id> target, const ldoc::Id& id,
+                             double opacity, double audio_gain) {
+            if (!target || !project.scene(*target)) return;
+            auto node = ldoc::make_node(ldoc::NodeKind::Precomp, "Transition scene");
+            node.id = id;
+            std::get<ldoc::PrecompData>(node.data).scene = *target;
+            node.blend.opacity = opacity;
+            project.settings.extra["ui.transition-gain." + id.to_string()] = audio_gain;
+            scene.roots.push_back(std::move(node));
+        };
+        add(to, state.overlay, incoming, black ? incoming : progress);
+        add(from, state.underlay, outgoing, black ? outgoing : 1 - progress);
+        const auto selected = std::ranges::find(project.decks, deck.id, &ldoc::Deck::id);
+        if (selected != project.decks.end()) selected->program_scene = scene.id;
+        project.scenes.push_back(std::move(scene));
+    }
+
     std::map<ldoc::Id, Transition> transitions_;
     std::optional<ldoc::Project> effective_;
     bool transition_dirty_ = false;

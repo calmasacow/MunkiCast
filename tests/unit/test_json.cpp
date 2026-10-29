@@ -211,6 +211,8 @@ LTEST_CASE(replay_outputs_preserve_routes_and_graph_positions) {
     replay.encode = video.id;
     replay.audio_encode = audio.id;
     replay.destination.kind = DestinationKind::Replay;
+    replay.destination.replay_seconds = 35;
+    replay.destination.replay_memory_mb = 128;
     replay.position = {915.0, 425.0};
     p.outputs.push_back(replay);
     p.settings.extra["encode.graph.initialized"] = true;

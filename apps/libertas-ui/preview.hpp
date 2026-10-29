@@ -6,6 +6,7 @@
 #include "lcomp/preview.hpp"
 
 #include <QObject>
+#include <QImage>
 #include <QString>
 #include <QTimer>
 #include <QVariantMap>
@@ -40,6 +41,12 @@ class Preview : public QObject {
     Q_PROPERTY(bool rendererAttached READ rendererAttached NOTIFY changed)
     /// Whether the renderer is writing a file right now. Reported by the renderer rather than
     /// assumed from the request: the encoder opens over there, and it can fail to.
+    Q_PROPERTY(bool replayActive READ replayActive NOTIFY recordingChanged)
+    Q_PROPERTY(bool replaySaving READ replaySaving NOTIFY recordingChanged)
+    Q_PROPERTY(qulonglong replayBytes READ replayBytes NOTIFY recordingChanged)
+    Q_PROPERTY(qulonglong replayDurationMs READ replayDurationMs NOTIFY recordingChanged)
+    Q_PROPERTY(QString lastReplayPath READ lastReplayPath NOTIFY recordingChanged)
+    Q_PROPERTY(bool outputPending READ outputPending NOTIFY recordingChanged)
     Q_PROPERTY(bool streaming READ streaming NOTIFY recordingChanged)
     Q_PROPERTY(bool streamingPending READ streamingPending NOTIFY recordingChanged)
     Q_PROPERTY(bool recording READ recording NOTIFY recordingChanged)
@@ -59,6 +66,7 @@ class Preview : public QObject {
 
     [[nodiscard]] int generation() const;
     [[nodiscard]] bool rendererAttached() const;
+    [[nodiscard]] QImage snapshot(const QString& canvasId) const;
     Q_INVOKABLE [[nodiscard]] QVariantMap renderStats(const QString& canvasId) const;
     Q_INVOKABLE void resetStats();
     Q_INVOKABLE [[nodiscard]] QVariantMap outputStats() const;
@@ -75,6 +83,9 @@ class Preview : public QObject {
     /// The id the image URL is keyed by. Empty until a document has named a canvas.
     Q_INVOKABLE [[nodiscard]] QString canvasKey(const QString& canvasId) const;
     Q_INVOKABLE void requestSize(QObject* owner, int edge);
+    Q_INVOKABLE QString studioPreviewKey() const;
+    /// -1 releases the manual transition; [0, 1] mixes Main and its linked destinations.
+    Q_INVOKABLE void setManualTransition(double progress);
     Q_INVOKABLE QString setFilterTarget(const QString& owner);
 
     /// The latest document. Called from the session's change notification, never from the
@@ -119,9 +130,20 @@ class Preview : public QObject {
     Q_INVOKABLE void startStreaming(const QString& outputId);
     Q_INVOKABLE void stopStreaming();
 
+    bool replayActive() const { return replay_; }
+    bool replaySaving() const { return replay_saving_; }
+    bool outputPending() const { return recording_pending_; }
+    qulonglong replayBytes() const { return replay_bytes_; }
+    qulonglong replayDurationMs() const { return replay_duration_ms_; }
+    QString lastReplayPath() const { return replay_path_; }
+    Q_INVOKABLE void startReplay();
+    Q_INVOKABLE void stopReplay();
+    Q_INVOKABLE void saveReplay(const QString& path);
+
   signals:
     void changed();
     void recordingChanged();
+    void replaySaved(const QString& path, const QString& error);
     void notice(const QString& text);
 
   private:
@@ -140,7 +162,8 @@ class Preview : public QObject {
     void reap(bool patient);
     void report(const QString& text);
     void send_record(const QString& encodeId, const QString& path, bool start,
-                     const ldoc::Id& output = ldoc::Id::nil());
+                     const ldoc::Id& output = ldoc::Id::nil(),
+                     lcomp::RecordOperation operation = lcomp::RecordOperation::Output);
     [[nodiscard]] QString resolve(const QString& canvasId) const;
 
     std::filesystem::path renderer_;
@@ -154,7 +177,12 @@ class Preview : public QObject {
     std::uint64_t output_frames_ = 0, output_missed_ = 0, output_lag_ = 0;
     std::uint64_t base_output_frames_ = 0, base_output_missed_ = 0, base_output_lag_ = 0;
     bool program_live_ = false;
+    std::chrono::steady_clock::time_point transition_until_{};
     QProcess* key_lookup_ = nullptr;
+    void syncReplay();
+    bool replay_ = false, replay_saving_ = false;
+    std::uint64_t replay_bytes_ = 0, replay_duration_ms_ = 0;
+    QString replay_path_;
     bool streaming_mode_ = false; // Identifies the pending control operation.
     bool streaming_ = false;
     ldoc::Id streaming_output_ = ldoc::Id::nil();
@@ -164,6 +192,14 @@ class Preview : public QObject {
     QString recording_path_;
     ldoc::Fps recording_rate_;
     ldoc::Project latest_;
+    ldoc::Id studio_canvas_ = ldoc::Id::generate();
+    ldoc::Id studio_scene_ = ldoc::Id::generate();
+    ldoc::Id studio_node_ = ldoc::Id::generate();
+    ldoc::Id studio_deck_ = ldoc::Id::generate();
+    ldoc::Id manual_project_;
+    double manual_progress_ = -1;
+    std::map<ldoc::Id, std::pair<std::optional<ldoc::Id>, ldoc::Id>> manual_targets_;
+    std::map<ldoc::Id, std::optional<ldoc::Id>> immediate_targets_;
     QString filter_target_;
     ldoc::Id filter_canvas_ = ldoc::Id::generate();
     ldoc::Id filter_scene_ = ldoc::Id::generate();

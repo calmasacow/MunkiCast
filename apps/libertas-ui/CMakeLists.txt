@@ -17,6 +17,12 @@ find_package(Qt6 6.5 REQUIRED COMPONENTS Core DBus Gui Network Qml Quick QuickCo
 qt_standard_project_setup(REQUIRES 6.5)
 
 qt_add_executable(libertas-ui
+    mcpserver.cpp
+    mcpserver.hpp
+    remotecontrol.cpp
+    remotecontrol.hpp
+    replaywebsocket.cpp
+    replaywebsocket.hpp
     connectors.cpp
     connectors.hpp
     assetcache.cpp
@@ -95,6 +101,7 @@ qt_add_qml_module(libertas-ui
         qml/CountdownsPanel.qml
         qml/StingerDialog.qml
         qml/ControlsPanel.qml
+        qml/StudioModeView.qml
         qml/DialogButton.qml
         qml/DialogGeometry.qml
         qml/DragGhost.qml
@@ -104,7 +111,10 @@ qt_add_qml_module(libertas-ui
         qml/LogPanel.qml
         qml/Main.qml
         qml/MainMenu.qml
+        qml/McpSettingsDialog.qml
         qml/NoticeLog.qml
+        qml/ReplaySettings.qml
+        qml/WebsocketSettingsDialog.qml
         qml/NumberField.qml
         qml/OutputsPanel.qml
         qml/PanelBody.qml
@@ -115,6 +125,7 @@ qt_add_qml_module(libertas-ui
         qml/PropertiesPanel.qml
         qml/SceneLinkDialog.qml
         qml/ScenesPanel.qml
+        qml/SceneReorder.qml
         qml/SettingRow.qml
         qml/ShortcutsPanel.qml
         qml/SourceSettingsDialog.qml
@@ -172,6 +183,15 @@ if(LIBERTAS_BUILD_TESTS)
     # project left by an older build -- a different schema, or a shape the check no longer
     # expects -- made the suite fail for a reason that had nothing to do with the change
     # being tested. Deleting it by hand was the standing workaround; this is the fix.
+    add_test(NAME scene_reorder_self_check COMMAND $<TARGET_FILE:libertas-ui> --check --check-scene-reorder)
+    set_tests_properties(scene_reorder_self_check PROPERTIES TIMEOUT 30 LABELS "needs-qt-threads"
+        ENVIRONMENT "QT_IM_MODULE=none;LIBERTAS_RENDER_BACKEND=cpu")
+    add_test(NAME studio_self_check COMMAND $<TARGET_FILE:libertas-ui> --check --check-studio)
+    set_tests_properties(studio_self_check PROPERTIES TIMEOUT 30 LABELS "needs-qt-threads"
+        ENVIRONMENT "QT_IM_MODULE=none;LIBERTAS_RENDER_BACKEND=cpu")
+    add_test(NAME replay_self_check COMMAND $<TARGET_FILE:libertas-ui> --check --check-replay)
+    set_tests_properties(replay_self_check PROPERTIES TIMEOUT 60 LABELS "needs-qt-threads"
+        ENVIRONMENT "QT_IM_MODULE=none;QT_LOGGING_RULES=qt.qpa.*=false;LIBERTAS_RENDER_BACKEND=cpu;LSAN_OPTIONS=suppressions=${CMAKE_SOURCE_DIR}/tests/lsan.suppressions:print_suppressions=0")
     add_test(NAME shell_self_check COMMAND "${CMAKE_COMMAND}"
              -DCHECK_EXE=$<TARGET_FILE:libertas-ui>
              -DCHECK_DIR=${CMAKE_CURRENT_BINARY_DIR}
@@ -203,3 +223,29 @@ if(LIBERTAS_BUILD_TESTS)
 endif()
 
 qt_add_resources(libertas-ui connector_catalog PREFIX "/connectors" FILES data/obs-services.json)
+
+find_package(PkgConfig REQUIRED)
+pkg_check_modules(SOUP REQUIRED IMPORTED_TARGET libsoup-3.0)
+pkg_check_modules(MSGPACK REQUIRED IMPORTED_TARGET msgpack-c)
+target_link_libraries(libertas-ui PRIVATE PkgConfig::SOUP PkgConfig::MSGPACK)
+
+target_compile_definitions(libertas-ui PRIVATE
+    LIBERTAS_REPLAY_CHECK_SCRIPT="${CMAKE_SOURCE_DIR}/tests/unit/check_replay_websocket.py")
+
+qt_add_resources(libertas-ui remote_protocol PREFIX "/remote" FILES data/remote-protocol.json)
+
+# Integration checks use Node's built-in runner; C++ builds do not install npm packages.
+if(LIBERTAS_BUILD_TESTS)
+    find_program(LIBERTAS_NODE node)
+    if(LIBERTAS_NODE AND EXISTS "${CMAKE_SOURCE_DIR}/integrations/companion/node_modules")
+        add_test(NAME companion_controls COMMAND "${LIBERTAS_NODE}" --test
+            "${CMAKE_SOURCE_DIR}/integrations/companion/test.js")
+    endif()
+    if(LIBERTAS_NODE AND EXISTS "${CMAKE_SOURCE_DIR}/integrations/mcp/node_modules")
+        add_test(NAME native_mcp_self_check COMMAND $<TARGET_FILE:libertas-ui> --check --check-mcp)
+        set_tests_properties(native_mcp_self_check PROPERTIES TIMEOUT 90 LABELS "needs-qt-threads"
+            ENVIRONMENT "QT_IM_MODULE=none;LIBERTAS_RENDER_BACKEND=cpu")
+        add_test(NAME mcp_schema COMMAND "${LIBERTAS_NODE}" --test
+            "${CMAKE_SOURCE_DIR}/integrations/mcp/test.js")
+    endif()
+endif()

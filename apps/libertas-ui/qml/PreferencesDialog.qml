@@ -10,8 +10,8 @@ Window {
     id: dialog
     objectName: "preferencesDialog"
     title: qsTr("Preferences")
-    width: 560; height: 462
-    minimumWidth: 480; minimumHeight: 462
+    width: 560; height: 526
+    minimumWidth: 480; minimumHeight: 526
     color: Theme.c.window
     modality: Qt.ApplicationModal
     flags: Qt.Dialog | Qt.FramelessWindowHint
@@ -19,11 +19,13 @@ Window {
     property bool automatic: true
     property int budgetMib: 2048
     property string cacheDir: ""
+    property bool showOutputMissedFrames: false
     property string problem: ""
     function open() {
         automatic = Preferences.gpuBudgetMib === 0;
         budgetMib = automatic ? 2048 : Preferences.gpuBudgetMib;
         cacheDir = Preferences.cacheDir;
+        showOutputMissedFrames = Preferences.showOutputMissedFrames;
         problem = "";
         show();
         requestActivate();
@@ -116,6 +118,13 @@ Window {
             font.pixelSize: 11
         }
 
+        CheckLabel {
+            objectName: "showOutputMissedFrames"
+            text: qsTr("Show Output frames missed (all causes) in Broadcast Stats")
+            checked: dialog.showOutputMissedFrames
+            onToggled: dialog.showOutputMissedFrames = !dialog.showOutputMissedFrames
+        }
+
         Text {
             visible: dialog.problem !== ""
             text: dialog.problem
@@ -130,6 +139,10 @@ Window {
                 onClicked: {
                     if (!Preferences.setCacheDir(dialog.cacheDir)) {
                         dialog.problem = qsTr("Could not save: the cache directory must be an absolute path.");
+                        return;
+                    }
+                    if (!Preferences.setShowOutputMissedFrames(dialog.showOutputMissedFrames)) {
+                        dialog.problem = qsTr("Could not save the statistics preference.");
                         return;
                     }
                     if (Preferences.setGpuBudgetMib(dialog.automatic ? 0 : dialog.budgetMib))

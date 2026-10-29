@@ -36,6 +36,7 @@ class Preferences : public QObject {
     Q_PROPERTY(QString cacheDir READ cacheDir NOTIFY changed)
     /// Whether prepared copies are used. Off means every source reads the path in its settings.
     Q_PROPERTY(bool cachingEnabled READ cachingEnabled NOTIFY changed)
+    Q_PROPERTY(bool showOutputMissedFrames READ showOutputMissedFrames NOTIFY changed)
 
   public:
     /// Where preferences live. Call before the QML engine instantiates the singleton; this
@@ -56,6 +57,8 @@ class Preferences : public QObject {
     /// process read at startup depends on this.
     Q_INVOKABLE bool setCacheDir(const QString& path);
     Q_INVOKABLE bool setCachingEnabled(bool on);
+    [[nodiscard]] bool showOutputMissedFrames() const;
+    Q_INVOKABLE bool setShowOutputMissedFrames(bool on);
 
   signals:
     void changed();

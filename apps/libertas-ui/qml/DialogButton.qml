@@ -21,6 +21,12 @@ Rectangle {
     property int minimumWidth: 80
 
     signal clicked
+    activeFocusOnTab: true
+    Accessible.role: Accessible.Button
+    Accessible.name: button.text
+    Accessible.onPressAction: if (button.enabled) button.clicked()
+    Keys.onReturnPressed: if (button.enabled) button.clicked()
+    Keys.onSpacePressed: if (button.enabled) button.clicked()
 
     implicitWidth: Math.max(button.minimumWidth, label.implicitWidth + 24)
     implicitHeight: 26
@@ -47,6 +53,9 @@ Rectangle {
         id: label
 
         anchors.centerIn: parent
+        width: Math.max(0, button.width - 12)
+        horizontalAlignment: Text.AlignHCenter
+        elide: Text.ElideRight
         text: button.text
         font.pixelSize: 11
         font.weight: button.primary ? Font.DemiBold : Font.Normal

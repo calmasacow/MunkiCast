@@ -8,8 +8,10 @@
 #include <filesystem>
 #include <fstream>
 #include <lencode/encoder.hpp>
+#include <random>
 #include <sys/resource.h>
 #include <sys/wait.h>
+#include <thread>
 #include <unistd.h>
 
 extern "C" {
@@ -63,10 +65,11 @@ void record(RuntimeConfig cfg, AVCodecID expected_codec, int expected_profile,
         red[i] = red[i + 3] = 255;
     }
     for (int i = 0; i < 65; ++i)
-        REQUIRE_MSG(encoder_video(*encoder, red.data(), 256 * 4,
-                                  static_cast<std::int64_t>(i) * 1000000000 * cfg.fps_den /
-                                      cfg.fps_num, error),
-                    "{}", error);
+        REQUIRE_MSG(
+            encoder_video(*encoder, red.data(), 256 * 4,
+                          static_cast<std::int64_t>(i) * 1000000000 * cfg.fps_den / cfg.fps_num,
+                          error),
+            "{}", error);
     REQUIRE_MSG(encoder_finish(*encoder, error), "{}", error);
     CHECK_EQ(encoder_stats(*encoder).video_encoder, cfg.force_tier);
     encoder.reset();
@@ -175,7 +178,10 @@ LTEST_CASE(nvenc_h264_and_hevc_use_the_requested_settings) {
 LTEST_CASE(recordings_never_overwrite_existing_files_or_symlinks) {
     auto cfg = configured("x264");
     const std::string original = "an existing recording must survive";
-    { std::ofstream file(cfg.path); file << original; }
+    {
+        std::ofstream file(cfg.path);
+        file << original;
+    }
     std::string error;
     CHECK(!encoder_open(cfg, error));
     CHECK(error.contains("Cannot create recording"));
@@ -200,11 +206,13 @@ LTEST_CASE(recording_write_failures_are_reported_before_claiming_a_saved_file) {
     REQUIRE(child >= 0);
     if (child == 0) {
         ::signal(SIGXFSZ, SIG_IGN);
-        const struct rlimit limit {4096, 4096};
-        if (::setrlimit(RLIMIT_FSIZE, &limit) != 0) ::_exit(2);
+        const struct rlimit limit{4096, 4096};
+        if (::setrlimit(RLIMIT_FSIZE, &limit) != 0)
+            ::_exit(2);
         std::string error;
         auto encoder = encoder_open(cfg, error);
-        if (!encoder) ::_exit(3);
+        if (!encoder)
+            ::_exit(3);
         std::vector<std::uint8_t> noise(256 * 256 * 4);
         std::uint32_t seed = 17;
         for (auto& byte : noise) {
@@ -214,7 +222,7 @@ LTEST_CASE(recording_write_failures_are_reported_before_claiming_a_saved_file) {
         bool failed = false;
         for (int i = 0; i < 65 && !failed; ++i)
             failed = !encoder_video(*encoder, noise.data(), 256 * 4,
-                                     static_cast<std::int64_t>(i) * 1000000000 / 30, error);
+                                    static_cast<std::int64_t>(i) * 1000000000 / 30, error);
         failed = !encoder_finish(*encoder, error) || failed;
         encoder.reset();
         ::_exit(failed && !error.empty() ? 0 : 4);
@@ -316,7 +324,8 @@ LTEST_CASE(shared_muxers_start_on_keyframes_stop_independently_and_encode_video_
             CHECK(encoder_output_active(*encoder, *destination));
         }
         REQUIRE_MSG(encoder_video(*encoder, pixels.data(), 256 * 4,
-            static_cast<std::int64_t>(i) * 1000000000 / 30, error), "{}", error);
+                                  static_cast<std::int64_t>(i) * 1000000000 / 30, error),
+                    "{}", error);
     }
     CHECK_EQ(encoder_stats(*encoder).video_frames, 150u);
     REQUIRE_MSG(encoder_finish(*encoder, error), "{}", error);
@@ -338,11 +347,13 @@ LTEST_CASE(shared_muxers_start_on_keyframes_stop_independently_and_encode_video_
         int packets = 0, decoded = 0;
         while (av_read_frame(file, packet) >= 0) {
             if (packet->stream_index == video) {
-                if (packets++ == 0) CHECK((packet->flags & AV_PKT_FLAG_KEY) != 0);
+                if (packets++ == 0)
+                    CHECK((packet->flags & AV_PKT_FLAG_KEY) != 0);
                 CHECK(packet->dts == AV_NOPTS_VALUE || packet->dts >= 0);
                 REQUIRE(avcodec_send_packet(decoder, packet) >= 0);
                 int result = 0;
-                while ((result = avcodec_receive_frame(decoder, frame)) >= 0) ++decoded;
+                while ((result = avcodec_receive_frame(decoder, frame)) >= 0)
+                    ++decoded;
                 CHECK(result == AVERROR(EAGAIN) || result == AVERROR_EOF);
             }
             av_packet_unref(packet);
@@ -369,4 +380,108 @@ LTEST_CASE(rtmp_connection_failure_is_reported_without_disclosing_the_publish_ke
     CHECK(error.contains("Could not connect to RTMP server"));
     CHECK(!error.contains("private-test-key"));
     CHECK(std::chrono::steady_clock::now() - began < std::chrono::seconds(7));
+}
+
+LTEST_CASE(replay_only_encode_buffers_audio_video_and_saves_a_keyframe_aligned_clip) {
+    auto cfg = configured("x264");
+    const auto path = cfg.path + "_clip.mkv";
+    cfg.path.clear();
+    cfg.audio_channels = 2;
+    std::string error;
+    auto encoder = encoder_open(cfg, error);
+    REQUIRE_MSG(encoder, "{}", error);
+    CHECK(!encoder_output_active(*encoder, 0));
+    REQUIRE(encoder_set_replay(*encoder, 2, 8 * 1048576, error));
+    std::vector<std::uint8_t> pixels(256 * 256 * 4, 128);
+    std::vector<float> audio(1600 * 2, 0.1f);
+    for (int i = 0; i < 240; ++i) {
+        const auto pts = static_cast<std::int64_t>(i) * 1000000000 / 30;
+        pixels[0] = static_cast<std::uint8_t>(i);
+        REQUIRE_MSG(encoder_video(*encoder, pixels.data(), 256 * 4, pts, error), "{}", error);
+        REQUIRE_MSG(encoder_audio(*encoder, audio.data(), 1600, pts, error), "{}", error);
+    }
+    const auto stats = encoder_replay_stats(*encoder);
+    CHECK(stats.active);
+    CHECK(stats.duration_ms >= 2000 && stats.duration_ms <= 3100);
+    CHECK(stats.bytes > 0 && stats.bytes <= 8 * 1048576);
+    REQUIRE_MSG(encoder_save_replay(*encoder, path, error), "{}", error);
+    CHECK(!encoder_save_replay(*encoder, path, error));
+    error.clear();
+    REQUIRE(encoder_video(*encoder, pixels.data(), 256 * 4, 8000000000LL, error));
+    CHECK(encoder_stats(*encoder).video_frames == 241);
+    std::optional<ReplayResult> saved;
+    for (int i = 0; i < 5000 && !saved; ++i) {
+        saved = encoder_poll_replay(*encoder);
+        if (!saved)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    REQUIRE(saved.has_value());
+    CHECK(saved->path == path);
+    CHECK_MSG(saved->error.empty(), "{}", saved->error);
+    AVFormatContext* file = nullptr;
+    REQUIRE(avformat_open_input(&file, path.c_str(), nullptr, nullptr) >= 0);
+    REQUIRE(avformat_find_stream_info(file, nullptr) >= 0);
+    const int video = av_find_best_stream(file, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+    const int sound = av_find_best_stream(file, AVMEDIA_TYPE_AUDIO, -1, -1, nullptr, 0);
+    REQUIRE(video >= 0 && sound >= 0);
+    auto* decoder =
+        avcodec_alloc_context3(avcodec_find_decoder(file->streams[video]->codecpar->codec_id));
+    REQUIRE(decoder);
+    REQUIRE(avcodec_parameters_to_context(decoder, file->streams[video]->codecpar) >= 0);
+    REQUIRE(avcodec_open2(decoder, decoder->codec, nullptr) >= 0);
+    auto* packet = av_packet_alloc();
+    auto* frame = av_frame_alloc();
+    int decoded = 0, packets = 0, audio_packets = 0;
+    while (av_read_frame(file, packet) >= 0) {
+        if (packet->stream_index == video) {
+            if (packets++ == 0)
+                CHECK((packet->flags & AV_PKT_FLAG_KEY) != 0);
+            CHECK(packet->dts == AV_NOPTS_VALUE || packet->dts >= 0);
+            REQUIRE(avcodec_send_packet(decoder, packet) >= 0);
+            while (avcodec_receive_frame(decoder, frame) >= 0)
+                ++decoded;
+        } else if (packet->stream_index == sound)
+            ++audio_packets;
+        av_packet_unref(packet);
+    }
+    CHECK(decoded >= 55 && decoded <= 95);
+    CHECK(audio_packets > 50);
+    av_packet_free(&packet);
+    av_frame_free(&frame);
+    avcodec_free_context(&decoder);
+    avformat_close_input(&file);
+    CHECK(!encoder_save_replay(*encoder, path, error)); // Never overwrite a prior clip.
+    error.clear();
+    REQUIRE(encoder_finish(*encoder, error));
+    encoder.reset();
+    std::filesystem::remove(path);
+}
+
+LTEST_CASE(replay_memory_is_bounded_and_recording_can_stop_without_stopping_the_buffer) {
+    auto cfg = configured("x264", "h264", "crf");
+    cfg.video_options["crf"] = "10";
+    std::string error;
+    auto encoder = encoder_open(cfg, error);
+    REQUIRE_MSG(encoder, "{}", error);
+    CHECK(!encoder_set_replay(*encoder, 86401, 1048576, error));
+    CHECK(!encoder_set_replay(*encoder, 20, 1048575, error));
+    error.clear();
+    REQUIRE(encoder_set_replay(*encoder, 20, 1048576, error));
+    std::mt19937 random(1234);
+    std::vector<std::uint8_t> pixels(256 * 256 * 4);
+    for (int i = 0; i < 90; ++i) {
+        for (auto& pixel : pixels)
+            pixel = static_cast<std::uint8_t>(random());
+        if (i == 30)
+            REQUIRE(encoder_remove_output(*encoder, 0, error));
+        REQUIRE_MSG(encoder_video(*encoder, pixels.data(), 256 * 4,
+                                  static_cast<std::int64_t>(i) * 1000000000 / 30, error),
+                    "{}", error);
+        CHECK(encoder_replay_stats(*encoder).bytes <= 1048576);
+    }
+    CHECK(encoder_stats(*encoder).video_frames == 90);
+    CHECK(encoder_replay_stats(*encoder).active);
+    REQUIRE(encoder_finish(*encoder, error));
+    encoder.reset();
+    std::filesystem::remove(cfg.path);
 }

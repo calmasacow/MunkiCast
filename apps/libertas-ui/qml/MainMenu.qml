@@ -31,6 +31,8 @@ Controls.MenuBar {
 
     PreferencesDialog { id: preferences }
     BrowserDocksDialog { id: browserDocks; parent: bar.mainWindow.contentItem }
+    WebsocketSettingsDialog { id: websocketSettings }
+    McpSettingsDialog { id: mcpSettings }
 
     // Parented to the window's content item, as FiltersDialog is: an overlay inside the menu
     // bar would be clipped to 28 pixels of height.
@@ -347,7 +349,16 @@ Controls.MenuBar {
         Divider {}
         Pending { text: qsTr("Output Timer") }
         Pending { text: qsTr("Scripts") }
-        Pending { text: qsTr("WebSocket Server Settings") }
+        Entry {
+            objectName: "menuWebsocketSettings"
+            text: qsTr("WebSocket Server Settings")
+            onTriggered: websocketSettings.open()
+        }
+        Entry {
+            objectName: "menuMcpSettings"
+            text: qsTr("MCP Server Settings")
+            onTriggered: mcpSettings.open()
+        }
         Pending { text: qsTr("Source Profiler") }
     }
     Menu {

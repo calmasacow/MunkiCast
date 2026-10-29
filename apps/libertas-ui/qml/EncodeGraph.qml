@@ -4,6 +4,7 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import QtQuick.Window
 import Libertas
 
 /// The node graph: sources on the left, encoders in the middle, destinations on the right.
@@ -300,7 +301,12 @@ Item {
                     }
 
                     Image {
+                        id: thumbnail
                         objectName: "encodeCanvasPreview"
+                        readonly property int previewEdge: Math.ceil(Math.max(width, height) * Screen.devicePixelRatio)
+                        onPreviewEdgeChanged: Preview.requestSize(thumbnail, visible ? previewEdge : 0)
+                        onVisibleChanged: Preview.requestSize(thumbnail, visible ? previewEdge : 0)
+                        Component.onCompleted: Preview.requestSize(thumbnail, visible ? previewEdge : 0)
                         anchors.fill: parent
                         anchors.margins: 1
                         fillMode: Image.PreserveAspectFit
@@ -310,7 +316,7 @@ Item {
                         asynchronous: false
                         // `hasFrame` is a call, so the generation binding is what makes this
                         // re-evaluate; a bare call would never update.
-                        source: Preview.generation >= 0 &&
+                        source: thumbnail.visible && Preview.generation >= 0 &&
                                 Preview.hasFrame(canvasCard.canvasId)
                                 ? "image://program/" +
                                   Preview.canvasKey(canvasCard.canvasId) + "/" +
@@ -813,12 +819,6 @@ Item {
                     elide: Text.ElideRight
                 }
 
-                Text {
-                    visible: outputCard.destinationKind === "replay"
-                    text: qsTr("Replay buffer is not connected yet")
-                    font.pixelSize: 9
-                    color: Theme.c.textMuted
-                }
             }
         }
     }
