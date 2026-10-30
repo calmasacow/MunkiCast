@@ -331,7 +331,7 @@ Window {
                 required property var modelData
                 panelId: modelData.id
                 readonly property PanelFrame dockFrame: {
-                    const revision = Workspace.revision;
+                    if (Workspace.revision < 0) return null;
                     for (let i = 0; i < panelFrames.count; ++i) {
                         const frame = panelFrames.itemAt(i) as PanelFrame;
                         if (frame && frame.activeId === browserDock.panelId)

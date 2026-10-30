@@ -180,6 +180,9 @@ int main(int argc, char** argv) {
     const QCommandLineOption scene_reorder_check_opt{QStringLiteral("check-scene-reorder"),
         QStringLiteral("With --check, run scene and favourites reorder gesture checks.")};
     parser.addOption(scene_reorder_check_opt);
+    const QCommandLineOption panels_check_opt{QStringLiteral("check-panels"),
+        QStringLiteral("With --check, exercise panel loading and collection switches.")};
+    parser.addOption(panels_check_opt);
     parser.addOption(studio_check_opt);
     parser.addOption(replay_check_opt);
     parser.addOption(browser_check_opt);
@@ -390,6 +393,165 @@ int main(int argc, char** argv) {
             }
             return found;
         };
+
+        if (parser.isSet(panels_check_opt)) {
+            const auto wait_until = [](const auto& ready) {
+                QElapsedTimer timer;
+                timer.start();
+                while (!ready() && timer.elapsed() < 3000) {
+                    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+                    QThread::msleep(10);
+                }
+                return ready();
+            };
+            const auto has_row = [&](const QString& name, const char* role, const QString& id) {
+                return wait_until([&] {
+                    for (auto* row : collect(window->contentItem(), name))
+                        if (row->isVisible() && row->width() > 0 && row->height() > 0 &&
+                            row->property(role).toString() == id)
+                            return true;
+                    return false;
+                });
+            };
+            workspace.selectWorkspace(0);
+            workspace.resetLayout();
+            report(document.createCollection(QStringLiteral("Panel QA first")),
+                   "create isolated first panel collection");
+            document.addScene(QStringLiteral("First scene"));
+            document.addNewSourceToScene(QStringLiteral("First colour"), QStringLiteral("source.color"));
+            workspace.activate(QStringLiteral("scenes"));
+            workspace.activate(QStringLiteral("sources"));
+            report(has_row("sceneRow", "sceneId", document.selectedScene()),
+                   "Scenes loads the first collection without reopening its dock");
+            report(has_row("sourceRow", "nodeId", document.selectedNode()),
+                   "Sources loads the first collection without reopening its dock");
+            document.save();
+            const auto first_path = document.projectPath();
+            const auto first_scene = document.selectedScene();
+            report(document.createCollection(QStringLiteral("Panel QA second")),
+                   "switch to a collection with a different Main canvas ID");
+            document.addScene(QStringLiteral("Second scene"));
+            document.addNewSourceToScene(QStringLiteral("Second colour"), QStringLiteral("source.color"));
+            report(has_row("sceneRow", "sceneId", document.selectedScene()),
+                   "Scenes follows a new collection on first switch");
+            report(has_row("sourceRow", "nodeId", document.selectedNode()),
+                   "Sources follows a new collection on first switch");
+            const auto main_node = document.selectedNode();
+            document.addCanvas(QStringLiteral("Empty secondary canvas"));
+            workspace.activate(QStringLiteral("sources"));
+            report(has_row("sourceRow", "nodeId", main_node),
+                   "an empty secondary canvas does not hide Main's source rows");
+            const auto secondary = document.currentCanvas();
+            const auto secondary_panel = QStringLiteral("sources:") + secondary;
+            workspace.openPanel(secondary_panel);
+            workspace.activate(secondary_panel);
+            document.addSceneOn(secondary, QStringLiteral("Secondary scene"));
+            report(wait_until([&] {
+                for (auto* body : collect(window->contentItem(), QStringLiteral("panelBody"))) {
+                    if (body->property("panelId").toString() != secondary_panel) continue;
+                    const auto buttons = collect(body, QStringLiteral("addSourceButton"));
+                    return !buttons.isEmpty() && buttons.front()->isVisible() && buttons.front()->isEnabled();
+                }
+                return false;
+            }), "Add Source enables when an initially empty canvas gains its first scene");
+            report(document.openCollection(first_path), "reopen the first collection");
+            // Activating a secondary Sources tab also activates its paired Scenes tab.
+            // Return to Main explicitly before asserting visible rows, without reopening it.
+            workspace.activate(QStringLiteral("scenes"));
+            report(has_row("sceneRow", "sceneId", first_scene),
+                   "Scenes follows returning to a saved collection");
+
+            // Main's name is intentionally immutable. Exercise live title updates on an
+            // ordinary secondary canvas while keeping its Program panel instantiated.
+            document.addCanvas(QStringLiteral("Program QA"));
+            const auto program_canvas = document.currentCanvas();
+            workspace.activate(QStringLiteral("program:") + program_canvas);
+            document.renameCanvas(program_canvas, QStringLiteral("Renamed canvas"));
+            document.setCanvasSize(program_canvas, 1280, 720);
+            report(wait_until([&] {
+                for (auto* view : collect(window->contentItem(), QStringLiteral("programView")))
+                    if (view->isVisible() && view->property("canvasName").toString() == "Renamed canvas" &&
+                        view->property("canvasSize").toSize() == QSize(1280, 720)) return true;
+                return false;
+            }), "visible program panel follows canvas name and size edits");
+
+            workspace.openPanel(QStringLiteral("countdowns"));
+            workspace.activate(QStringLiteral("countdowns"));
+            document.addSource(QStringLiteral("Panel QA text"), QStringLiteral("source.text"));
+            const auto text_sources = document.countdownTextSources();
+            report(wait_until([&] {
+                const auto fields = collect(window->contentItem(), QStringLiteral("countdownTextChoice"));
+                if (fields.isEmpty()) return false;
+                QQmlExpression choices(qmlContext(fields.front()), fields.front(),
+                                       QStringLiteral("choices.length > 0"));
+                return choices.evaluate().toBool() && !choices.hasError();
+            }), "an open countdown dock discovers newly added text sources");
+            if (!text_sources.isEmpty()) {
+                const auto id = text_sources.back().toMap().value("id").toString();
+                document.addCountdown(id);
+                document.configureCountdown(id, {{"periodSeconds", 3}, {"periodMinutes", 0}});
+                document.controlCountdown(id, QStringLiteral("start"));
+                const auto initial_text = document.countdownStatus(id).value("text").toString();
+                report(wait_until([&] {
+                    const auto cards = collect(window->contentItem(), QStringLiteral("countdownCard"));
+                    if (cards.isEmpty()) return false;
+                    QQmlExpression readout(qmlContext(cards.front()), cards.front(), QStringLiteral("status.text"));
+                    const auto shown = readout.evaluate().toString();
+                    return !readout.hasError() && !shown.isEmpty() && shown != initial_text &&
+                           shown == document.countdownStatus(id).value("text").toString();
+                }), "countdown readout advances without document edits");
+                document.controlCountdown(id, QStringLiteral("reset"));
+            }
+
+            // Reopening every registered body catches QML construction failures and zero-size
+            // contents. Wait on actual geometry, not a fixed number of event-loop iterations.
+            for (const auto* id : {"scenes", "sources", "properties", "shortcuts", "info",
+                                  "broadcast-stats", "log", "audio-mixer", "countdowns",
+                                  "controls", "outputs", "canvas", "favourites"}) {
+                workspace.closePanel(QLatin1String(id));
+                workspace.openPanel(QLatin1String(id));
+                workspace.activate(QLatin1String(id));
+                report(wait_until([&] {
+                    for (auto* body : collect(window->contentItem(), QStringLiteral("panelBody"))) {
+                        if (!body->isVisible() || body->property("panelId").toString() != QLatin1String(id))
+                            continue;
+                        const auto loaders = collect(body, QStringLiteral("panelContentLoader"));
+                        if (loaders.isEmpty()) return false;
+                        auto* item = qvariant_cast<QQuickItem*>(loaders.front()->property("item"));
+                        return loaders.front()->property("status").toInt() == 1 && item &&
+                               item->width() > 0 && item->height() > 0;
+                    }
+                    return false;
+                }), qPrintable(QStringLiteral("dock loads on first reopen: %1").arg(QLatin1String(id))));
+            }
+            report(workspace.saveBrowserDock({}, QStringLiteral("Panel QA browser"),
+                                            QStringLiteral("http://127.0.0.1:1/")),
+                   "create an isolated browser dock");
+            const auto docks = workspace.browserDocks();
+            if (!docks.isEmpty()) {
+                const auto id = docks.front().toMap().value("id").toString();
+                const auto browser_visible = [&] {
+                    for (auto* web : collect(window->contentItem(), QStringLiteral("browserDockWebView")))
+                        if (web->isVisible() && web->width() > 0 && web->height() > 0) return true;
+                    return false;
+                };
+                report(wait_until(browser_visible), "browser dock attaches on first creation");
+                for (int repeat = 0; repeat < 3; ++repeat) {
+                    workspace.closePanel(id);
+                    workspace.openPanel(id);
+                    workspace.activate(id);
+                    report(wait_until(browser_visible), "browser dock attaches after layout rebuild");
+                    workspace.selectWorkspace(1);
+                    workspace.selectWorkspace(0);
+                    report(wait_until(browser_visible), "browser dock returns with its workspace");
+                }
+            }
+            if (parser.isSet(shot_opt)) {
+                QDir().mkpath(parser.value(shot_opt));
+                window->grabWindow().save(parser.value(shot_opt) + QStringLiteral("/panel-qa.png"));
+            }
+            return rc;
+        }
 
         if (parser.isSet(mcp_check_opt)) {
             const auto pump = [](int ms = 30) {

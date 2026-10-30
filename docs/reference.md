@@ -39,7 +39,7 @@ a clean-sheet C++23 codebase is a cost with no benefit.
 | `libobs/obs-scene.c` | The scene model, including why groups are a compatibility hack (`is_group`, `group_item_backup`) |
 | `libobs/obs-module.c:174` | The ABI check that only blocks *forward* incompatibility — context for ADR-0004 |
 
-## Scene-collection format (for the eventual standalone importer)
+## Scene-collection format (used by the native importer/exporter)
 
 | Path | Why |
 |---|---|

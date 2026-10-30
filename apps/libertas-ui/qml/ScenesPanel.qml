@@ -83,7 +83,9 @@ Item {
         anchors.top: parent.top
         anchors.bottom: footer.top
         clip: true
-        model: Document.scenesFor(panel.canvasId)
+        // Main's canvas ID changes between collections. Use revision in the result so the
+        // QML compiler retains this dependency; an unused read can be optimized away.
+        model: Document.revision >= 0 ? Document.scenesFor(panel.canvasId) : null
         currentIndex: -1
         boundsBehavior: Flickable.StopAtBounds
         // Nothing here scrolls by being dragged (ADR-0039). The wheel has to come back,

@@ -174,6 +174,9 @@ Item {
     property int portRevision: 0
 
     function setPort(key, inX, inY, outX, outY) {
+        const previous = graph.ports[key];
+        if (previous && previous.inX === inX && previous.inY === inY &&
+            previous.outX === outX && previous.outY === outY) return;
         graph.ports[key] = { "inX": inX, "inY": inY, "outX": outX, "outY": outY };
         graph.portRevision++;
     }
@@ -185,13 +188,15 @@ Item {
     /// first time it ran and never gains an edge again. The models are properties, and
     /// `portRevision` covers the cards moving.
     property var links: []
-    onPortRevisionChanged: refreshLinks()
-    onSelectedKindChanged: refreshLinks()
-    onSelectedIdChanged: refreshLinks()
-    Component.onCompleted: refreshLinks()
+    // A layout pass reports several ports per card. Coalesce those reports so opening or
+    // panning the graph scans the document once after geometry settles, not once per port.
+    onPortRevisionChanged: Qt.callLater(graph.refreshLinks)
+    onSelectedKindChanged: Qt.callLater(graph.refreshLinks)
+    onSelectedIdChanged: Qt.callLater(graph.refreshLinks)
+    Component.onCompleted: Qt.callLater(graph.refreshLinks)
     Connections {
         target: Document
-        function onChanged() { graph.refreshLinks(); }
+        function onChanged() { Qt.callLater(graph.refreshLinks); }
     }
 
     function refreshLinks() {

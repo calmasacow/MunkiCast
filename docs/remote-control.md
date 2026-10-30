@@ -2,11 +2,16 @@
 
 Start or restart the newly built `build/linux/apps/libertas-ui/libertas-ui`.
 Tools > WebSocket Server Settings now places **Mode** directly below Password.
-Choose **Libertas Studio** for the native Companion module/MCP server, or **OBS**
+Choose **Libertas Studio** for the native Companion module, or **OBS**
 for an existing Companion OBS Studio connection. Apply persists the mode and
 restarts the listener, disconnecting existing clients. Default: native, port 4455.
 Existing settings without a mode migrate to native mode; native also accepts the
 OBS transports, preserving existing replay clients.
+
+The native MCP server is separate: **Tools > MCP Server Settings**, default
+`http://127.0.0.1:4466/mcp`, with its own token. It works with WebSockets disabled.
+See [native MCP](native-mcp.md). Rebuild the directory you launch from; operators
+using `./build-make/apps/libertas-ui/libertas-ui` must rebuild `build-make`.
 
 The listener binds all IPv4 interfaces, requires a password, limits clients to eight,
 limits incoming messages to 1 MiB, and times out unauthenticated connections after

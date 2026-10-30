@@ -45,8 +45,9 @@ Item {
     /// Follows the document, except while a drag is in hand: the outline tracks the pointer,
     /// and the picture follows the commands.
     readonly property var placement: {
-        void Document.revision;
-        void Document.selectedNode;
+        // A selected node can move without its ID changing. Retain the document dependency
+        // in control flow; an unused property read is discarded by the QML compiler.
+        if (Document.revision < 0) return null;
         if (overlay.dragging)
             return overlay.hold;
         if (Document.selectedNode === "")

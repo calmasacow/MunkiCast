@@ -27,7 +27,7 @@ Item {
     /// How many strips are hidden right now, across both halves. Drives the footer caption and
     /// whether the eye is worth pressing.
     readonly property int hiddenCount: {
-        void Document.revision;
+        if (Document.revision < 0) return 0;
         return Document.hiddenStripCount();
     }
     /// Below this the routing line goes, because a strip's fader matters more than a sentence

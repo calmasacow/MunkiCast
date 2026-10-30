@@ -179,6 +179,9 @@ set_source_files_properties(
 
 # The headless self-check: load the real QML tree, drive the real gestures, touch no screen.
 if(LIBERTAS_BUILD_TESTS)
+    add_test(NAME panel_loading_self_check COMMAND $<TARGET_FILE:libertas-ui> --check --check-panels)
+    set_tests_properties(panel_loading_self_check PROPERTIES TIMEOUT 90 LABELS "needs-qt-threads"
+        ENVIRONMENT "QT_IM_MODULE=none;LIBERTAS_RENDER_BACKEND=cpu")
     # Started from nothing every run. --project opens a directory that already exists, so a
     # project left by an older build -- a different schema, or a shape the check no longer
     # expects -- made the suite fail for a reason that had nothing to do with the change

@@ -139,11 +139,11 @@ Window {
                 ChoiceField {
                     width: parent.width; label: qsTr("Source"); labelWidth: 110
                     choices: {
-                        const revision = Document.revision;
+                        if (Document.revision < 0) return [];
                         return Document.countdownTextSources().map(s => s.id);
                     }
                     choiceLabels: {
-                        const revision = Document.revision;
+                        if (Document.revision < 0) return ({});
                         const names = {};
                         for (const s of Document.countdownTextSources()) names[s.id] = s.name;
                         return names;
@@ -223,11 +223,11 @@ Window {
                         label: ""; labelWidth: 0
                         enabled: dialog.field("showEndScene", false)
                         choices: {
-                            const revision = Document.revision;
+                            if (Document.revision < 0) return [];
                             return [""].concat(Document.countdownScenes().map(s => s.id));
                         }
                         choiceLabels: {
-                            const revision = Document.revision;
+                            if (Document.revision < 0) return ({});
                             const names = {"": qsTr("None")};
                             for (const s of Document.countdownScenes()) names[s.id] = s.name;
                             return names;

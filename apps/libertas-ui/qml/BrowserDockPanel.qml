@@ -12,8 +12,8 @@ Item {
     id: panel
     required property string panelId
     readonly property string configuredUrl: {
-        const docks = Workspace.browserDocks;
-        return Workspace.browserDockUrl(panel.panelId);
+        const dock = Workspace.browserDocks.find(entry => entry.id === panel.panelId);
+        return dock ? dock.url : "";
     }
     property string loadError: ""
 

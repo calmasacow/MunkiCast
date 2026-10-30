@@ -17,7 +17,14 @@ Item {
     property int clockRevision: 0
     property string bindingId: ""
 
-    Timer { interval: 200; running: true; repeat: true; onTriggered: panel.clockRevision++ }
+    // Only the dock's readout uses this timer; source workers keep the on-air clock running.
+    Timer {
+        interval: 200
+        running: panel.visible && Document.countdowns.length > 0
+        repeat: true
+        triggeredOnStart: true
+        onTriggered: panel.clockRevision++
+    }
 
     CountdownSettingsDialog { id: settings }
 
@@ -43,15 +50,16 @@ Item {
                 spacing: 6
                 ChoiceField {
                     id: bindChoice
+                    objectName: "countdownTextChoice"
                     width: parent.width - addBinding.width - 6
                     anchors.verticalCenter: parent.verticalCenter
                     label: qsTr("Bind text"); labelWidth: 60
                     choices: {
-                        const revision = Document.revision;
+                        if (Document.revision < 0) return [];
                         return Document.countdownTextSources().filter(s => !s.bound).map(s => s.id);
                     }
                     choiceLabels: {
-                        const revision = Document.revision;
+                        if (Document.revision < 0) return ({});
                         const names = {};
                         for (const s of Document.countdownTextSources()) names[s.id] = s.name;
                         return names;
@@ -102,7 +110,7 @@ Item {
             Text {
                 width: parent.width
                 visible: Document.countdowns.length === 0
-                text: Document.countdownTextSources().length === 0
+                text: Document.revision >= 0 && Document.countdownTextSources().length === 0
                       ? qsTr("No text sources yet. Add a Text source to a scene, then bind a timer to it here.")
                       : qsTr("Pick a text source and add a timer. The timer writes the time into that source, so add it to each scene that should show the countdown.")
                 wrapMode: Text.WordWrap
@@ -114,12 +122,15 @@ Item {
                 model: Document.countdowns
                 delegate: Rectangle {
                     id: timer
+                    objectName: "countdownCard"
 
                     required property var modelData
                     required property int index
                     readonly property string sourceId: modelData.id
                     readonly property var status: {
-                        const tick = panel.clockRevision;
+                        // The worker clock does not emit document changes. Keep this tick
+                        // dependency in the returned expression so compiled QML retains it.
+                        if (panel.clockRevision < 0) return ({});
                         return Document.countdownStatus(sourceId);
                     }
                     readonly property bool datetime: modelData.type === "datetime"

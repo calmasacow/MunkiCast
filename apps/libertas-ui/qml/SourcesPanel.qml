@@ -27,6 +27,18 @@ Item {
     /// the plain "sources" panel id. Titled "Sources: Vertical" in the tab, so two canvases
     /// can be worked on side by side rather than one at a time (ADR-0027).
     property string canvasId: ""
+    // Each canvas keeps its own scene selection. Looking at an empty secondary canvas must
+    // not hide Main's sources or disable Main's Add button. Selection and document changes
+    // both invalidate the lookup; opening a collection can replace every canvas ID.
+    property string selectedScene: ""
+    function refreshSelection() { selectedScene = Document.selectedSceneOn(panel.canvasId); }
+    Component.onCompleted: refreshSelection()
+    onCanvasIdChanged: refreshSelection()
+    Connections {
+        target: Document
+        function onChanged() { panel.refreshSelection(); }
+        function onSelectionChanged() { panel.refreshSelection(); }
+    }
 
     /// Make this panel's canvas the one the shell is working on, before doing something to
     /// it. The node commands act on "the selected node of the current canvas's scene", so a
@@ -82,7 +94,7 @@ Item {
 
     Text {
         anchors.centerIn: parent
-        visible: Document.selectedScene === ""
+        visible: panel.selectedScene === ""
         text: qsTr("No scene selected")
         font.pixelSize: 11
         color: Theme.c.textMuted
@@ -140,8 +152,10 @@ Item {
         anchors.top: parent.top
         anchors.bottom: footer.top
         clip: true
-        visible: Document.selectedScene !== ""
-        model: Document.nodesFor(panel.canvasId)
+        visible: panel.selectedScene !== ""
+        // Keep revision in the expression's result: an unused dependency read can disappear
+        // during QML compilation. Within one collection the returned model stays identical.
+        model: Document.revision >= 0 ? Document.nodesFor(panel.canvasId) : null
         boundsBehavior: Flickable.StopAtBounds
         // Nothing here scrolls by being dragged (ADR-0039). The wheel has to come back,
         // because Flickable drops it along with the drag.
@@ -717,9 +731,10 @@ Item {
             spacing: 4
 
             ToolButton {
+                objectName: "addSourceButton"
                 label: "+"
                 tip: qsTr("Add a source")
-                enabled: Document.selectedSceneOn(panel.canvasId) !== ""
+                enabled: panel.selectedScene !== ""
                 onClicked: {
                     panel.use();
                     panel.adding = true;
@@ -744,7 +759,7 @@ Item {
             ToolButton {
                 label: "▣"
                 tip: qsTr("Add group")
-                enabled: Document.selectedScene !== ""
+                enabled: panel.selectedScene !== ""
                 onClicked: {
                         panel.use();
                         Document.addGroup("");

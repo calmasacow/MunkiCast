@@ -13,6 +13,7 @@ import Libertas
 // own controls; a meter or a live button this build cannot back is not drawn.
 Item {
     id: body
+    objectName: "panelBody"
 
     required property string panelId
 
@@ -40,6 +41,7 @@ Item {
     // source lists, each with its own ListView over the same model. Only one was ever visible.
     Loader {
         id: panelLoader
+        objectName: "panelContentLoader"
 
         anchors.fill: parent
         active: sourceComponent !== null
@@ -166,16 +168,17 @@ Item {
     // caption stays the one that says so.
     Item {
         id: programView
+        objectName: "programView"
 
         visible: body.panelKind === "program" && !studioLoader.active
         /// The canvas this picture is of. Read again on every document change, because a
         /// canvas can be resized or renamed while its panel is open.
         readonly property size canvasSize: {
-            void Document.revision;
+            if (Document.revision < 0) return Qt.size(0, 0);
             return Document.canvasSizeOf(body.panelCanvas);
         }
         readonly property string canvasName: {
-            void Document.revision;
+            if (Document.revision < 0) return "";
             return Document.canvasNameOf(body.panelCanvas);
         }
         /// `caption` and `hasFrame` are calls. A bare statement is not a dependency — the QML

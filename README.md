@@ -7,30 +7,32 @@ SPDX-License-Identifier: GPL-3.0-or-later
 A live streaming and recording studio for Linux, built clean-sheet. Omarchy (Arch + Hyprland) is the
 bedrock target; the rest of Linux follows, then macOS and Windows.
 
-**Status: pre-alpha.** Basic H.264/AAC streaming to one RTMP/RTMPS destination and MKV recording are available.
+**Status: pre-alpha.** H.264/AAC streaming to one RTMP/RTMPS destination, MKV recording,
+replay buffering, Studio Mode, Companion control, and an independent native MCP server are
+available. See [current status](docs/current_goal.md) and the [remaining work](docs/todo.md).
 
 What exists is a workspace you can use and a document you can edit:
 
 - **`libertas-ui`** — one window holding the whole workspace, with Adobe-style drop-zone docking,
   dividers, tab groups, live Omarchy theme following, and a layout that survives being saved and
   restored at any resolution.
-- **Saved workspaces** — `Build` and `Live` across the top, plus any you add. Building a show and
+- **Saved workspaces** — `Build`, `Live`, and the `Encode` graph across the top, plus any you add. Building a show and
   running one want different panels up; these are arrangements of the one surface, never OS
   windows. The built-in pair can be rearranged and reset but not renamed away, so there is always
   a known arrangement to get back to.
-- **A document model** — scenes as trees, groups, adjustment and reference nodes, canvases, buses,
-  decks, outputs, per-canvas overrides. Every panel in the workspace drives it: scenes, sources,
+- **A document model** — scenes as trees, groups, independent canvases with scene links, buses,
+  decks, encodes, outputs, and filter stacks. Every panel in the workspace drives it: scenes, sources,
   properties, the audio mixer, and program/preview with the output list.
-- **A command bus** — every change is one of forty-four validated, journaled, undoable
+- **A command bus** — document edits use validated, journaled, undoable
   commands. A dragged fader is one undo step, not four hundred. Unsaved work survives the process
   being killed.
 - **A project on disk** — a git-diffable directory of JSON, saved as a transaction. A corrupt scene
   costs one scene, not the collection.
-- **Keyboard and hotkeys** — one bindings table covering application and global scopes, with the
-  workspace fully reachable without a pointer.
+- **Keyboard and hotkeys** — configurable application shortcuts and keyboard workspace navigation.
+  System-wide portal registration remains pending; a global scope in the table does not mean
+  that the shortcut works while another application has focus.
 - **Machine telemetry** — CPU, memory, free disk, and GPU, VRAM and *encoder* load read live from
-  NVML. The broadcast figures beside them read "—" rather than zero, because zero dropped frames
-  is a claim about a running show.
+  NVML, plus actual renderer and active output statistics. Unavailable metrics display "—".
 
 The program canvas is published by `libertas-render`, which also owns capture and encoding.
 With no render process running, the canvas reads "no pipeline attached".
@@ -84,10 +86,11 @@ and persist in an owner-only `websocket.json` file beside the application prefer
 starts disabled; authentication is required. It binds to `0.0.0.0` (all IPv4 interfaces),
 port `4455` by default. Connect to `ws://<studio-machine-ip>:4455`.
 `LIBERTAS_WEBSOCKET_PASSWORD` and `LIBERTAS_WEBSOCKET_PORT` can override startup settings.
-It implements OBS
-WebSocket v5 authentication and `StartReplayBuffer`, `StopReplayBuffer`, `SaveReplayBuffer`,
-`GetReplayBufferStatus`, `GetLastReplayBufferReplay`, and `GetVersion`, plus `ReplayBufferSaved`
-events. Other OBS requests are not implemented. The server uses the system `libsoup3` library.
+Choose **OBS** mode for existing OBS clients, or **Libertas Studio** for the native Companion
+module. Both support OBS WebSocket v5 authentication and replay requests/events, alongside
+scene, source, transform, audio, filter, output, and other supported requests. See the
+[request inventory and limitations](docs/remote-control.md); full OBS parity is not claimed.
+The server uses the system `libsoup3` and `msgpack-c` libraries.
 
 Run the focused end-to-end check with
 `./build/linux/apps/libertas-ui/libertas-ui --check --check-replay`.
@@ -138,7 +141,7 @@ Plus Qt 6.8+, Qt Multimedia/WebEngine, jsoncpp and tomlplusplus:
 
 ```sh
 sudo pacman -S --needed qt6-base qt6-declarative qt6-wayland qt6-multimedia qt6-webengine libsoup3 \
-                        jsoncpp tomlplusplus
+                        msgpack-c jsoncpp tomlplusplus
 ```
 
 The default build uses the pinned, project-local **FFmpeg 9.1 development build**.
@@ -171,7 +174,8 @@ cmake --build build-make --target libertas-ui -j8
 ./build-make/apps/libertas-ui/libertas-ui
 ```
 
-Without `--project` the shell opens an unsaved document. `--check` drives the whole shell
+Without `--project` the shell restores the last collection when available, otherwise starts
+an unsaved document. `--check` drives the whole shell
 headlessly — loading the real QML, running the real gestures, grabbing frames and asserting what
 was drawn — and forces the offscreen platform, so it cannot reach a display even by accident.
 
@@ -193,17 +197,23 @@ need review; import does not promise pixel parity. No devices or URLs are opened
 ## Testing
 
 ```sh
-ctest --preset linux          # twenty tests
+ctest --preset linux          # configured unit and integration tests
 ctest --preset linux-ci       # the same, with warnings as errors
 ctest --preset linux-asan     # the same, under ASan + UBSan
 ctest --preset linux-tsan     # the threaded code, under TSan
 ```
 
-The shell's own check is one of those twenty: `libertas-ui --check` loads the real QML, drives
-the real gestures through the same API the panels use, grabs frames and asserts what was drawn —
-200 assertions, on the offscreen platform, so it cannot reach a display even by accident. It is
+The shell's own check, `libertas-ui --check`, loads the real QML, drives
+the real gestures through the same API the panels use, grabs frames and asserts what was drawn
+on the offscreen platform, so it cannot reach a display even by accident. It is
 excluded from the TSan preset, because Qt here is built without TSan and starting its QML thread
 makes the tool itself fail an internal check; the reason is recorded beside the exclusion.
+
+`libertas-ui --check --check-panels` focuses on first-open dock contents, collection switches,
+per-canvas source selection, and browser dock attachment. It uses temporary projects/settings.
+For the `build-make` binary, run `ctest --test-dir build-make --output-on-failure`;
+`ctest --test-dir build-make -N` lists the tests available in that build. Node integration
+checks are registered when their dependencies are installed.
 
 The layout engine, the document model and the command bus carry property tests: random docking
 gestures asserting every invariant after each one, random command sequences asserting that undo

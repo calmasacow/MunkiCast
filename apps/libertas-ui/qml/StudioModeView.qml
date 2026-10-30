@@ -11,7 +11,7 @@ Item {
     objectName: "studioModeView"
     readonly property var deck: Document.mainDeck
     readonly property size canvasSize: {
-        void Document.revision;
+        if (Document.revision < 0) return Qt.size(0, 0);
         return Document.canvasSizeOf("");
     }
     readonly property real aspect: canvasSize.height > 0 ? canvasSize.width / canvasSize.height : 16 / 9

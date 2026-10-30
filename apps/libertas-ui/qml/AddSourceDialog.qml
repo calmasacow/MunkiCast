@@ -109,10 +109,13 @@ Item {
     }
 
     onSelectedTypeChanged: refreshSources()
-    Component.onCompleted: refreshSources()
     Connections {
         target: Document
-        function onChanged() { dialog.refreshSources(); }
+        // Every Sources dock owns a dialog. Hidden dialogs need no model rebuild for each
+        // fader/transform edit; open() refreshes before showing them. Scene choices also
+        // depend on the selected scene, which can change without a document command.
+        function onChanged() { if (dialog.visible) dialog.refreshSources(); }
+        function onSelectionChanged() { if (dialog.visible) dialog.refreshSources(); }
     }
 
     Keys.onEscapePressed: {

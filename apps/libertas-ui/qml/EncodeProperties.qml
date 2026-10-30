@@ -85,8 +85,9 @@ Item {
         panel.canvasLabels = labels;
     }
 
-    // Document emits `changed` after every command, and these are calls rather than
-    // properties, so without this they would never re-read.
+    // Document emits `changed` after every command. Invokable lookups below must use this
+    // revision in their control flow: an unused `void revision` read is optimized away by
+    // compiled QML, leaving an open dropdown's labels/choices stale until it is recreated.
     property int revision: 0
     Connections {
         target: Document
@@ -101,6 +102,11 @@ Item {
                 panel.savedKeys = keys;
             }
         }
+    }
+
+    Connections {
+        target: Document.connectors
+        function onChanged() { panel.revision++; }
     }
 
     function setExtra(key, value) {
@@ -152,7 +158,7 @@ Item {
             Text {
                 width: parent.width
                 text: {
-                    void panel.revision;
+                    if (panel.revision < 0) return "";
                     if (panel.selectedKind === "encode")
                         return qsTr("Properties: %1").arg(panel.encode.name || "");
                     if (panel.selectedKind === "audio-encode")
@@ -176,7 +182,7 @@ Item {
                 id: nodeName
 
                 readonly property string value: {
-                    void panel.revision;
+                    if (panel.revision < 0) return "";
                     if (panel.selectedKind === "output")
                         return panel.destinationName;
                     if (panel.selectedKind === "bus") {
@@ -610,11 +616,11 @@ Item {
                     label: qsTr("Audio Track")
                     labelWidth: 150
                     choices: {
-                        void panel.revision;
+                        if (panel.revision < 0) return [];
                         return Document.audioBusChoices().map(b => b.id);
                     }
                     choiceLabels: {
-                        void panel.revision;
+                        if (panel.revision < 0) return ({});
                         const out = {};
                         for (const b of Document.audioBusChoices())
                             out[b.id] = b.name;
@@ -677,7 +683,7 @@ Item {
                     label: qsTr("Output folder")
                     labelWidth: 100
                     value: panel.destination.url || ""
-                    placeholder: { void panel.revision; return Document.recordingDirectory(); }
+                    placeholder: { if (panel.revision < 0) return ""; return Document.recordingDirectory(); }
                     browsable: true
                     onCommitted: value => Document.setRecordingDirectory(panel.selectedId, value)
                     onBrowseRequested: {
@@ -746,7 +752,7 @@ Item {
                     label: qsTr("OAuth client ID")
                     labelWidth: 150
                     value: {
-                        void Document.connectors.busy;
+                        if (panel.revision < 0) return "";
                         return Document.connectors.clientId(panel.destination.service || "");
                     }
                     placeholder: qsTr("Register Libertas with the provider")
@@ -853,11 +859,11 @@ Item {
                     label: qsTr("Video Encoder")
                     labelWidth: 150
                     choices: {
-                        void panel.revision;
+                        if (panel.revision < 0) return [];
                         return Document.encodeChoices().map(e => e.id);
                     }
                     choiceLabels: {
-                        void panel.revision;
+                        if (panel.revision < 0) return ({});
                         const out = {};
                         for (const e of Document.encodeChoices())
                             out[e.id] = e.name;
@@ -872,11 +878,11 @@ Item {
                     label: qsTr("Audio Encoder")
                     labelWidth: 150
                     choices: {
-                        void panel.revision;
+                        if (panel.revision < 0) return [];
                         return [""].concat(Document.audioEncodeChoices().map(e => e.id));
                     }
                     choiceLabels: {
-                        void panel.revision;
+                        if (panel.revision < 0) return ({});
                         const out = {"": qsTr("Not connected")};
                         for (const e of Document.audioEncodeChoices())
                             out[e.id] = e.name;
@@ -911,7 +917,7 @@ Item {
                     wrapMode: Text.WordWrap
                     visible: panel.streamDestination
                     text: {
-                        void panel.revision;
+                        if (panel.revision < 0) return "";
                         const target = Document.streamingTarget();
                         return target.outputId ? qsTr("Ready to go live") : target.reason || "";
                     }

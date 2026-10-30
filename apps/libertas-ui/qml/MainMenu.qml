@@ -14,8 +14,10 @@ Controls.MenuBar {
     required property var collectionDialog
     property bool statusBarVisible: true
     readonly property bool editable: Document.selectedNode !== "" && !Document.nodeProperties.locked
+    // Invokables do not notify bindings. Use revision in control flow here and in checked
+    // states below; a discarded read otherwise leaves dock menus stale after layout edits.
     readonly property var extraPanels: {
-        const revision = Workspace.revision;
+        if (Workspace.revision < 0) return [];
         const ids = Workspace.closedPanels.slice();
         for (let i = 0; i < Workspace.panelCount; ++i) {
             for (const id of Workspace.panelAt(i).tabs) {
@@ -215,7 +217,7 @@ Controls.MenuBar {
                     required property var modelData
                     text: modelData.name
                     checkable: true
-                    checked: { const revision = Workspace.revision; return Workspace.layoutHasPanel(modelData.id); }
+                    checked: Workspace.revision >= 0 && Workspace.layoutHasPanel(modelData.id)
                     onTriggered: checked ? bar.showPanel(modelData.id) : Workspace.closePanel(modelData.id)
                 }
                 onObjectAdded: (index, object) => browserMenu.insertItem(index, object)
@@ -229,7 +231,7 @@ Controls.MenuBar {
                 required property string modelData
                 text: Workspace.title(modelData)
                 checkable: true
-                checked: { const revision = Workspace.revision; return Workspace.layoutHasPanel(modelData); }
+                checked: Workspace.revision >= 0 && Workspace.layoutHasPanel(modelData)
                 onTriggered: checked ? bar.showPanel(modelData) : Workspace.closePanel(modelData)
             }
             onObjectAdded: (index, object) => docks.insertItem(index + 7, object)
@@ -246,7 +248,7 @@ Controls.MenuBar {
                     required property string modelData
                     text: Workspace.title(modelData)
                     checkable: true
-                    checked: { const revision = Workspace.revision; return Workspace.layoutHasPanel(modelData); }
+                    checked: Workspace.revision >= 0 && Workspace.layoutHasPanel(modelData)
                     onTriggered: checked ? bar.showPanel(modelData) : Workspace.closePanel(modelData)
                 }
                 onObjectAdded: (index, object) => extraCanvases.insertItem(index, object)
@@ -256,7 +258,7 @@ Controls.MenuBar {
         Entry {
             text: qsTr("Countdown Timers")
             checkable: true
-            checked: { const revision = Workspace.revision; return Workspace.layoutHasPanel("countdowns"); }
+            checked: Workspace.revision >= 0 && Workspace.layoutHasPanel("countdowns")
             onTriggered: checked ? bar.showPanel("countdowns") : Workspace.closePanel("countdowns")
         }
         Pending { text: qsTr("Chat") }

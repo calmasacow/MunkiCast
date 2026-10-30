@@ -14,9 +14,9 @@ import Libertas
 /// then wanted out of the way, while program and preview are touched constantly. Keeping them
 /// together meant one of the two was always in the way of the other.
 ///
-/// Output transport is not connected yet; the footer says so. An
-/// output is born disabled, because one that arrived enabled and pointed somewhere would be a
-/// keystroke from going to a destination nobody chose.
+/// Recording and replay have row actions. The single supported live stream is controlled
+/// from the broadcast toolbar; per-row streaming and Start All remain pending. Outputs are
+/// born disabled so an unreviewed destination cannot be started accidentally.
 
 Item {
     id: panel
@@ -181,7 +181,7 @@ Item {
                                 tip: output.destinationKind === "replay" ? qsTr("Save replay clip")
                                      : output.destinationKind === "file"
                                      ? (Preview.recording ? qsTr("Stop recording") : qsTr("Start recording"))
-                                     : qsTr("Streaming is not connected yet")
+                                     : qsTr("Use Go Live in the top toolbar")
                                 onClicked: {
                                     if (output.destinationKind === "replay") {
                                         Preview.saveReplay(Document.replayPath());
@@ -286,7 +286,7 @@ Item {
                 width: 72
                 label: qsTr("Start All")
                 enabled: false
-                tip: qsTr("Output engine is not connected yet")
+                tip: qsTr("Starting all outputs together is not implemented yet")
             }
             ToolButton {
                 label: "\u25a0"
@@ -306,7 +306,10 @@ Item {
             anchors.rightMargin: 8
             anchors.verticalCenter: parent.verticalCenter
             horizontalAlignment: Text.AlignRight
-            text: Preview.recording ? qsTr("Recording") : qsTr("Idle")
+            text: [Preview.streaming ? qsTr("Live") : "",
+                   Preview.recording ? qsTr("Recording") : "",
+                   Preview.replayActive ? qsTr("Replay") : ""].filter(label => label !== "").join(" · ")
+                  || qsTr("Idle")
             font.pixelSize: 9
             color: Theme.c.textMuted
             opacity: 0.6
