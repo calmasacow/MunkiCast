@@ -10,6 +10,11 @@
 
 #include <QDateTime>
 #include <QImage>
+#include <QGuiApplication>
+#include <QScreen>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QProcess>
 #include <QQuickImageProvider>
 #include <QSocketNotifier>
@@ -95,6 +100,7 @@ struct Preview::Link {
     bool refresh_only = false;
     bool refresh_pending = false;
     std::optional<lcomp::RecordRequest> record_request;
+    std::deque<std::string> projector_requests;
     /// Set when this commit was a fault, so its ack does not publish a picture of the last one.
     bool failed = false;
     ldoc::Project pending;
@@ -143,6 +149,17 @@ Preview* Preview::create(QQmlEngine* engine, QJSEngine*) {
 Preview::Preview(QObject* parent)
     : QObject(parent), renderer_(g_renderer), state_(std::make_shared<State>()),
       link_(std::make_unique<Link>()) {
+    projector_poll_ = new QTimer(this);
+    projector_poll_->setInterval(250);
+    connect(projector_poll_, &QTimer::timeout, this, [this] {
+        // Status only. The renderer continues projecting when this timer/UI is paused.
+        if (link_ && link_->alive) {
+            if (link_->projector_requests.empty())
+                queueProjector(R"({"status":true})");
+            else
+                flushProjectors();
+        }
+    });
     bool valid = false;
     const int seconds = qEnvironmentVariableIntValue("LIBERTAS_MONITOR_SECONDS", &valid);
     if (!valid || seconds < 1 || seconds > 3600)
@@ -363,6 +380,7 @@ void Preview::setLive(bool live, ldoc::Fps rate) {
     }
     if (live_ == nullptr) {
         live_ = new QTimer(this);
+        live_->setObjectName(QStringLiteral("previewClock"));
         live_->setTimerType(Qt::PreciseTimer);
         live_->setSingleShot(true);
         QObject::connect(live_, &QTimer::timeout, this, [this] {
@@ -438,6 +456,83 @@ void Preview::update_size() {
         publish(latest_);
 }
 
+QVariantList Preview::projectorScreens() const {
+    QVariantList result;
+    for (const auto* screen : QGuiApplication::screens())
+        if (!screen->name().isEmpty())
+            result.append(QVariantMap{{"name", screen->name()},
+                                      {"width", screen->size().width()},
+                                      {"height", screen->size().height()},
+                                      {"refreshRate", screen->refreshRate()}});
+    return result;
+}
+
+bool Preview::openProjector(const QString& canvasId, bool preview, bool fullscreen,
+                            const QString& screen) {
+    if (!link_ || !link_->alive) {
+        report(QStringLiteral("The renderer is unavailable."));
+        return false;
+    }
+    auto key = resolve(canvasId);
+    if (preview) {
+        const auto deck = latest_.canvases.empty()
+                              ? latest_.decks.end()
+                              : std::ranges::find(latest_.decks, latest_.canvases.front().id,
+                                                  &ldoc::Deck::canvas);
+        if (deck == latest_.decks.end() || !deck->studio_mode) {
+            report(QStringLiteral("Preview projectors require Studio Mode."));
+            return false;
+        }
+        key = studioPreviewKey();
+    }
+    const auto id = ldoc::Id::parse(key.toStdString());
+    if (!id || !link_->pending.canvas(*id) || screen.size() > 256) {
+        report(QStringLiteral("Invalid projector canvas or monitor."));
+        return false;
+    }
+    queueProjector(QJsonDocument(QJsonObject{{"id", int(next_projector_++)},
+                                             {"canvas", key},
+                                             {"preview", preview},
+                                             {"fullscreen", fullscreen},
+                                             {"screen", screen}})
+                       .toJson(QJsonDocument::Compact));
+    projector_poll_->start();
+    return true;
+}
+
+void Preview::closeProjector(int id) {
+    if (id > 0)
+        queueProjector(QJsonDocument(QJsonObject{{"close", id}}).toJson(QJsonDocument::Compact));
+}
+
+void Preview::closeProjectors() {
+    queueProjector(R"({"closeAll":true})");
+}
+
+void Preview::queueProjector(const QByteArray& request) {
+    if (!link_ || !link_->alive || link_->projector_requests.size() >= 16) {
+        report(QStringLiteral("Projector control unavailable or busy."));
+        return;
+    }
+    link_->projector_requests.push_back(request.toStdString());
+    projector_poll_->start(); // Also retries controls when the IPC socket is temporarily full.
+    flushProjectors();
+}
+
+void Preview::flushProjectors() {
+    if (!link_ || !link_->channel || link_->in_flight || link_->dirty)
+        return;
+    while (!link_->projector_requests.empty()) {
+        const auto sent = link_->channel->send_projector(link_->projector_requests.front());
+        if (!sent) {
+            if (lcomp::send_would_block(sent.error()))
+                return; // Next status tick/ack retries.
+            report(QString::fromStdString(sent.error()));
+        }
+        link_->projector_requests.pop_front();
+    }
+}
+
 QString Preview::studioPreviewKey() const {
     return QString::fromStdString(studio_canvas_.to_string());
 }
@@ -479,6 +574,7 @@ void Preview::setManualTransition(double progress) {
 }
 
 void Preview::publish(const ldoc::Project& project) {
+    if (latest_.id != project.id && projector_poll_->isActive()) closeProjectors();
     if (latest_.id != project.id) transition_until_ = {};
     else for (const auto& deck : project.decks) {
         const auto previous = std::ranges::find(latest_.decks, deck.id, &ldoc::Deck::id);
@@ -765,6 +861,36 @@ void Preview::on_readable() {
             return;
         lcomp::PreviewEvent& got = **event;
         switch (got.kind) {
+        case lcomp::PreviewEvent::Kind::Projector: {
+            const auto document = QJsonDocument::fromJson(QByteArray::fromStdString(got.projector));
+            if (!document.isObject()) {
+                lose(QStringLiteral("Invalid projector status."));
+                return;
+            }
+            const auto status = document.object();
+            projectors_ = status.value("windows").toArray().toVariantList();
+            QStringList errors;
+            const auto error = status.value("error").toString();
+            if (!error.isEmpty())
+                errors.append(error);
+            bool active = false;
+            for (const auto& entry : projectors_) {
+                const auto row = entry.toMap();
+                active = active || row.value("active").toBool();
+                if (!row.value("error").toString().isEmpty())
+                    errors.append(row.value("error").toString());
+            }
+            const auto text = errors.join(QLatin1Char('\n'));
+            if (!text.isEmpty() && text != projector_error_)
+                report(text);
+            projector_error_ = text;
+            if (active && !projector_poll_->isActive())
+                projector_poll_->start();
+            else if (!active && link_->projector_requests.empty())
+                projector_poll_->stop();
+            emit projectorsChanged();
+            break;
+        }
         case lcomp::PreviewEvent::Kind::Capture:
             capture_stats_ = std::move(got.capture);
             emit changed();
@@ -891,6 +1017,8 @@ void Preview::on_readable() {
             } else {
                 link_->incoming.clear();
             }
+            if (!link_->dirty)
+                flushProjectors();
             if (link_->dirty)
                 try_send();
             else if (link_->record_request) {
@@ -1158,6 +1286,10 @@ void Preview::lose(const QString& why) {
         key_lookup_ = nullptr;
     }
     link_->record_request.reset();
+    link_->projector_requests.clear();
+    projector_poll_->stop();
+    projectors_.clear();
+    emit projectorsChanged();
     link_->alive = false;
     link_->in_flight = false;
     link_->have_pending = false;

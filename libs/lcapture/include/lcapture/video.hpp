@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include <chrono>
 #include <cstdint>
 #include <functional>
 #include <memory>
@@ -29,6 +30,10 @@ struct VideoOptions {
 enum class VideoLayout : std::uint8_t { Bgra, Yuyv, I420, Nv12 };
 struct VideoFrame {
     int width = 0, height = 0;
+    /// Driver sequence, including frames discarded by the low-latency dequeue path.
+    std::uint32_t sequence = 0;
+    /// V4L2 monotonic capture time; empty when the driver supplies another clock.
+    std::chrono::steady_clock::time_point captured_at{};
     /// Tightly packed BGRA8, or for a YUV layout the tightly packed planes (Y, then U/V or UV).
     std::vector<std::uint8_t> pixels;
     VideoLayout layout = VideoLayout::Bgra;

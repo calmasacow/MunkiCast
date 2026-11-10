@@ -82,6 +82,8 @@ EncoderPtr encoder_open(const RuntimeConfig& cfg, std::string& error);
 
 /// Add a muxer sharing the existing compressed streams; starts on the next keyframe.
 /// Destination 0 is the original output. Removing a destination leaves other outputs running.
+/// Packet writes run on bounded per-destination queues. Poll active/error for asynchronous
+/// failures; removing/finishing drains queued packets and reports write/close failures.
 std::optional<std::size_t> encoder_add_output(Encoder& enc, const std::string& path,
                                               std::string& error);
 bool encoder_remove_output(Encoder& enc, std::size_t id, std::string& error);

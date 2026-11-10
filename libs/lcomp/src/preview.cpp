@@ -42,6 +42,8 @@ enum class Kind : std::uint8_t {
     Record = 11,
     RecordState = 12,
     Capture = 13,
+    Projector = 14,
+    ProjectorState = 15,
 };
 
 constexpr std::size_t kMaxDocument = 32u * 1024u * 1024u;
@@ -349,6 +351,15 @@ std::expected<void, std::string> PreviewLink::send_record(const RecordRequest& r
     return channel_.send(payload);
 }
 
+std::expected<void, std::string> PreviewLink::send_projector(const std::string& request) {
+    if (request.empty() || request.size() > 4096)
+        return std::unexpected(std::string{"invalid projector request size"});
+    std::vector<std::byte> payload{static_cast<std::byte>(Kind::Projector)};
+    for (char c : request)
+        payload.push_back(static_cast<std::byte>(c));
+    return channel_.send(payload);
+}
+
 void PreviewLink::quit() {
     if (!channel_.valid())
         return;
@@ -383,6 +394,15 @@ std::expected<PreviewEvent, std::string> PreviewLink::decode(lipc::Message messa
     const auto kind = static_cast<Kind>(std::to_integer<unsigned>(message.payload[0]));
     const std::span<const std::byte> payload = message.payload;
 
+    if (kind == Kind::ProjectorState) {
+        if (payload.size() > 16385)
+            return std::unexpected(std::string{"invalid projector status size"});
+        PreviewEvent event;
+        event.kind = PreviewEvent::Kind::Projector;
+        event.projector.assign(reinterpret_cast<const char*>(payload.data() + 1),
+                               payload.size() - 1);
+        return event;
+    }
     if (kind == Kind::Ack) {
         PreviewEvent event;
         event.kind = PreviewEvent::Kind::Ack;
@@ -618,7 +638,8 @@ std::expected<void, std::string> serve_preview(lipc::Channel channel, FrameSourc
                                                FramesDone done, FramesFresh fresh,
                                                CanvasRenderer render, AudioMeters audio,
                                                AudioPcm pcm, RecordHooks record,
-                                               std::function<std::vector<CaptureState>()> capture) {
+                                               std::function<std::vector<CaptureState>()> capture,
+                                               ProjectorHooks projectors) {
     std::vector<std::byte> hello{static_cast<std::byte>(Kind::Hello)};
     append_u16(hello, kPreviewProtocol);
     if (auto sent = channel.send(hello); !sent)
@@ -632,13 +653,14 @@ std::expected<void, std::string> serve_preview(lipc::Channel channel, FrameSourc
     std::chrono::steady_clock::time_point next_output;
     std::optional<RecordState> latest_record;
     std::vector<std::pair<ldoc::Id, Slot>> slots;
+    std::vector<std::pair<ldoc::Id, std::chrono::steady_clock::time_point>> display_deadlines;
 
     struct RenderStats {
         std::uint64_t ns = 0, frames = 0, missed = 0;
     };
 
     std::vector<std::pair<ldoc::Id, RenderStats>> stats;
-    const bool trace_output = std::getenv("LIBERTAS_TRACE_OUTPUT") != nullptr;
+    std::vector<std::pair<ldoc::Id, Picture>> output_pictures;
     double cycle_ms = 0, prepare_ms = 0, render_ms = 0, encode_ms = 0, publish_ms = 0;
     auto cycle_finished = std::chrono::steady_clock::now();
 
@@ -660,9 +682,17 @@ std::expected<void, std::string> serve_preview(lipc::Channel channel, FrameSourc
         return channel.send(reply);
     };
 
-    const auto render_cycle =
-        [&](bool publish,
-            std::chrono::steady_clock::time_point frame_time) -> std::expected<void, std::string> {
+    const auto send_projector_state = [&](const std::string& json) {
+        if (json.size() > 16384)
+            return std::expected<void, std::string>{std::unexpected("projector status too large")};
+        std::vector<std::byte> packet{static_cast<std::byte>(Kind::ProjectorState)};
+        for (char c : json)
+            packet.push_back(static_cast<std::byte>(c));
+        return channel.send(packet);
+    };
+
+    const auto render_cycle = [&](bool publish, std::chrono::steady_clock::time_point frame_time,
+                                  bool deliver_output) -> std::expected<void, std::string> {
         const auto cycle_started = std::chrono::steady_clock::now();
         render_ms = encode_ms = publish_ms = 0;
         if (publish && pcm) {
@@ -687,14 +717,17 @@ std::expected<void, std::string> serve_preview(lipc::Channel channel, FrameSourc
             std::vector<std::byte> packet{static_cast<std::byte>(Kind::Capture)};
             append_u32(packet, static_cast<std::uint32_t>(states.size()));
             for (const auto& state : states) {
-                for (char c : state.source.to_string()) packet.push_back(static_cast<std::byte>(c));
+                for (char c : state.source.to_string())
+                    packet.push_back(static_cast<std::byte>(c));
                 append_u32(packet, state.negotiated);
                 append_u32(packet, state.received);
                 const auto error = state.error.substr(0, 1024);
                 append_u16(packet, static_cast<std::uint16_t>(error.size()));
-                for (char c : error) packet.push_back(static_cast<std::byte>(c));
+                for (char c : error)
+                    packet.push_back(static_cast<std::byte>(c));
             }
-            if (auto sent = channel.send(packet); !sent) return sent;
+            if (auto sent = channel.send(packet); !sent)
+                return sent;
         }
         if (audio) {
             const auto levels = audio(*project);
@@ -728,24 +761,64 @@ std::expected<void, std::string> serve_preview(lipc::Channel channel, FrameSourc
         // A recording is the exception: a file whose frames stop arriving when the
         // picture holds still is a file that plays back at the wrong speed.
         const bool recording =
-            record.wants &&
+            deliver_output && record.wants &&
             std::ranges::any_of(project->canvases,
                                 [&record](const ldoc::Canvas& c) { return record.wants(c.id); });
         if (!recording && !document_changed && fresh && !fresh()) {
             return publish ? send_ack(channel) : std::expected<void, std::string>{};
         }
         document_changed = false;
-        prepare_ms = std::chrono::duration<double, std::milli>(
-            std::chrono::steady_clock::now() - cycle_started).count();
+        prepare_ms = std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() -
+                                                               cycle_started)
+                         .count();
+        std::erase_if(output_pictures, [&](const auto& entry) {
+            return !record.wants || !record.wants(entry.first);
+        });
         for (const ldoc::Canvas& canvas : project->canvases) {
             const auto started = std::chrono::steady_clock::now();
-            const bool wants_output = record.wants && record.frame && record.wants(canvas.id);
-            const auto edge = !publish && wants_output ? 0u : preview_edge;
-            Picture full;
-            Picture* full_output = wants_output && edge != 0 ? &full : nullptr;
+            const bool wants_output =
+                deliver_output && record.wants && record.frame && record.wants(canvas.id);
+            bool wants_display = projectors.wants && projectors.wants(canvas.id);
+            if (wants_display && output_period && record.wants && record.wants(canvas.id)) {
+                // A recorded Program projector taps exactly the encoder's composition, even
+                // when another canvas/projector has a faster independent clock.
+                wants_display = wants_output;
+            } else if (wants_display && canvas.fps.valid()) {
+                auto deadline = std::ranges::find(
+                    display_deadlines, canvas.id,
+                    &std::pair<ldoc::Id, std::chrono::steady_clock::time_point>::first);
+                if (deadline == display_deadlines.end()) {
+                    display_deadlines.emplace_back(canvas.id, frame_time);
+                    deadline = std::prev(display_deadlines.end());
+                }
+                const auto period = std::chrono::nanoseconds(
+                    std::max<std::int64_t>(1, 1000000000LL * canvas.fps.den / canvas.fps.num));
+                // One microsecond covers integer-nanosecond rounding between rational rates.
+                const auto due = frame_time + std::chrono::microseconds(1);
+                wants_display = due >= deadline->second;
+                if (wants_display)
+                    deadline->second += period * ((due - deadline->second) / period + 1);
+            }
+            if (!publish && !wants_output && !wants_display)
+                continue;
+            // Display-only cycles export GPU buffers, not full-size CPU pictures.
+            const auto edge = !publish ? 1u : preview_edge;
+            Picture* full_output = nullptr;
+            if (wants_output && edge != 0) {
+                auto stored = std::ranges::find(
+                    output_pictures, canvas.id, &std::pair<ldoc::Id, Picture>::first);
+                if (stored == output_pictures.end()) {
+                    output_pictures.emplace_back(canvas.id, Picture{});
+                    stored = std::prev(output_pictures.end());
+                }
+                // The previous synchronous encode already consumed these pixels. Keep
+                // their allocation for the next frame instead of zeroing/freeing a new
+                // 15 MiB RGBA vector sixty times a second at 1440p.
+                full_output = &stored->second;
+            }
             Picture picture;
             if (render) {
-                picture = render(*project, canvas.id, edge, full_output);
+                picture = render(*project, canvas.id, edge, full_output, wants_display, frame_time);
             } else {
                 picture = composite_canvas(*project, canvas.id, frames);
                 if (full_output)
@@ -785,10 +858,11 @@ std::expected<void, std::string> serve_preview(lipc::Channel channel, FrameSourc
             if (wants_output) {
                 const auto encode_started = std::chrono::steady_clock::now();
                 if (const auto state =
-                        record.frame(canvas.id, full_output ? full : picture, frame_time)) {
+                        record.frame(canvas.id, full_output ? *full_output : picture, frame_time)) {
                     latest_record = *state;
                     if (!state->clip_path.empty()) {
-                        if (auto sent = send_record_state(*state); !sent) return sent;
+                        if (auto sent = send_record_state(*state); !sent)
+                            return sent;
                         latest_record.reset();
                     }
                     if (!state->running) {
@@ -825,35 +899,70 @@ std::expected<void, std::string> serve_preview(lipc::Channel channel, FrameSourc
         return {};
     };
 
+    std::optional<std::chrono::nanoseconds> previous_display_period;
+    auto next_display = std::chrono::steady_clock::now();
     for (;;) {
+        std::optional<std::chrono::nanoseconds> display_period;
+        if (project && projectors.pump)
+            display_period = projectors.pump(*project);
+        if (display_period != previous_display_period) {
+            previous_display_period = display_period;
+            next_display = std::chrono::steady_clock::now();
+        }
+        if (display_period && output_period && *display_period == *output_period)
+            next_display = next_output; // Same-rate HDMI/encoder consume one composition.
         const auto now = std::chrono::steady_clock::now();
-        if ((output_period && now >= next_output) || (!output_period && preview_pending)) {
+        const bool output_due = output_period && now >= next_output;
+        const bool display_due = display_period && now >= next_display;
+        const bool clocked = output_period || display_period;
+        if (output_due || display_due || (!clocked && preview_pending)) {
             auto frame_time = now;
-            if (output_period) {
+            if (output_due) {
                 const auto skipped = (now - next_output) / *output_period;
-                if (trace_output && skipped > 0)
-                    std::fprintf(stderr,
-                        "OUTPUT_DEADLINE missed=%lld cycle_ms=%.3f prepare_ms=%.3f "
+                // Keep inexpensive deadline evidence in ordinary runs. Full capture-picture
+                // hashing is a separate opt-in diagnostic and changes the measured workload.
+                if (skipped > 0)
+                    std::fprintf(
+                        stderr,
+                        "OUTPUT_DEADLINE scheduled_ns=%lld missed=%lld cycle_ms=%.3f "
+                        "prepare_ms=%.3f "
                         "render_ms=%.3f encode_ms=%.3f publish_ms=%.3f outside_cycle_ms=%.3f\n",
-                        static_cast<long long>(skipped), cycle_ms, prepare_ms, render_ms,
-                        encode_ms, publish_ms,
+                        static_cast<long long>(
+                            std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                (next_output + *output_period * skipped).time_since_epoch())
+                                .count()),
+                        static_cast<long long>(skipped), cycle_ms, prepare_ms, render_ms, encode_ms,
+                        publish_ms,
                         std::chrono::duration<double, std::milli>(now - cycle_finished).count());
-                // Stamp the selected output slot, not poll/OS wake-up jitter within that slot.
                 next_output += *output_period * ((now - next_output) / *output_period);
                 frame_time = next_output;
                 next_output += *output_period;
             }
+            if (display_due) {
+                const auto slot =
+                    next_display + *display_period * ((now - next_display) / *display_period);
+                if (!output_due)
+                    frame_time = slot;
+                next_display = slot + *display_period;
+            }
             const bool publish = std::exchange(preview_pending, false);
-            if (auto result = render_cycle(publish, frame_time); !result)
+            // A faster projector canvas must not duplicate encoded frames or change their
+            // timestamps. Recording and display deadlines advance independently.
+            if (auto result = render_cycle(publish, frame_time, output_due || !output_period);
+                !result)
                 return result;
         }
 
-        // Output deadlines belong to the renderer. A paused UI neither stops the clock nor
-        // accumulates preview packets: only a requested preview is published and acknowledged.
+        // Only requested previews/status cross the UI socket. A paused UI cannot stop HDMI.
         int timeout = -1;
-        if (output_period) {
+        std::optional<std::chrono::steady_clock::time_point> wake;
+        if (output_period)
+            wake = next_output;
+        if (display_period && (!wake || next_display < *wake))
+            wake = next_display;
+        if (wake) {
             const auto delay = std::chrono::ceil<std::chrono::milliseconds>(
-                                   next_output - std::chrono::steady_clock::now())
+                                   *wake - std::chrono::steady_clock::now())
                                    .count();
             timeout = static_cast<int>(
                 std::clamp<std::int64_t>(delay, 0, std::numeric_limits<int>::max()));
@@ -875,6 +984,20 @@ std::expected<void, std::string> serve_preview(lipc::Channel channel, FrameSourc
         const auto kind = static_cast<Kind>(std::to_integer<unsigned>(payload[0]));
         if (kind == Kind::Quit)
             return {};
+        if (kind == Kind::Projector) {
+            if (!project || !projectors.control || payload.size() <= 1 || payload.size() > 4097) {
+                if (auto sent = send_projector_state(
+                        R"({"windows":[],"error":"Projector control unavailable or invalid request."})");
+                    !sent)
+                    return sent;
+            } else {
+                const std::string request(reinterpret_cast<const char*>(payload.data() + 1),
+                                          payload.size() - 1);
+                if (auto sent = send_projector_state(projectors.control(request, *project)); !sent)
+                    return sent;
+            }
+            continue;
+        }
         if (kind == Kind::Record) {
             RecordState state;
             if (payload.size() < 54) {
@@ -988,6 +1111,7 @@ std::expected<void, std::string> serve_preview(lipc::Channel channel, FrameSourc
                 continue;
             }
             project = std::move(assembly.project);
+            std::erase_if(display_deadlines, [&](const auto& entry) { return !project->canvas(entry.first); });
             assembly.reset();
             document_changed = true;
         }

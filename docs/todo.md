@@ -4,7 +4,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 -->
 # Todo
 
-Implementation audit: **2026-10-29**. Open work only is unchecked. A supported API or
+Implementation audit: **2026-10-29**; projector update **2026-11-08**. Open work only is unchecked. A supported API or
 saved setting is not proof that its renderer, UI, or hardware workflow is finished.
 Model changes need an ADR. Historical design discussion remains in Git history
 (`b9bb757:docs/todo.md`), the [ADRs](adr/), and [development history](development-history.md).
@@ -12,6 +12,14 @@ See [current status](current_goal.md) for what is usable now.
 
 ## QA and reliability
 
+- [ ] Bound prepared-media cache growth and reclaim superseded files safely. The
+  2026-11-09 disk-full launch incident left 74 unindexed generated files, all exact
+  duplicates of retained indexed copies; recovery removed those copies without
+  deleting originals or current cached media. Retire superseded copies after a
+  successful durable index update, preserve document/worker references, and make
+  cache clearing account for proven generated leftovers. Test interrupted builds
+  and low-space startup/preparation on an isolated small filesystem, including
+  Qt WebEngine cache failures. See [launch recovery](current_goal.md#launch-recovery-2026-11-09).
 - [ ] Validate the rebuilt app in the operator's normal Wayland session: cold start,
   restore a saved layout, switch collections/workspaces, open each dock/dialog,
   change canvas selection, dock/undock tabs, resize the window, and repeat at the
@@ -31,8 +39,68 @@ See [current status](current_goal.md) for what is usable now.
   temporary show copy. Preserve CPU/GPU equivalence and measure before/after under
   the same workload. Earlier still-image/alpha-media optimizations are implemented;
   historical results still showed occasional missed frame budgets.
+- [ ] Finish mixed camera/game recording acceptance with a visible input frame counter.
+  Direct Guermok verification found about 30 unique pictures/sec in both YUYV and
+  MJPEG before Libertas; actual delivery is 61.29/60.01 buffers/sec respectively.
+  Driver timestamp intervals now prevent nominal-clock buffer resets. Physical
+  camera HDMI/frame-rate/shutter and capture-card conversion verification remains,
+  plus lip sync and long-show load. The reported physical frame-rate change still
+  measured about 30 unique pictures/sec in both formats. MJPEG + buffering passed
+  one 20-second all-source check, but a rerun reused 14 camera samples and missed
+  one output slot; YUYV earlier reused 19 samples. Profile both integration cases;
+  the MJPEG result is not a completed workaround. See [recording cadence](recording-cadence.md).
+- [ ] Isolate the upstream 30 fps camera/HDMI/capture limit. The operator now confirms
+  Windows also captures 30 fps, making a Linux-only explanation unlikely. Bypass the
+  splitter first; then test the capture card with a known 1080p60 moving frame counter
+  to distinguish camera HDMI settings from splitter/card conversion. No specific
+  camera or card fault is confirmed; see the physical-check plan in
+  [recording cadence](recording-cadence.md).
+- [ ] Resolve remaining output/render timing misses in the two-canvas recording workload.
+  The 23:39 hour-long simultaneous stream/SMB recording confirms 844 missing slots,
+  including five periodic bursts. Per-destination asynchronous packet writers now
+  isolate rendering from blocking file/socket writes; the stalled-sink regression
+  passes. Ordinary runs retain lightweight deadline-stage logs. Complete live
+  concurrent-output and periodic-burst profiling before claiming resolution.
+  Two later four-minute checks still miss 22 slots each; GPU clocks remain stable
+  while CPU conversion/preparation/codec costs spike. Four controlled local history
+  scans alone do not reproduce it. Full-resolution readback allocations are now
+  reused; isolate the remaining CPU scheduling/memory cost before changing desktop
+  settings. Kernel perf sampling was denied and RealtimeKit is unavailable here.
+  Final readback-reuse validation saved 5:23.114 / 19,386 video packets without
+  missing slots, but the operator closed the app before the scheduled refresh.
+  Resume the live periodic/concurrent-output check and
+  obtain administrator-approved sampling if the CPU burst still needs attribution.
+  Investigate the later preview-delivery collapse if it recurs in a normal run:
+  the traced process delivered about 1 preview update/sec despite continued capture.
+  Restart without tracing restored measured 60 fps delivery and roughly 2 ms idle
+  rendering. Local/media-store 30-second recordings pass without missing slots;
+  combined restart/diagnostic removal does not isolate the original freeze's cause.
+  Two buffered 20-second runs reused zero game samples, but missed 2/1 output slots;
+  the disabled-buffer control reused 295 samples and missed one slot. Profile CPU
+  plan/copy time and duplicate per-canvas uploads/readbacks; retain the strict cadence
+  assertion. Capture sampling must never wait for the next device frame.
+- [ ] Complete Elgato end-to-end recording acceptance. The 18:02 hardware recording
+  verifies zero selected-frame reuse across all 16,436 pictures; the corrected
+  replay matches every selection, while the old algorithm would hold 38 times.
+  The buffer eligibility bug is corrected. Remaining: 19 output deadline misses
+  at 4:07.7–4:08.5, long-show/lip-sync coverage, and regional/raw input comparison
+  if the 17 near-identical moving-crop candidates remain visibly problematic.
+  Full input hashes alone cannot locate those changes. Periodic background agent
+  collection coincides with deadline bursts but is not a confirmed cause. Profile
+  before changing settings; see [recording cadence](recording-cadence.md).
 - [ ] Inspect unsaved editor state when docking/closing a panel or changing
   collections; define preserve/discard behavior before retaining every hidden UI.
+
+## Projector follow-ups
+
+- [ ] Hardware HDMI acceptance: match canvas/monitor mode and FPS, record a frame counter
+  during transitions and concurrent stream/record, measure camera-to-HDMI latency,
+  verify recorder color/range, soak, resize, hotplug and multiple displays/GPUs. Native
+  DMA-BUF presentation and pixel/cadence checks do not establish zero physical latency.
+- [ ] Decide whether source-only/multiview projectors, OBS WebSocket projector request
+  mapping/geometry restoration, HDR/10-bit signaling, saved projector placement and
+  dedicated HDMI audio routing belong in scope. Program/Preview windowed/fullscreen
+  projectors and native MCP controls already work.
 
 ## Disabled menus: implement or remove
 
@@ -60,8 +128,9 @@ working action, UI acceptance check, and documentation, or removal from the menu
   Black and file-backed stingers exist. Track mattes, underlying-audio crossfade
   and scene-specific transition overrides need model/render support.
 - [ ] **Source preview/interaction:** source settings preview is not a full live
-  preview for every source type. Add browser-source interaction/reload and projector
-  surfaces if retained in the intended feature set.
+  preview for every source type. Add browser-source interaction/reload and source-only
+  projector surfaces if retained. Program/Studio Preview projectors are implemented
+  with native GPU windowed/fullscreen output; see [projectors](projectors.md).
 - [ ] **Countdown parity:** color rules, hotkeys, stream triggers and smoothing remain
   unsupported. The Source selector in Countdown Settings is intentionally read-only:
   binding/unbinding belongs to the dock, so it is not a dead control.
@@ -146,6 +215,21 @@ working action, UI acceptance check, and documentation, or removal from the menu
 - [x] Audio capture/mixing/meters/monitoring and native video/audio filter editing.
 - [x] Multi-source selection/copy/paste, collapsible groups and scene/favourite ordering.
 - [x] Encode graph/settings/presets, RTMP/RTMPS streaming, recording and Replay/Backtrack.
+- [x] Bounded matching-rate capture delivery tolerance to mitigate output sampling races;
+  repeatable saved-show recording check in [recording cadence](recording-cadence.md).
+- [x] Correct matched-rate timestamp-boundary hold/skip bursts. Deterministic jitter
+  and fast/slow clock regressions pass; exact trace replay and the 18:02 real
+  recording verify zero application-selected-frame reuse in that workload.
+- [x] Extend capture phase tolerance to integer decimation, including 120-to-60.
+  A positive even-frame timestamp jitter regression fails before the change;
+  eight ratio cases and 25-minute 60/120 fps clock-drift simulations pass afterward.
+- [x] Isolate compressed-packet file/socket writes with bounded per-output workers.
+  A blocked real file writer cannot stall encoding or lose the healthy destination's
+  1,500 packets; queue overflow/write/close failures remain explicit.
+- [x] Direct Guermok timing/content verification and monotonic capture timestamp handling.
+  One mixed-scene MJPEG + buffering check passed, but a subsequent run failed.
+  Upstream remains about 30 unique pictures/sec after the reported camera setting
+  change; physical camera/card verification and application timing acceptance remain open.
 - [x] Collection GUI import/export/management, menu bar, browser docks and caching UI.
 - [x] Studio Mode, quick/manual transitions, stingers, countdown bindings and source clones.
 - [x] Libertas/OBS WebSocket modes, Companion toggle/timecode presets, independent native MCP.

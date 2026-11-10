@@ -6,6 +6,8 @@
 
 #include <chrono>
 #include <cmath>
+#include <cstdio>
+#include <cstdlib>
 #include <lcomp/composite.hpp>
 #include <lcomp/preview.hpp>
 #include <lcore/log.hpp>
@@ -220,6 +222,20 @@ class Recorder {
                 const auto encode_started_ns =
                     std::chrono::duration_cast<std::chrono::nanoseconds>(encode_started - started_)
                         .count();
+                if (std::getenv("LIBERTAS_BENCHMARK") && error.empty()) {
+                    const auto& stats = libertas::encode::encoder_stats(*encoder_);
+                    if (!stats.convert_ms.empty() && !stats.video_encode_ms.empty())
+                        std::fprintf(stderr,
+                                     "OUTPUT_ENCODE sample_ns=%lld convert_ms=%.3f codec_ms=%.3f "
+                                     "other_ms=%.3f\n",
+                                     static_cast<long long>(
+                                         std::chrono::duration_cast<std::chrono::nanoseconds>(
+                                             frame_time.time_since_epoch())
+                                             .count()),
+                                     stats.convert_ms.back(), stats.video_encode_ms.back(),
+                                     static_cast<double>(finished - encode_started_ns) / 1e6 -
+                                         stats.convert_ms.back() - stats.video_encode_ms.back());
+                }
                 const auto encode_slot = std::llround(
                     static_cast<double>(encode_started_ns - video_origin_) * frame_rate_ / 1e9);
                 encode_blocked_slots_ = static_cast<std::uint64_t>(

@@ -136,7 +136,7 @@ has no equivalent.
 | Recording pause/split/chapters | No corresponding renderer operations. | Add recorder commands, acknowledgement/state, timestamp continuity and playable-file tests. |
 | Virtual camera | Status reports inactive; start/stop/toggle fail explicitly. | Add a runtime-detected virtual camera destination and lifecycle telemetry. |
 | Captions | No live caption injection path. | Add caption support to supported streaming transports and an acknowledged renderer control. |
-| UI | Existing input filters can be opened; source properties require a loaded Sources panel. Browser interaction/projectors have no corresponding native windows/API. | Add native browser interaction/projector features, then map OBS dialog/projector requests. |
+| UI | Existing input filters can be opened; source properties require a loaded Sources panel. Program/Preview have [native GPU projectors](projectors.md); OBS request mapping and source/multiview projectors remain pending. Browser interaction remains unavailable. | Map native Program/Preview projectors; add missing browser interaction and source/multiview features before mapping those requests. |
 | Properties buttons | Native source schema lists are queryable; OBS property-button callbacks such as browser refresh have no native command. | Add explicit native refresh/reload actions before mapping property buttons. |
 | Persistent data | Global data is private and survives listener restart; profile data is collection-local, journaled and undoable. | An OBS-style independent profile model would change the profile realm mapping. |
 
@@ -362,7 +362,7 @@ Schema/description baseline: [OBS WebSocket generated protocol](https://github.c
 | `OpenInputFiltersDialog` | Implemented |  |
 | `OpenInputInteractDialog` | Unavailable | No native browser interaction window/API. |
 | `GetMonitorList` | Implemented |  |
-| `OpenVideoMixProjector` | Unavailable | No native projector windows/API. |
+| `OpenVideoMixProjector` | Unavailable | Native Program/Preview GPU projectors exist; OBS request/geometry and multiview mapping remain pending. |
 | `OpenSourceProjector` | Unavailable | No native source projector windows/API. |
 | `LibertasGetState` | Implemented |  |
 | `LibertasGetProject` | Implemented |  |

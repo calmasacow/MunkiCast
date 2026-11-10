@@ -2,6 +2,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ltest.hpp"
 
+#include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <csignal>
 #include <cstdlib>
@@ -10,6 +12,7 @@
 #include <lencode/encoder.hpp>
 #include <random>
 #include <sys/resource.h>
+#include <sys/stat.h>
 #include <sys/wait.h>
 #include <thread>
 #include <unistd.h>
@@ -20,6 +23,31 @@ extern "C" {
 }
 
 using namespace libertas::encode;
+
+namespace {
+std::atomic<ino_t> stalled_inode = 0;
+std::atomic<dev_t> stalled_device = 0;
+std::atomic<bool> writer_entered = false, writer_returned = false, release_writer = true;
+} // namespace
+
+// Stall one real recording's write syscall, leaving encoding, other files and the
+// test harness alone. The watchdog prevents a regression from hanging the suite.
+extern "C" ssize_t __real_write(int fd, const void* data, size_t size);
+
+extern "C" ssize_t __wrap_write(int fd, const void* data, size_t size) {
+    const auto inode = stalled_inode.load();
+    struct stat info{};
+    if (inode && ::fstat(fd, &info) == 0 && info.st_ino == inode &&
+        info.st_dev == stalled_device.load()) {
+        writer_entered = true;
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        while (!release_writer && std::chrono::steady_clock::now() < deadline)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+        release_writer = true;
+        writer_returned = true;
+    }
+    return __real_write(fd, data, size);
+}
 
 namespace {
 RuntimeConfig configured(const std::string& implementation, const std::string& codec = "h264",
@@ -175,6 +203,94 @@ LTEST_CASE(nvenc_h264_and_hevc_use_the_requested_settings) {
     record(configured("nvenc", "hevc"), AV_CODEC_ID_HEVC, AV_PROFILE_HEVC_MAIN);
 }
 
+LTEST_CASE(moving_frames_survive_conversion_encoder_reordering_and_input_reuse) {
+    for (const bool nvenc : {false, true}) {
+        if (nvenc && !std::getenv("LIBERTAS_TEST_NVENC"))
+            continue;
+        auto cfg = configured(nvenc ? "nvenc" : "x264", "h264", "cbr", {60, 1});
+        if (nvenc) {
+            // Match the operator's 1440p60 recording, including its native NVENC options.
+            cfg.width = cfg.source_width = 2560;
+            cfg.height = cfg.source_height = 1440;
+            cfg.bitrate = 40'000'000;
+            cfg.keyframe_interval_ms = 2000;
+            cfg.video_options["preset"] = "p4";
+            cfg.video_options["rc-lookahead"] = "0";
+            cfg.custom_options.clear();
+        }
+        cfg.source_rgba = true;
+        std::string error;
+        auto encoder = encoder_open(cfg, error);
+        REQUIRE_MSG(encoder, "{}", error);
+        constexpr int count = 128;
+        std::vector<std::uint32_t> pixels(cfg.width * cfg.height);
+        for (int i = 0; i < count; ++i) {
+            for (std::uint32_t y = 0; y < cfg.height; ++y)
+                for (std::uint32_t x = 0; x < cfg.width; ++x) {
+                    // Rapidly translating texture; the first eight blocks carry the frame ID.
+                    const auto texture =
+                        ((x + static_cast<std::uint32_t>(i) * 37) / 8) * 73 ^ (y / 8) * 151;
+                    const auto gray =
+                        y < 32 && x < 256 ? ((i >> (x / 32)) & 1) * 255 : 32 + texture % 192;
+                    pixels[y * cfg.width + x] = 0xff000000u | gray * 0x010101u;
+                }
+            REQUIRE_MSG(encoder_video(*encoder,
+                                      reinterpret_cast<const std::uint8_t*>(pixels.data()),
+                                      cfg.width * 4, i * 1'000'000'000LL / 60, error),
+                        "{}", error);
+            // The caller owns this buffer: pending B-frames must retain their own pictures.
+            std::fill(pixels.begin(), pixels.end(), 0xff808080u);
+        }
+        REQUIRE_MSG(encoder_finish(*encoder, error), "{}", error);
+        encoder.reset();
+
+        AVFormatContext* file = nullptr;
+        REQUIRE(avformat_open_input(&file, cfg.path.c_str(), nullptr, nullptr) >= 0);
+        REQUIRE(avformat_find_stream_info(file, nullptr) >= 0);
+        const int stream = av_find_best_stream(file, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+        REQUIRE(stream >= 0);
+        auto* decoder = avcodec_alloc_context3(avcodec_find_decoder(AV_CODEC_ID_H264));
+        REQUIRE(decoder);
+        REQUIRE(avcodec_parameters_to_context(decoder, file->streams[stream]->codecpar) >= 0);
+        REQUIRE(avcodec_open2(decoder, decoder->codec, nullptr) >= 0);
+        auto* packet = av_packet_alloc();
+        auto* frame = av_frame_alloc();
+        REQUIRE(packet && frame);
+        int decoded = 0;
+        auto drain = [&] {
+            int result;
+            while ((result = avcodec_receive_frame(decoder, frame)) >= 0) {
+                REQUIRE(frame->format == AV_PIX_FMT_YUV420P);
+                int id = 0;
+                for (int bit = 0; bit < 8; ++bit)
+                    if (frame->data[0][16 * frame->linesize[0] + bit * 32 + 16] > 128)
+                        id |= 1 << bit;
+                CHECK_EQ(id, decoded);
+                const auto pts = av_rescale_q(frame->best_effort_timestamp,
+                                              file->streams[stream]->time_base, {1, 60});
+                CHECK_EQ(pts, decoded);
+                ++decoded;
+            }
+            REQUIRE(result == AVERROR(EAGAIN) || result == AVERROR_EOF);
+        };
+        while (av_read_frame(file, packet) >= 0) {
+            if (packet->stream_index == stream) {
+                REQUIRE(avcodec_send_packet(decoder, packet) >= 0);
+                drain();
+            }
+            av_packet_unref(packet);
+        }
+        REQUIRE(avcodec_send_packet(decoder, nullptr) >= 0);
+        drain();
+        CHECK_EQ(decoded, count);
+        av_frame_free(&frame);
+        av_packet_free(&packet);
+        avcodec_free_context(&decoder);
+        avformat_close_input(&file);
+        std::filesystem::remove(cfg.path);
+    }
+}
+
 LTEST_CASE(recordings_never_overwrite_existing_files_or_symlinks) {
     auto cfg = configured("x264");
     const std::string original = "an existing recording must survive";
@@ -231,6 +347,69 @@ LTEST_CASE(recording_write_failures_are_reported_before_claiming_a_saved_file) {
     REQUIRE(::waitpid(child, &status, 0) == child);
     CHECK(WIFEXITED(status) && WEXITSTATUS(status) == 0);
     std::filesystem::remove(cfg.path);
+}
+
+LTEST_CASE(stalled_destination_cannot_block_encoding_or_another_destination) {
+    auto cfg = configured("x264");
+    cfg.video_options = {{"preset", "ultrafast"}, {"tune", "zerolatency"}, {"crf", "15"}};
+    cfg.custom_options.clear();
+    const auto second = cfg.path + ".healthy.mkv";
+    std::string error;
+    auto encoder = encoder_open(cfg, error);
+    REQUIRE_MSG(encoder, "{}", error);
+    const auto healthy = encoder_add_output(*encoder, second, error);
+    REQUIRE_MSG(healthy, "{}", error);
+    struct stat info{};
+    REQUIRE(::stat(cfg.path.c_str(), &info) == 0);
+
+    // Destroy this guard before the encoder even on a failed assertion.
+    struct Release {
+        ~Release() {
+            release_writer = true;
+            stalled_inode = 0;
+        }
+    } release;
+
+    writer_entered = writer_returned = false;
+    release_writer = false;
+    stalled_device = info.st_dev;
+    stalled_inode = info.st_ino;
+    std::vector<std::uint8_t> pixels(256 * 256 * 4);
+    std::mt19937 random(17);
+    for (auto& value : pixels)
+        value = static_cast<std::uint8_t>(random());
+    for (int i = 0; i < 1500; ++i) {
+        REQUIRE_MSG(encoder_video(*encoder, pixels.data(), 256 * 4,
+                                  static_cast<std::int64_t>(i) * 1000000000 / 30, error),
+                    "{}", error);
+        // Give the healthy writer CPU without releasing the deliberately blocked one.
+        if (i % 8 == 0)
+            std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    CHECK(writer_entered);
+    CHECK(!writer_returned); // All frames submitted while storage is still blocked.
+    CHECK(!encoder_output_active(*encoder, 0));
+    CHECK(encoder_output_error(*encoder, 0).contains("write queue filled"));
+    CHECK(encoder_output_active(*encoder, *healthy));
+    release_writer = true;
+    CHECK(!encoder_finish(*encoder, error)); // Failed recording must not claim success.
+    CHECK(!error.empty());
+    encoder.reset();
+    AVFormatContext* file = nullptr;
+    REQUIRE(avformat_open_input(&file, second.c_str(), nullptr, nullptr) >= 0);
+    REQUIRE(avformat_find_stream_info(file, nullptr) >= 0);
+    auto* packet = av_packet_alloc();
+    REQUIRE(packet);
+    int packets = 0;
+    while (av_read_frame(file, packet) >= 0) {
+        ++packets;
+        av_packet_unref(packet);
+    }
+    CHECK_EQ(packets, 1500); // Healthy destination retains the complete shared encode.
+    av_packet_free(&packet);
+    avformat_close_input(&file);
+    std::filesystem::remove(cfg.path);
+    std::filesystem::remove(second);
 }
 
 LTEST_CASE(frame_conversion_preserves_bt709_range_rescale_and_rgba_bgra_stride) {

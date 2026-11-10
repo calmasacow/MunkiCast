@@ -117,6 +117,9 @@ class AudioSources {
     };
 
     std::mutex mu_;
+    struct CaptureDelay { std::string device; std::int64_t ms = 0; };
+    std::map<ldoc::Id, CaptureDelay> capture_delays_;
+    const ldoc::Id capture_delay_filter_ = ldoc::Id::generate();
     std::vector<Route> routes_;
     std::vector<ldoc::Bus> buses_;
     std::string monitor_output_ = "none";
@@ -375,6 +378,20 @@ class AudioSources {
     }
 
   public:
+    /// Match buffered capture video with its own audio. Never persist this internal effect.
+    void set_capture_delay(const ldoc::Source& source, std::chrono::nanoseconds delay) {
+        std::lock_guard lock(mu_);
+        if (delay <= delay.zero()) {
+            capture_delays_.erase(source.id);
+            return;
+        }
+        std::string device;
+        if (const auto it = source.settings.find("audioDevice"); it != source.settings.end())
+            if (const auto* value = std::get_if<std::string>(&it->second)) device = *value;
+        capture_delays_[source.id] = {std::move(device),
+            std::chrono::round<std::chrono::milliseconds>(delay).count()};
+    }
+
     ~AudioSources() {
         mixer_.request_stop();
         if (mixer_.joinable())
@@ -409,6 +426,11 @@ class AudioSources {
     }
 
     std::vector<lcomp::AudioLevel> meters(const ldoc::Project& project) {
+        std::map<ldoc::Id, CaptureDelay> capture_delays;
+        {
+            std::lock_guard lock(mu_);
+            capture_delays = capture_delays_;
+        }
         std::set<ldoc::Id> wanted, visited, walking;
         std::vector<lcomp::AudioLevel> result;
         std::vector<Route> routes;
@@ -513,7 +535,27 @@ class AudioSources {
                     }
                     if (transition_weighted)
                         transition_gains[node.id][current_deck] = transition_gain;
-                    routes.push_back({node.id, session, std::move(routing), source->effects,
+                    auto effects = source->effects;
+                    std::int64_t delay_ms = 0;
+                    if (const auto it = capture_delays.find(source->id); it != capture_delays.end())
+                        delay_ms = it->second.ms;
+                    else if (source->type == "source.audio-input") {
+                        const auto device = source->settings.find("device");
+                        const auto* name = device == source->settings.end() ? nullptr :
+                            std::get_if<std::string>(&device->second);
+                        // Only an explicit device link establishes audio/video association.
+                        if (name && !name->empty() && *name != "default" && *name != "none")
+                            for (const auto& [id, delay] : capture_delays)
+                                if (delay.device == *name) delay_ms = std::max(delay_ms, delay.ms);
+                    }
+                    if (delay_ms > 0) {
+                        ldoc::Effect delay;
+                        delay.id = capture_delay_filter_;
+                        delay.type = "filter.video-delay";
+                        delay.params["delay_ms"] = delay_ms;
+                        effects.insert(effects.begin(), std::move(delay));
+                    }
+                    routes.push_back({node.id, session, std::move(routing), std::move(effects),
                                       node.effects, inherited, source_id, transition_gain,
                                       transition_weighted});
                 }

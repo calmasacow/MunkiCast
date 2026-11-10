@@ -20,6 +20,7 @@
 #include <atomic>
 #include <cerrno>
 #include <chrono>
+#include <condition_variable>
 #include <cstring>
 #include <deque>
 #include <fcntl.h>
@@ -29,6 +30,7 @@
 #include <limits>
 #include <mutex>
 #include <sys/stat.h>
+#include <thread>
 #include <unistd.h>
 
 extern "C" {
@@ -63,6 +65,11 @@ struct ReplayPacket {
     bool video = false;
 };
 
+struct PacketDeleter {
+    void operator()(AVPacket* packet) const { av_packet_free(&packet); }
+};
+using OutputPacket = std::unique_ptr<AVPacket, PacketDeleter>;
+
 struct Encoder {
     RuntimeConfig cfg;
     EncoderStats stats;
@@ -89,9 +96,15 @@ struct Encoder {
     /// The shared time origin, set by whichever stream submits first. Without one, the two streams
     /// start at different zeroes and the file plays with a fixed offset that looks like drift.
     std::int64_t t0_ns = AV_NOPTS_VALUE;
-    bool header_written = false;
+    std::atomic<bool> header_written = false;
     std::vector<EncoderPtr> outputs;
+    mutable std::mutex output_mutex;
     std::string output_error;
+    std::condition_variable output_ready;
+    std::deque<OutputPacket> output_packets;
+    std::size_t output_bytes = 0;
+    bool output_finishing = false;
+    std::jthread output_writer;
     std::int64_t output_origin_ns = 0;
     bool rebase_output = false;
     bool force_keyframe = false;
@@ -163,6 +176,101 @@ std::string av_err(int e) {
     char b[AV_ERROR_MAX_STRING_SIZE] = {};
     av_strerror(e, b, sizeof b);
     return b;
+}
+
+// Only the writer touches a running muxer. Closing is allowed to wait for storage;
+// rendering and the other destinations must never wait for a file/socket write.
+bool close_muxer(Encoder& output, std::string& error) {
+    if (!output.header_written)
+        return true;
+    NetworkOperation operation(output);
+    int result = av_write_trailer(output.fmt);
+    if (output.fmt->pb) {
+        avio_flush(output.fmt->pb);
+        if (result >= 0 && output.fmt->pb->error < 0)
+            result = output.fmt->pb->error;
+    }
+    if (result >= 0 && output.file_fd >= 0 && ::fsync(output.file_fd) < 0)
+        result = AVERROR(errno);
+    if (output.network) {
+        const int closed = avio_closep(&output.fmt->pb);
+        if (result >= 0)
+            result = closed;
+    } else if (output.fmt->pb) {
+        av_freep(&output.fmt->pb->buffer);
+        avio_context_free(&output.fmt->pb);
+    }
+    if (output.file_fd >= 0) {
+        if (::close(output.file_fd) < 0 && result >= 0)
+            result = AVERROR(errno);
+        output.file_fd = -1;
+    }
+    output.header_written = false;
+    if (result < 0) {
+        error = std::format("Output did not close cleanly: {}", av_err(result));
+        return false;
+    }
+    return true;
+}
+
+void write_output(Encoder& output) {
+    for (;;) {
+        OutputPacket packet;
+        {
+            std::unique_lock lock(output.output_mutex);
+            output.output_ready.wait(lock, [&] {
+                return output.output_finishing || !output.output_error.empty() ||
+                       !output.output_packets.empty();
+            });
+            if (!output.output_error.empty() || output.output_packets.empty()) {
+                output.output_packets.clear();
+                output.output_bytes = 0;
+                break;
+            }
+            packet = std::move(output.output_packets.front());
+            output.output_packets.pop_front();
+        }
+        // av_interleaved_write_frame consumes the packet reference, including its size.
+        const auto bytes = static_cast<std::size_t>(packet->size);
+        NetworkOperation operation(output);
+        int result = av_interleaved_write_frame(output.fmt, packet.get());
+        if (result >= 0 && output.fmt->pb && output.fmt->pb->error < 0)
+            result = output.fmt->pb->error;
+        std::lock_guard lock(output.output_mutex);
+        output.output_bytes -= bytes;
+        if (result < 0 && output.output_error.empty())
+            output.output_error = std::format("Output write failed: {}", av_err(result));
+    }
+    std::string error;
+    close_muxer(output, error);
+    std::lock_guard lock(output.output_mutex);
+    if (output.output_error.empty())
+        output.output_error = std::move(error);
+}
+
+void enqueue_output(Encoder& output, AVPacket* packet) {
+    OutputPacket owned(packet);
+    std::lock_guard lock(output.output_mutex);
+    if (!output.output_error.empty() || output.output_finishing)
+        return;
+    // ponytail: 1,024 compressed packets / 64 MiB per destination, including the
+    // in-flight bytes. A sustained slow sink stops explicitly; never silently drop
+    // recording packets or grow memory without bound. Tune only with soak evidence.
+    if (!packet || output.output_packets.size() >= 1024 ||
+        static_cast<std::size_t>(packet->size) > 64 * 1048576 - output.output_bytes) {
+        output.output_error = packet ? "Output stopped: write queue filled; destination too slow."
+                                     : "Cannot allocate output packet.";
+    } else {
+        try {
+            output.output_packets.push_back(std::move(owned));
+            output.output_bytes += static_cast<std::size_t>(packet->size);
+            if (!output.output_writer.joinable())
+                output.output_writer = std::jthread([&output] { write_output(output); });
+        } catch (const std::exception&) {
+            output.output_error = "Cannot queue output or start its writer.";
+        }
+    }
+    output.output_ready.notify_one();
 }
 
 bool open_muxer(Encoder* enc, std::string& error) {
@@ -283,9 +391,8 @@ bool drain(Encoder& enc, AVCodecContext* ctx, AVStream*, std::uint64_t& bytes, s
         buffer_packet(enc, ctx);
         const bool video = ctx == enc.vctx;
         const auto write = [&](Encoder& output) {
-            if (!output.header_written)
+            if (!encoder_output_active(output, 0))
                 return;
-            NetworkOperation operation(output);
             if (output.output_origin_ns == AV_NOPTS_VALUE) {
                 if (!video || !(enc.pkt->flags & AV_PKT_FLAG_KEY))
                     return;
@@ -297,33 +404,27 @@ bool drain(Encoder& enc, AVCodecContext* ctx, AVStream*, std::uint64_t& bytes, s
             if (output.rebase_output && enc.pkt->dts < origin)
                 return;
             AVPacket* packet = av_packet_clone(enc.pkt);
-            int result = AVERROR(ENOMEM);
             if (packet) {
                 auto* stream = video ? output.vst : output.ast;
                 packet->pts -= origin;
                 packet->dts -= origin;
                 packet->stream_index = stream->index;
                 av_packet_rescale_ts(packet, ctx->time_base, stream->time_base);
-                result = av_interleaved_write_frame(output.fmt, packet);
-                if (result >= 0 && output.fmt->pb && output.fmt->pb->error < 0)
-                    result = output.fmt->pb->error;
-                av_packet_free(&packet);
             }
-            if (result < 0) {
-                output.output_error = std::format("Output write failed: {}", av_err(result));
-                std::string ignored;
-                encoder_remove_output(output, 0, ignored);
-            }
+            enqueue_output(output, packet);
         };
         write(enc);
         for (auto& output : enc.outputs)
             if (output)
                 write(*output);
         av_packet_unref(enc.pkt);
-        if (!enc.replay_seconds && !enc.header_written &&
-            std::ranges::none_of(
-                enc.outputs, [](const auto& output) { return output && output->header_written; })) {
-            error = enc.output_error.empty() ? "No output destinations remain" : enc.output_error;
+        if (!enc.replay_seconds && !encoder_output_active(enc, 0) &&
+            std::ranges::none_of(enc.outputs, [](const auto& output) {
+                return output && encoder_output_active(*output, 0);
+            })) {
+            error = encoder_output_error(enc, 0);
+            if (error.empty())
+                error = "No output destinations remain";
             return false;
         }
     }
@@ -748,52 +849,48 @@ bool encoder_save_replay(Encoder& enc, const std::string& path, std::string& err
 }
 
 bool encoder_output_active(const Encoder& enc, std::size_t id) {
-    if (id == 0)
-        return enc.header_written;
-    return id <= enc.outputs.size() && enc.outputs[id - 1] && enc.outputs[id - 1]->header_written;
+    if (id != 0)
+        return id <= enc.outputs.size() && enc.outputs[id - 1] &&
+               encoder_output_active(*enc.outputs[id - 1], 0);
+    std::lock_guard lock(enc.output_mutex);
+    return enc.header_written && !enc.output_finishing && enc.output_error.empty();
 }
 
 std::string encoder_output_error(const Encoder& enc, std::size_t id) {
-    if (id == 0)
-        return enc.output_error;
-    return id <= enc.outputs.size() && enc.outputs[id - 1] ? enc.outputs[id - 1]->output_error
-                                                           : std::string{};
+    if (id != 0)
+        return id <= enc.outputs.size() && enc.outputs[id - 1]
+                   ? encoder_output_error(*enc.outputs[id - 1], 0)
+                   : std::string{};
+    std::lock_guard lock(enc.output_mutex);
+    return enc.output_error;
 }
 
 bool encoder_remove_output(Encoder& enc, std::size_t id, std::string& error) {
     Encoder* output = id == 0                    ? &enc
                       : id <= enc.outputs.size() ? enc.outputs[id - 1].get()
                                                  : nullptr;
-    if (!output || !output->header_written)
+    if (!output)
         return true;
-    NetworkOperation operation(*output);
-    int result = av_write_trailer(output->fmt);
-    output->header_written = false;
-    if (output->fmt->pb) {
-        avio_flush(output->fmt->pb);
-        if (result >= 0 && output->fmt->pb->error < 0)
-            result = output->fmt->pb->error;
+    {
+        std::lock_guard lock(output->output_mutex);
+        output->output_finishing = true;
     }
-    if (result >= 0 && output->file_fd >= 0 && ::fsync(output->file_fd) < 0)
-        result = AVERROR(errno);
-    if (output->network) {
-        const int closed = avio_closep(&output->fmt->pb);
-        if (result >= 0)
-            result = closed;
-    } else if (output->fmt->pb) {
-        av_freep(&output->fmt->pb->buffer);
-        avio_context_free(&output->fmt->pb);
+    output->output_ready.notify_one();
+    if (output->output_writer.joinable()) {
+        output->output_writer.join();
+    } else {
+        std::string closed;
+        close_muxer(*output, closed);
+        std::lock_guard lock(output->output_mutex);
+        output->output_packets.clear();
+        output->output_bytes = 0;
+        if (output->output_error.empty())
+            output->output_error = std::move(closed);
     }
-    if (output->file_fd >= 0) {
-        if (::close(output->file_fd) < 0 && result >= 0)
-            result = AVERROR(errno);
-        output->file_fd = -1;
-    }
-    if (result < 0) {
-        error = std::format("Output did not close cleanly: {}", av_err(result));
-        return false;
-    }
-    return true;
+    const auto failure = encoder_output_error(*output, 0);
+    if (!failure.empty())
+        error = failure;
+    return failure.empty();
 }
 
 bool encoder_video(Encoder& enc, const std::uint8_t* bgra, std::size_t stride, std::int64_t pts_ns,
@@ -803,7 +900,6 @@ bool encoder_video(Encoder& enc, const std::uint8_t* bgra, std::size_t stride, s
         error = "invalid video frame stride or pixels";
         return false;
     }
-    NetworkOperation operation(enc);
     if (enc.t0_ns == AV_NOPTS_VALUE)
         enc.t0_ns = pts_ns;
 
@@ -856,7 +952,6 @@ bool encoder_video(Encoder& enc, const std::uint8_t* bgra, std::size_t stride, s
 
 bool encoder_audio(Encoder& enc, const float* interleaved, std::uint32_t frames,
                    std::int64_t pts_ns, std::string& error) {
-    NetworkOperation operation(enc);
     if (enc.actx == nullptr)
         return true;
     if (enc.t0_ns == AV_NOPTS_VALUE)
@@ -909,7 +1004,6 @@ bool encoder_audio(Encoder& enc, const float* interleaved, std::uint32_t frames,
 }
 
 bool encoder_finish(Encoder& enc, std::string& error) {
-    NetworkOperation operation(enc);
     if (enc.vctx != nullptr) {
         avcodec_send_frame(enc.vctx, nullptr);
         if (!drain(enc, enc.vctx, enc.vst, enc.stats.video_bytes, error))
@@ -935,7 +1029,6 @@ bool encoder_finish(Encoder& enc, std::string& error) {
 
 bool encoder_video_nv12(Encoder& enc, const std::uint8_t* y, int y_stride, const std::uint8_t* uv,
                         int uv_stride, std::int64_t pts_ns, std::string& error) {
-    NetworkOperation operation(enc);
     if (enc.vctx->pix_fmt != AV_PIX_FMT_NV12) {
         error = "encoder was not opened with NV12; the GPU convert path cannot feed it";
         return false;
@@ -991,9 +1084,11 @@ const EncoderStats& encoder_stats(Encoder& enc) {
 void encoder_close(Encoder* enc) {
     if (enc == nullptr)
         return;
-    NetworkOperation operation(*enc);
-    if (enc->header_written)
-        av_write_trailer(enc->fmt);
+    std::string ignored;
+    encoder_remove_output(*enc, 0, ignored);
+    // A secondary writer owns only its muxer and packet references, but join it
+    // before releasing this encoder's streams and the rest of its resources.
+    enc->outputs.clear();
     if (enc->pkt != nullptr)
         av_packet_free(&enc->pkt);
     if (enc->sws != nullptr)

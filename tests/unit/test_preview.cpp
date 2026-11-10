@@ -539,13 +539,13 @@ LTEST_CASE(recording_receives_full_size_and_preview_from_one_composition) {
     REQUIRE(ends);
     int render_calls = 0, output_calls = 0;
     bool server_ok = false, correct_output = false, timestamp_before_render = false;
-    std::chrono::steady_clock::time_point render_started;
+    std::chrono::steady_clock::time_point render_started, sampled_time;
     std::jthread server([&, channel = std::move(ends->second)]() mutable {
         lcomp::RecordHooks record;
         record.wants = [](const ldoc::Id&) { return true; };
         record.frame = [&](const ldoc::Id&, const lcomp::Picture& full,
                            std::chrono::steady_clock::time_point frame_time) {
-            timestamp_before_render = frame_time <= render_started;
+            timestamp_before_render = frame_time <= render_started && frame_time == sampled_time;
             ++output_calls;
             correct_output =
                 full.width == 64 && full.height == 32 && full.pixels.size() == 64 * 32 * 4;
@@ -554,8 +554,9 @@ LTEST_CASE(recording_receives_full_size_and_preview_from_one_composition) {
         server_ok = lcomp::serve_preview(
                         std::move(channel), {}, {}, {},
                         [&](const ldoc::Project& project, const ldoc::Id& canvas,
-                            std::uint32_t edge, lcomp::Picture* full) {
+                            std::uint32_t edge, lcomp::Picture* full, bool, auto frame_time) {
                             ++render_calls;
+                            sampled_time = frame_time;
                             render_started = std::chrono::steady_clock::now();
                             auto picture = lcomp::composite_canvas(project, canvas);
                             if (full)
@@ -590,6 +591,206 @@ LTEST_CASE(recording_receives_full_size_and_preview_from_one_composition) {
     CHECK(timestamp_before_render);
     CHECK_EQ(render_calls, 1);
     CHECK_EQ(output_calls, 1);
+}
+
+LTEST_CASE(projector_clock_survives_paused_ui_without_changing_recording_cadence) {
+    auto ends = lipc::Channel::pair();
+    REQUIRE(ends);
+    std::atomic<unsigned> output_frames = 0, display_frames = 0, unrelated_frames = 0,
+                          recorded_display_frames = 0;
+    bool server_ok = false;
+    auto project = ldoc::make_default_project("independent display clock");
+    project.canvases[0].width = project.canvases[0].height = 4;
+    project.canvases[0].fps = {30, 1};
+    auto unrelated = project.canvases.front();
+    unrelated.id = ldoc::Id::generate();
+    project.canvases.push_back(unrelated);
+    auto display_canvas = unrelated;
+    display_canvas.id = ldoc::Id::generate();
+    display_canvas.fps = {60, 1};
+    project.canvases.push_back(display_canvas);
+    const auto main = project.canvases.front().id;
+    std::jthread server([&, channel = std::move(ends->second)]() mutable {
+        bool recording = false, projecting = false;
+        lcomp::RecordHooks record;
+        record.control = [&](const auto& r, const auto&) {
+            recording = r.start;
+            return lcomp::RecordState{recording, {}};
+        };
+        record.wants = [&](const auto& id) { return recording && id == main; };
+        record.frame = [&](const auto&, const auto&, auto) {
+            ++output_frames;
+            return std::optional<lcomp::RecordState>{};
+        };
+        lcomp::ProjectorHooks display;
+        display.control = [&](const auto& command, const auto&) {
+            projecting = command == "open";
+            return std::string{"{}"};
+        };
+        display.pump = [&](const auto&) -> std::optional<std::chrono::nanoseconds> {
+            if (projecting)
+                return std::chrono::nanoseconds(1000000000 / 60);
+            return {};
+        };
+        display.wants = [&](const auto& id) {
+            return projecting && (id == main || id == display_canvas.id);
+        };
+        server_ok = lcomp::serve_preview(
+                        std::move(channel), {}, {}, {},
+                        [&](const auto& p, const auto& id, std::uint32_t edge, lcomp::Picture* full,
+                            bool display_output, auto) {
+                            if (id == unrelated.id)
+                                ++unrelated_frames;
+                            if (display_output && id == display_canvas.id)
+                                ++display_frames;
+                            if (display_output && recording && id == main)
+                                ++recorded_display_frames;
+                            auto picture = lcomp::composite_canvas(p, id);
+                            if (full)
+                                *full = picture;
+                            return lcomp::preview_size(std::move(picture), edge);
+                        },
+                        {}, {}, std::move(record), {}, std::move(display))
+                        .has_value();
+    });
+    lcomp::PreviewLink link{std::move(ends->first)};
+    REQUIRE(link.take_hello(2000));
+    commit(link, project);
+    REQUIRE(!link.send_projector(std::string(4097, 'x')));
+    REQUIRE(link.send_projector("open"));
+    auto reply = link.receive(2000);
+    REQUIRE(reply && *reply && (**reply).kind == lcomp::PreviewEvent::Kind::Projector);
+    std::this_thread::sleep_for(std::chrono::milliseconds(350));
+    CHECK(display_frames.load() >= 15);
+    CHECK_EQ(unrelated_frames.load(), 1u);
+    REQUIRE(link.send_record({true, ldoc::Id::generate(), "clock"}));
+    reply = link.receive(2000);
+    REQUIRE(reply && *reply && (**reply).kind == lcomp::PreviewEvent::Kind::Record);
+    const auto before = display_frames.load();
+    std::this_thread::sleep_for(std::chrono::milliseconds(650));
+    CHECK_MSG(output_frames.load() >= 16 && output_frames.load() <= 23,
+              "30fps recording produced {} frames", output_frames.load());
+    CHECK(display_frames.load() >= before + 30);
+    CHECK_EQ(unrelated_frames.load(), 1u);
+    const auto queued = link.poll();
+    REQUIRE(queued);
+    CHECK(!queued->has_value());
+    REQUIRE(link.send_record({false, {}, {}}));
+    reply = link.receive(2000);
+    REQUIRE(reply && *reply && (**reply).kind == lcomp::PreviewEvent::Kind::Record);
+    CHECK_EQ(recorded_display_frames.load(), output_frames.load());
+    const auto stopped = output_frames.load(), display_before = display_frames.load();
+    std::this_thread::sleep_for(std::chrono::milliseconds(120));
+    CHECK_EQ(output_frames.load(), stopped);
+    CHECK(display_frames.load() > display_before);
+    REQUIRE(link.send_projector("close"));
+    reply = link.receive(2000);
+    REQUIRE(reply && *reply && (**reply).kind == lcomp::PreviewEvent::Kind::Projector);
+    const auto closed = display_frames.load();
+    std::this_thread::sleep_for(std::chrono::milliseconds(70));
+    CHECK_EQ(display_frames.load(), closed);
+    link.quit();
+    link.close();
+    server.join();
+    CHECK(server_ok);
+}
+
+// Explicit opt-in: opens a short-lived window on the current desktop, never an operator show.
+LTEST_CASE(native_projector_presents_gpu_frames_while_ui_is_paused) {
+    if (!std::getenv("LIBERTAS_TEST_PROJECTORS"))
+        return;
+    auto ends = lipc::Channel::pair();
+    REQUIRE(ends);
+    auto child = lcomp::spawn_renderer(LIBERTAS_RENDER, std::move(ends->second).take_socket());
+    REQUIRE(child);
+
+    struct Child {
+        pid_t pid;
+
+        ~Child() {
+            if (pid > 0) {
+                kill(pid, SIGTERM);
+                (void)reap(pid, 3000);
+            }
+        }
+    } guard{*child};
+
+    lcomp::PreviewLink link{std::move(ends->first)};
+    REQUIRE(link.take_hello(5000));
+    auto red = colour_source(255, 0, 0);
+    ldoc::Effect scroll;
+    scroll.id = ldoc::Id::generate();
+    scroll.type = "filter.scroll";
+    scroll.params["speed_x"] = 4.0;
+    red.effects = {scroll};
+    ldoc::Scene scene;
+    scene.id = ldoc::Id::generate();
+    scene.roots = {bound_to(red)};
+    auto project = show(scene, {red});
+    project.canvases[0].width = 1920;
+    project.canvases[0].height = 1080;
+    project.canvases[0].fps = {60, 1};
+    commit(link, project);
+    const auto command = [&](const std::string& request) {
+        REQUIRE(link.send_projector(request));
+        auto event = link.receive(5000);
+        REQUIRE(event && *event && (**event).kind == lcomp::PreviewEvent::Kind::Projector);
+        return (**event).projector;
+    };
+    auto status = command(std::format(R"({{"id":1,"canvas":"{}","fullscreen":false,"screen":""}})",
+                                      project.canvases[0].id.to_string()));
+    const auto started = std::chrono::steady_clock::now();
+    while (status.find(R"("ready":true)") == std::string::npos &&
+           std::chrono::steady_clock::now() - started < std::chrono::seconds(6)) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+        status = command(R"({"status":true})");
+    }
+    REQUIRE_MSG(status.find(R"("ready":true)") != std::string::npos, "{}", status);
+    const auto counter = [](const std::string& json, const std::string& name) {
+        const auto at = json.find("\"" + name + "\":");
+        return at == std::string::npos ? 0ull : std::stoull(json.substr(at + name.size() + 3));
+    };
+    const auto first = counter(status, "submitted");
+    std::this_thread::sleep_for(std::chrono::milliseconds(700));
+    auto queued = link.poll();
+    REQUIRE(queued);
+    CHECK(!queued->has_value());
+    status = command(R"({"status":true})");
+    CHECK_MSG(counter(status, "submitted") > first + 10, "{}", status);
+    std::fprintf(stderr, "PROJECTOR_NATIVE %s\n", status.c_str());
+    status = command(R"({"closeAll":true})");
+    CHECK(status.find(R"("windows":[])") != std::string::npos);
+    if (const char* monitor = std::getenv("LIBERTAS_TEST_PROJECTOR_FULLSCREEN")) {
+        // Explicit second opt-in: the selected monitor briefly shows this test's fullscreen.
+        command(std::format(R"({{"id":3,"canvas":"{}","fullscreen":true,"screen":"{}"}})",
+                            project.canvases[0].id.to_string(), monitor));
+        const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(5);
+        do {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            status = command(R"({"status":true})");
+        } while (status.find(R"("ready":true)") == std::string::npos &&
+                 std::chrono::steady_clock::now() < deadline);
+        CHECK_MSG(status.find(R"("ready":true)") != std::string::npos &&
+                      status.find(R"("fullscreen":true)") != std::string::npos,
+                  "{}", status);
+        std::this_thread::sleep_for(std::chrono::milliseconds(150));
+        status = command(R"({"status":true})");
+        if (status.find(R"("presentationFeedback":true)") != std::string::npos)
+            CHECK_MSG(counter(status, "presented") > 0, "{}", status);
+        std::fprintf(stderr, "PROJECTOR_FULLSCREEN %s\n", status.c_str());
+        command(R"({"closeAll":true})");
+    }
+    // A missing monitor must report a fault without taking down the output process.
+    command(std::format(R"({{"id":2,"canvas":"{}","fullscreen":true,"screen":"not-a-monitor"}})",
+                        project.canvases[0].id.to_string()));
+    std::this_thread::sleep_for(std::chrono::milliseconds(150));
+    status = command(R"({"status":true})");
+    CHECK_MSG(status.find("monitor was not found") != std::string::npos, "{}", status);
+    command(R"({"closeAll":true})");
+    link.quit();
+    link.close();
+    CHECK_EQ(reap(*child, 3000), 0);
+    guard.pid = -1;
 }
 
 LTEST_CASE(output_clock_survives_ui_pause_and_partial_project_transfer) {
@@ -757,7 +958,7 @@ LTEST_CASE(render_lag_counts_composite_budgets_not_delayed_acknowledgments) {
                         },
                         {},
                         [](const ldoc::Project& project, const ldoc::Id& canvas, std::uint32_t,
-                           lcomp::Picture*) {
+                           lcomp::Picture*, bool, auto) {
                             if (project.canvas(canvas)->name == "Slow")
                                 std::this_thread::sleep_for(std::chrono::milliseconds(45));
                             return lcomp::composite_canvas(project, canvas);
@@ -1868,6 +2069,12 @@ LTEST_CASE(measure_saved_scene_through_real_renderer) {
 }
 
 int main() {
+    if (std::getenv("LIBERTAS_TEST_PROJECTORS")) {
+        setenv("LIBERTAS_RENDER_BACKEND", "gpu", 1);
+        std::erase_if(ltest::registry(), [](const auto& test) {
+            return test.name != "native_projector_presents_gpu_frames_while_ui_is_paused";
+        });
+    }
     if (std::getenv("LIBERTAS_TEST_STUDIO"))
         std::erase_if(ltest::registry(), [](const auto& test) {
             return !test.name.starts_with("manual_fades_");

@@ -724,6 +724,33 @@ int main(int argc, char** argv) {
                 QTimer::singleShot(ms, &loop, &QEventLoop::quit);
                 loop.exec();
             };
+            const auto checkProjectorMenu = [&](QQuickItem* overlay, bool studio) {
+                const bool opened = QMetaObject::invokeMethod(overlay, "openMenu",
+                    Q_ARG(QVariant, -1000), Q_ARG(QVariant, -1000));
+                pump(20);
+                bool program = false, staged = false, modes = false;
+                for (auto* menu : collect(window->contentItem(), "canvasMenu")) {
+                    if (!menu->isVisible()) continue;
+                    auto data = menu->property("items");
+                    if (data.metaType() == QMetaType::fromType<QJSValue>())
+                        data = data.value<QJSValue>().toVariant();
+                    for (const auto& item : data.toList()) {
+                        const auto row = item.toMap();
+                        if (row.value("text") == "Program Projector") {
+                            program = true;
+                            const auto children = row.value("children").toList();
+                            modes = children.size() >= 2 &&
+                                children[0].toMap().value("text") == "Windowed" &&
+                                children[1].toMap().value("text") == "Fullscreen";
+                        }
+                        staged = staged || row.value("text") == "Preview Projector";
+                    }
+                    QMetaObject::invokeMethod(menu, "close");
+                }
+                report(opened && program && modes && staged == studio,
+                       studio ? "blank Studio monitors offer Program/Preview windowed/fullscreen projectors"
+                              : "blank Program offers a projector with Studio Mode off, without Preview");
+            };
             const auto initial = document.projectForBindings();
             const auto deckId = document.mainDeck().value("id").toString();
             const auto before = QString::fromStdString(initial.scenes.front().id.to_string());
@@ -788,6 +815,9 @@ int main(int argc, char** argv) {
                 view->setParentItem(window->contentItem());
                 view->setWidth(1000); view->setHeight(500);
                 pump(200);
+                const auto overlays = collect(view, "programOverlay");
+                report(overlays.size() == 2, "both Studio monitors have context menus");
+                for (auto* overlay : overlays) checkProjectorMenu(overlay, true);
                 const auto sliders = collect(view, "manualTransitionSlider");
                 report(sliders.size() == 1 && sliders.front()->isEnabled(),
                        "Main exposes an enabled manual transition slider");
@@ -828,6 +858,11 @@ int main(int argc, char** argv) {
                        !badge(document.favouriteScenesModel(), staged, libertas::ui::SceneModel::IsPreviewRole) &&
                        badge(document.scenesModel(), staged, libertas::ui::SceneModel::IsProgramRole),
                    "Studio Mode off hides Preview badges and preserves the live Program indicator");
+            const auto programOverlays = collect(window->contentItem(), "programOverlay");
+            report(!programOverlays.isEmpty(), "Program context menu exists outside Studio Mode");
+            if (!programOverlays.isEmpty()) checkProjectorMenu(programOverlays.front(), false);
+            report(!preview.openProjector("", true, false, ""),
+                   "native projector API rejects Preview while Studio Mode is disabled");
             document.setDeckTransition(deckId, QStringLiteral("transition.fade"), 300);
             report(!document.hasLiveSource() && !refreshing(),
                    "selecting Fade on static scenes does not continuously refresh");
@@ -1398,7 +1433,8 @@ int main(int argc, char** argv) {
         for (const ldoc::Fps rate : {ldoc::Fps{60, 1}, ldoc::Fps{60000, 1001}}) {
             libertas::ui::Preview cadence(nullptr);
             cadence.setLive(true, rate);
-            auto* timer = cadence.findChild<QTimer*>();
+            // Preview also owns a projector status timer; measure the frame clock explicitly.
+            auto* timer = cadence.findChild<QTimer*>(QStringLiteral("previewClock"));
             int ticks = 0;
             const auto connection =
                 QObject::connect(timer, &QTimer::timeout, &cadence, [&] { ++ticks; });
@@ -4472,8 +4508,13 @@ int main(int argc, char** argv) {
                     document.renameSource(clicked, QStringLiteral("Elgato Audio"));
                     settle();
 
-                    const QList<QQuickItem*> items =
-                        collect(window->contentItem(), QStringLiteral("stripMenuItem"));
+                    // Hidden canvas menu delegates remain in the visual tree. Select the
+                    // dialog's visible delete action, not the first menu row in the window.
+                    auto items = collect(mgr, QStringLiteral("stripMenuItem"));
+                    items.removeIf([](auto* item) {
+                        return !item->isVisible() || item->property("label").toString() != "Delete source";
+                    });
+                    report(items.size() == 1, "the source manager exposes one visible delete action");
                     if (!items.isEmpty()) {
                         const QPointF on = items.front()->mapToScene(
                             QPointF(items.front()->width() / 2.0,

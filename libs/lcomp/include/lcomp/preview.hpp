@@ -18,7 +18,7 @@
 
 namespace lcomp {
 
-/// The preview protocol. Version 11.
+/// The preview protocol. Version 12.
 ///
 /// Whole messages on a `lipc::Channel`, bulk in sealed memfds. The bytes are little-endian and
 /// carry no padding, so a reader does not depend on the writer's struct layout.
@@ -51,12 +51,16 @@ namespace lcomp {
 ///            One per Record, counters with requested previews,
 ///            and one unprompted if an output stops on its own.
 ///
+///   Projector u8 kind, bounded UTF-8 JSON control (at most 4096 bytes).
+///   ProjectorState u8 kind, UTF-8 JSON status (at most 16384 bytes). Controls receive one
+///            reply; counters are fetched by explicit status controls, never unsolicited frames.
+///
 /// Active output runs on the renderer's clock using the last committed project. Preview
 /// requests only control publication; partial document transfers never replace the live scene.
 ///
 /// An empty payload cannot be sent (ADR-0026), and every message here starts with its kind, so
 /// none of them are empty.
-inline constexpr std::uint16_t kPreviewProtocol = 11;
+inline constexpr std::uint16_t kPreviewProtocol = 12;
 
 /// Capture packet: u32 count, then source ULID, negotiated/received milli-FPS,
 /// u16 error byte length and UTF-8 error. Rates describe arrivals, not unique images.
@@ -128,7 +132,7 @@ struct PreviewFrame {
 
 /// What `poll` produced. `fault` is set for Fault; `frame` is set for Frame.
 struct PreviewEvent {
-    enum class Kind : std::uint8_t { Hello, Frame, Ack, Fault, PeerGone, Audio, Pcm, Record, Capture };
+    enum class Kind : std::uint8_t { Hello, Frame, Ack, Fault, PeerGone, Audio, Pcm, Record, Capture, Projector };
 
     Kind kind = Kind::PeerGone;
     PreviewFrame frame;
@@ -137,6 +141,7 @@ struct PreviewEvent {
     AudioPacket pcm;
     RecordState record;
     std::vector<CaptureState> capture;
+    std::string projector;
 };
 
 /// The UI's end of the preview, and the test's. It does not composite.
@@ -171,6 +176,8 @@ class PreviewLink {
     /// as a Record event, not as this call's return: the encoder opens on the renderer's
     /// thread and finding out whether it opened is worth one round trip.
     [[nodiscard]] std::expected<void, std::string> send_record(const RecordRequest& request);
+
+    [[nodiscard]] std::expected<void, std::string> send_projector(const std::string& request);
 
     /// Ask the renderer to exit. A peer that has already gone is not an error here.
     void quit();
@@ -246,8 +253,12 @@ using FramesDone = std::function<void()>;
 using FramesFresh = std::function<bool()>;
 
 /// When supplied, full_output receives the full canvas from the same composition as the preview.
+/// display_output selects a projector submission for this canvas's own scheduled slot. UI-only
+/// refreshes and a faster unrelated canvas must not introduce extra projector/encoded frames.
+/// frame_time is the scheduled output slot, shared with the encoder and input jitter buffers.
 using CanvasRenderer = std::function<Picture(const ldoc::Project&, const ldoc::Id&, std::uint32_t,
-                                             Picture* full_output)>;
+                                             Picture* full_output, bool display_output,
+                                             std::chrono::steady_clock::time_point frame_time)>;
 using AudioMeters = std::function<std::vector<AudioLevel>(const ldoc::Project&)>;
 using AudioPcm = std::function<AudioPacket()>;
 
@@ -266,11 +277,20 @@ struct RecordHooks {
         frame;
 };
 
+/// Independent display clock. The renderer owns windows and GPU buffers; lcomp only schedules
+/// compositions. pump must be nonblocking, and wants prevents unrelated canvases rendering while
+/// the UI is paused. A projector never requests a full CPU readback.
+struct ProjectorHooks {
+    std::function<std::string(const std::string&, const ldoc::Project&)> control;
+    std::function<std::optional<std::chrono::nanoseconds>(const ldoc::Project&)> pump;
+    std::function<bool(const ldoc::Id&)> wants;
+};
+
 [[nodiscard]] std::expected<void, std::string>
 serve_preview(lipc::Channel channel, FrameSource frames = {}, FramesDone done = {},
               FramesFresh fresh = {}, CanvasRenderer render = {}, AudioMeters audio = {},
               AudioPcm pcm = {}, RecordHooks record = {},
-              std::function<std::vector<CaptureState>()> capture = {});
+              std::function<std::vector<CaptureState>()> capture = {}, ProjectorHooks projectors = {});
 
 /// Start `libertas-render` with one end of a channel.
 ///

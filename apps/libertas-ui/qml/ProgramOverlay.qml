@@ -4,6 +4,7 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import QtQuick.Window
 import Libertas
 
 /// Selection on the program picture: drag the source, or a handle to resize it.
@@ -22,12 +23,15 @@ Item {
     /// How close, in screen pixels, an edge has to come before it snaps. Screen pixels rather
     /// than canvas units so the feel does not change with the canvas size or the panel's zoom.
     property real snapPx: 12
+    property bool editable: true
 
     required property real canvasWidth
     required property real canvasHeight
 
     objectName: "programOverlay"
     anchors.fill: parent
+    // The popup lives on the window, so explicitly dismiss it when its dock/view hides.
+    onVisibleChanged: { if (!overlay.visible && canvasMenu) canvasMenu.close(); }
 
     property bool dragging: false
     property var hold: null
@@ -47,7 +51,7 @@ Item {
     readonly property var placement: {
         // A selected node can move without its ID changing. Retain the document dependency
         // in control flow; an unused property read is discarded by the QML compiler.
-        if (Document.revision < 0) return null;
+        if (!overlay.editable || Document.revision < 0) return null;
         if (overlay.dragging)
             return overlay.hold;
         if (Document.selectedNode === "")
@@ -397,6 +401,29 @@ Item {
         return {text: text, shortcut: shortcut, enabled: enabled, checked: false, action: action};
     }
 
+    function projectorRows() {
+        function choices(preview) {
+            const children = [overlay.row(qsTr("Windowed"), "", true,
+                () => Preview.openProjector(overlay.canvasId, preview, false, "")),
+                overlay.row(qsTr("Fullscreen"), "", true,
+                () => Preview.openProjector(overlay.canvasId, preview, true, ""))];
+            const screens = Preview.projectorScreens();
+            for (const screen of screens)
+                children.push(overlay.row(qsTr("Fullscreen — %1").arg(screen.name), "", true,
+                    () => Preview.openProjector(overlay.canvasId, preview, true, screen.name)));
+            return children;
+        }
+        const rows = [{text: qsTr("Program Projector"), children: choices(false)}];
+        if (Document.mainDeck.studio)
+            rows.push({text: qsTr("Preview Projector"), children: choices(true)});
+        const windows = Preview.projectors().filter(w => w.active);
+        if (windows.length > 0)
+            rows.push({text: qsTr("Close Projector"), children: windows.map(w =>
+                overlay.row((w.preview ? qsTr("Preview %1%2") : qsTr("Program %1%2")).arg(w.id).arg(w.screen ? " — " + w.screen : ""),
+                            "", true, () => Preview.closeProjector(w.id)))});
+        return rows;
+    }
+
     function menuRows() {
         const id = Document.selectedNode;
         const sep = {separator: true};
@@ -429,15 +456,15 @@ Item {
     }
 
     function openMenu(x, y) {
-        const target = overlay.hitNode(x, y);
-        if (!target)
-            return;
+        const target = overlay.editable ? overlay.hitNode(x, y) : null;
         // A right-click on something already selected keeps the rest of the selection, so the
         // menu can act on all of it. The same rule as the sources list.
-        if (Document.selectedNodes.indexOf(target.id) < 0)
+        if (target && Document.selectedNodes.indexOf(target.id) < 0)
             Document.focusPlacedNode(overlay.canvasId, target.id);
         const at = overlay.mapToItem(canvasMenu, x, y);
-        canvasMenu.popup(at.x, at.y, overlay.menuRows());
+        const rows = overlay.projectorRows();
+        if (target) rows.push({separator: true}, ...overlay.menuRows());
+        canvasMenu.popup(at.x, at.y, rows);
     }
 
     Rectangle {
@@ -478,7 +505,7 @@ Item {
         z: 3
         visible: overlay.visible
         hoverEnabled: true
-        acceptedButtons: Qt.LeftButton | Qt.RightButton
+        acceptedButtons: overlay.editable ? Qt.LeftButton | Qt.RightButton : Qt.RightButton
         preventStealing: true
         cursorShape: overlay.cursorShape
         enabled: overlay.canvasWidth > 0 && overlay.canvasHeight > 0
@@ -494,7 +521,7 @@ Item {
             const at = mapToItem(overlay, ev.x, ev.y);
             if (overlay.dragging)
                 overlay.drag(at.x, at.y, ev.modifiers);
-            else
+            else if (overlay.editable)
                 overlay.hover(at.x, at.y);
         }
         onReleased: overlay.release()
@@ -503,8 +530,8 @@ Item {
 
     StripMenu {
         id: canvasMenu
-        parent: overlay.inputSurface
-        z: 4
+        parent: overlay.Window.contentItem || overlay.inputSurface
+        z: 100
         objectName: "canvasMenu"
     }
 }

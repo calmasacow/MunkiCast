@@ -13,8 +13,13 @@ when supported by our decoder/converter. YV12 uses swapped chroma planes.
 
 Buffering consumes the device's bounded capture queue in order. Disabling it
 drains older queued buffers before conversion to publish the newest available
-frame. This controls V4L2 queuing, not OBS's separate asynchronous presentation
-queue. No unbounded software queue or extra presentation delay is introduced.
+frame. The renderer additionally uses a bounded four-entry presentation queue
+when buffering is enabled, sampled two negotiated frame periods behind scheduled
+output time. Sampling never waits for input. Capture audio receives matching delay
+without persisting synthetic effects. See [recording cadence](../recording-cadence.md)
+for clock limits, explicit audio-device association and hardware acceptance.
+Valid monotonic driver timestamp intervals take priority over the advertised frame
+period; missing, stale, future or backward timestamps fall back to nominal timing.
 
 Timeout uses negotiated frame periods and monotonic time. Optional reset stops
 the stream, requeues mapped buffers and restarts it. Reset errors stop capture

@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
@@ -951,7 +952,7 @@ struct GpuCompositor::Impl {
     }
 
     lcomp::Picture render(const lcomp::DrawPlan& plan, std::uint32_t max_edge,
-                          lcomp::Picture* full_output) {
+                          lcomp::Picture* full_output, std::span<const PresentationTarget> displays) {
         const auto begin = std::chrono::steady_clock::now();
         lcomp::Picture out;
         out.width = plan.width;
@@ -1029,8 +1030,9 @@ struct GpuCompositor::Impl {
             out.status = lcomp::PictureStatus::Partial;
         }
         // Export both sizes from this composition before releasing captured-frame leases.
+        Image* full_rgba = nullptr;
         const auto export_picture = [&](lcomp::Picture& picture, std::uint32_t max_size,
-                                        std::unique_ptr<Buffer>& destination) {
+                                        std::unique_ptr<Buffer>& destination, bool read = true) {
             const auto edge = static_cast<std::uint32_t>(std::max(plan.width, plan.height));
             if (max_size && max_size < edge) {
                 picture.width = std::max(
@@ -1041,6 +1043,10 @@ struct GpuCompositor::Impl {
             Image& reduced = target(picture.width, picture.height, VK_FORMAT_R8G8B8A8_UNORM);
             barrier(reduced, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
             dispatch(reduced, canvas, preview, {}, picture.width, picture.height);
+            if (picture.width == plan.width && picture.height == plan.height)
+                full_rgba = &reduced;
+            if (!read)
+                return;
             picture.stride = static_cast<std::uint32_t>(picture.width) * 4;
             const auto size =
                 static_cast<std::size_t>(picture.stride) * static_cast<std::size_t>(picture.height);
@@ -1053,10 +1059,75 @@ struct GpuCompositor::Impl {
                                    1, &copy);
         };
         if (full_output) {
+            auto pixels = std::move(full_output->pixels);
             *full_output = out;
+            full_output->pixels = std::move(pixels);
             export_picture(*full_output, 0, full_readback);
         }
         export_picture(out, max_edge, readback);
+        // HDMI shares the very same full-resolution sRGB conversion as the encoder. No
+        // projector pixels visit host memory, and all copies use this submission/fence.
+        if (!displays.empty() && !full_rgba) {
+            auto full = out;
+            full.width = plan.width;
+            full.height = plan.height;
+            export_picture(full, 0, full_readback, false);
+        }
+        if (!displays.empty()) {
+            barrier(*full_rgba, VK_IMAGE_LAYOUT_GENERAL, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL);
+            const auto external =
+                c->have_foreign_queue ? VK_QUEUE_FAMILY_FOREIGN_EXT : VK_QUEUE_FAMILY_EXTERNAL;
+            for (const auto& display : displays) {
+                if (!display.image || !display.image->image)
+                    continue;
+                const auto& dst = *display.image;
+                VkImageMemoryBarrier b{};
+                b.sType = VK_STRUCTURE_TYPE_IMAGE_MEMORY_BARRIER;
+                b.image = static_cast<VkImage>(dst.image);
+                b.oldLayout = display.foreign ? VK_IMAGE_LAYOUT_GENERAL : VK_IMAGE_LAYOUT_UNDEFINED;
+                b.newLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                b.srcQueueFamilyIndex = display.foreign ? external : VK_QUEUE_FAMILY_IGNORED;
+                b.dstQueueFamilyIndex = display.foreign ? c->queue_family : VK_QUEUE_FAMILY_IGNORED;
+                b.dstAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                b.subresourceRange = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 1, 0, 1};
+                vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT,
+                                     VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr, 1,
+                                     &b);
+                const double scale =
+                    std::min(double(dst.width) / plan.width, double(dst.height) / plan.height);
+                const int w = std::max(1, int(std::lround(plan.width * scale)));
+                const int h = std::max(1, int(std::lround(plan.height * scale)));
+                const int x = (int(dst.width) - w) / 2, y = (int(dst.height) - h) / 2;
+                // A full-frame blit overwrites every pixel. Clearing first would double
+                // display writes, especially expensive for a cross-GPU system-memory buffer.
+                if (w != int(dst.width) || h != int(dst.height)) {
+                    const VkClearColorValue black{{0, 0, 0, 1}};
+                    vkCmdClearColorImage(cmd, b.image, b.newLayout, &black, 1, &b.subresourceRange);
+                    b.oldLayout = b.newLayout;
+                    b.srcAccessMask = b.dstAccessMask;
+                    b.srcQueueFamilyIndex = b.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+                    vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                         VK_PIPELINE_STAGE_TRANSFER_BIT, 0, 0, nullptr, 0, nullptr,
+                                         1, &b);
+                }
+                VkImageBlit blit{};
+                blit.srcSubresource = blit.dstSubresource = {VK_IMAGE_ASPECT_COLOR_BIT, 0, 0, 1};
+                blit.srcOffsets[1] = {plan.width, plan.height, 1};
+                blit.dstOffsets[0] = {x, y, 0};
+                blit.dstOffsets[1] = {x + w, y + h, 1};
+                vkCmdBlitImage(cmd, full_rgba->image, VK_IMAGE_LAYOUT_TRANSFER_SRC_OPTIMAL, b.image,
+                               VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, 1, &blit, VK_FILTER_LINEAR);
+                b.oldLayout = VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL;
+                b.srcAccessMask = VK_ACCESS_TRANSFER_WRITE_BIT;
+                b.newLayout = VK_IMAGE_LAYOUT_GENERAL;
+                b.dstAccessMask = 0;
+                b.srcQueueFamilyIndex = c->queue_family;
+                b.dstQueueFamilyIndex = external;
+                vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_TRANSFER_BIT,
+                                     VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT, 0, 0, nullptr, 0,
+                                     nullptr, 1, &b);
+            }
+        }
         if (timestamps)
             stamp(VK_PIPELINE_STAGE_TRANSFER_BIT, 2);
         for (auto* image : acquired)
@@ -1156,9 +1227,10 @@ std::unique_ptr<GpuCompositor> GpuCompositor::create(VkCtx& device, std::string&
 
 std::optional<lcomp::Picture> GpuCompositor::render(const lcomp::DrawPlan& plan,
                                                     std::uint32_t max_edge, std::string& error,
-                                                    lcomp::Picture* full_output) {
+                                                    lcomp::Picture* full_output,
+                                                    std::span<const PresentationTarget> displays) {
     try {
-        return impl_->render(plan, max_edge, full_output);
+        return impl_->render(plan, max_edge, full_output, displays);
     } catch (const std::exception& e) {
         error = e.what();
         return std::nullopt;

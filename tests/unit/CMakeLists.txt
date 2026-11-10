@@ -47,6 +47,7 @@ pkg_check_modules(RECORD_TEST_FFMPEG REQUIRED IMPORTED_TARGET
     libavcodec libavformat libavutil libswscale)
 libertas_unit_test(test_preview         libertas::lcomp libertas::lcapture PkgConfig::RECORD_TEST_FFMPEG)
 libertas_unit_test(test_encode          libertas::lencode PkgConfig::RECORD_TEST_FFMPEG)
+target_link_options(test_encode PRIVATE "-Wl,--wrap=write")
 find_program(RTMP_TEST_FFMPEG NAMES ffmpeg REQUIRED)
 target_compile_definitions(test_preview PRIVATE
     LIBERTAS_TEST_FFMPEG="${RTMP_TEST_FFMPEG}"

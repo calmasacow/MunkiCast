@@ -2099,8 +2099,9 @@ constexpr FieldSpec kCamera[] = {
     {"colourRange", "Colour range", "choice", "Default", false, 0, "Default|Partial|Full"},
     {"buffering", "Use buffering", "bool", "", true},
     {"",
-     "Buffering reads queued device frames in order. Turn it off to discard older queued frames "
-     "before conversion.",
+     "Buffering smooths capture delivery with a two-frame delay (about 33 ms at 60 fps) "
+     "without waiting during rendering. Capture audio receives matching delay. Turn it off "
+     "to use the newest available frame; uneven arrivals can then repeat or skip pictures.",
      "note"},
     {"autoReset", "Autoreset on timeout", "bool", "", false},
     {"timeoutFrames", "Frames until timeout", "int", "", false, 5, "", "frames"},

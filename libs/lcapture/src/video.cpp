@@ -195,12 +195,15 @@ struct VideoCapture::State {
     }
     void run(const Callback& callback) {
         const auto& f = format.fmt.pix;
-        std::array<std::shared_ptr<VideoFrame>, 3> pool;
+        // Four queued input leases, one selected picture and one producer scratch frame.
+        std::vector<std::shared_ptr<VideoFrame>> pool(options.buffering ? 6 : 3);
         for (auto& frame : pool) {
             frame = std::make_shared<VideoFrame>();
             frame->width = static_cast<int>(f.width);
             frame->height = static_cast<int>(f.height);
-            frame->pixels.resize(static_cast<std::size_t>(f.width) * f.height * 4);
+            const auto pixels = static_cast<std::size_t>(f.width) * f.height;
+            frame->pixels.resize(raw == VideoLayout::Bgra ? pixels * 4 :
+                                 raw == VideoLayout::Yuyv ? pixels * 2 : pixels * 3 / 2);
             frame->layout = raw;
             frame->bt709 = bt709;
             frame->full_range = full_range;
@@ -261,6 +264,14 @@ struct VideoCapture::State {
             if (decoder) need = 1;
             if (free != pool.end() && !(buffer.flags & V4L2_BUF_FLAG_ERROR) &&
                 buffer.bytesused >= need && buffer.bytesused <= buffers[buffer.index].size) {
+                (*free)->sequence = buffer.sequence;
+                (*free)->captured_at = {};
+                if ((buffer.flags & V4L2_BUF_FLAG_TIMESTAMP_MASK) == V4L2_BUF_FLAG_TIMESTAMP_MONOTONIC &&
+                    buffer.timestamp.tv_sec >= 0 && buffer.timestamp.tv_usec >= 0 &&
+                    buffer.timestamp.tv_usec < 1000000)
+                    (*free)->captured_at = std::chrono::steady_clock::time_point{
+                        std::chrono::seconds(buffer.timestamp.tv_sec) +
+                        std::chrono::microseconds(buffer.timestamp.tv_usec)};
                 const auto* data = static_cast<const std::uint8_t*>(buffers[buffer.index].data);
                 const std::uint8_t* src[4] = {data, nullptr, nullptr, nullptr};
                 int stride[4] = {static_cast<int>(f.bytesperline), 0, 0, 0};

@@ -4,12 +4,14 @@
 #include "ltest.hpp"
 
 #include <chrono>
+#include <algorithm>
 #include <condition_variable>
 #include <cstdlib>
 #include <filesystem>
 #include <lcapture/screen.hpp>
 #include <lcomp/filters.hpp>
 #include <lrhi/composite.hpp>
+#include <libdrm/drm_fourcc.h>
 #include <mutex>
 extern "C" {
 #include <libswscale/swscale.h>
@@ -80,6 +82,131 @@ LTEST_CASE(one_composition_exports_matching_full_size_and_preview_frames) {
         const auto expected = lcomp::execute_cpu(plan);
         compare(expected, full);
         compare(lcomp::preview_size(expected, 12), *preview);
+    }
+}
+
+LTEST_CASE(projector_gpu_exports_match_encoder_frames_and_letterbox_without_readback) {
+    auto d = device();
+    std::string error;
+    auto gpu = libertas::rhi::GpuCompositor::create(*d, error);
+    REQUIRE_MSG(gpu, "{}", error);
+    const auto formats = libertas::rhi::vk_supported_modifiers(*d, DRM_FORMAT_XBGR8888);
+
+    struct Display {
+        libertas::rhi::VkCtx& device;
+        libertas::rhi::VkExportedImage image{};
+
+        ~Display() { libertas::rhi::vk_destroy_exportable(device, image); }
+    } exact{*d}, boxed{*d};
+
+    REQUIRE_MSG(libertas::rhi::vk_create_exportable(*d, 48, 32, DRM_FORMAT_XBGR8888, formats, false,
+                                                    exact.image, error),
+                "{}", error);
+    REQUIRE_MSG(libertas::rhi::vk_create_exportable(*d, 48, 48, DRM_FORMAT_XBGR8888, formats, false,
+                                                    boxed.image, error),
+                "{}", error);
+    auto project = show(48, 32);
+    std::vector<std::uint8_t> pixels(48 * 32 * 4, 0);
+    lcomp::Picture encoded; // Reuse the encoder readback across changing Program frames.
+    bool foreign = false;
+    for (int channel = 0; channel < 3; ++channel) {
+        for (std::size_t i = 0; i < pixels.size(); i += 4) {
+            pixels[i] = pixels[i + 1] = pixels[i + 2] = 0;
+            pixels[i + std::size_t(channel)] = pixels[i + 3] = 255;
+        }
+        const auto plan = lcomp::plan_canvas(project, project.canvases[0].id, [&](const auto&) {
+            return lcomp::CapturedPicture{48, 32, pixels.data(), pixels.size()};
+        });
+        const libertas::rhi::PresentationTarget targets[]{{&exact.image, foreign},
+                                                          {&boxed.image, foreign}};
+        auto small = gpu->render(plan, 12, error, &encoded, targets);
+        REQUIRE_MSG(small, "{}", error);
+        compare(lcomp::execute_cpu(plan), encoded);
+        std::vector<std::uint8_t> displayed;
+        REQUIRE_MSG(libertas::rhi::vk_readback_exported(*d, exact.image, true, displayed, error),
+                    "{}", error);
+        REQUIRE(displayed.size() == encoded.pixels.size());
+        for (std::size_t i = 0; i < displayed.size(); i += 4) {
+            CHECK_EQ(displayed[i], encoded.pixels[i + 2]);
+            CHECK_EQ(displayed[i + 1], encoded.pixels[i + 1]);
+            CHECK_EQ(displayed[i + 2], encoded.pixels[i]);
+        }
+        REQUIRE(libertas::rhi::vk_readback_exported(*d, boxed.image, true, displayed, error));
+        for (int y = 0; y < 48; ++y)
+            for (int x = 0; x < 48; ++x) {
+                const auto at = std::size_t(y * 48 + x) * 4;
+                for (int c = 0; c < 3; ++c) {
+                    const int expected =
+                        y >= 8 && y < 40
+                            ? encoded.pixels[std::size_t((y - 8) * 48 + x) * 4 + std::size_t(2 - c)]
+                            : 0;
+                    CHECK_EQ(displayed[at + std::size_t(c)], expected);
+                }
+            }
+        // The readback above is test-only. Production never maps these display buffers.
+        // Reuse proves FOREIGN ownership is reacquired rather than discarding a live image.
+        foreign = true;
+    }
+    const auto plan = lcomp::plan_canvas(project, project.canvases[0].id, [&](const auto&) {
+        return lcomp::CapturedPicture{48, 32, pixels.data(), pixels.size()};
+    });
+    const libertas::rhi::PresentationTarget target{&exact.image, true};
+    const auto display_only = gpu->render(plan, 1, error, nullptr, {&target, 1});
+    REQUIRE_MSG(display_only, "{}", error);
+    CHECK_EQ(display_only->pixels.size(), 4u);
+}
+
+LTEST_CASE(benchmark_shared_projector_copy) {
+    if (!std::getenv("LIBERTAS_BENCH_PROJECTOR"))
+        return;
+    const bool host = std::getenv("LIBERTAS_BENCH_PROJECTOR_HOST") != nullptr;
+    auto d = device();
+    std::string error;
+    for (const int width : {1920, 3840}) {
+        const int height = width * 9 / 16;
+        auto gpu = libertas::rhi::GpuCompositor::create(*d, error);
+        REQUIRE(gpu);
+        auto p = show(width, height);
+        p.sources[0].type = "source.color";
+        p.sources[0].settings["color"] = ldoc::Rgba::from_srgb8(40, 120, 200);
+        const auto plan = lcomp::plan_canvas(p, p.canvases[0].id);
+        auto allowed = libertas::rhi::vk_supported_modifiers(*d, DRM_FORMAT_XBGR8888);
+        if (host)
+            std::erase_if(allowed, [](auto modifier) { return modifier != DRM_FORMAT_MOD_LINEAR; });
+        libertas::rhi::VkExportedImage display;
+        REQUIRE_MSG(libertas::rhi::vk_create_exportable(*d, unsigned(width), unsigned(height),
+                                                        DRM_FORMAT_XBGR8888, allowed, host, display,
+                                                        error),
+                    "{}", error);
+        bool foreign = false;
+        std::vector<double> baseline, projector;
+        for (int i = 0; i < 110; ++i) {
+            const bool projecting = i % 2 != 0;
+            const libertas::rhi::PresentationTarget target{&display, foreign};
+            lcomp::Picture full;
+            const auto begin = std::chrono::steady_clock::now();
+            auto result =
+                gpu->render(plan, 480, error, &full,
+                            projecting ? std::span(&target, 1)
+                                       : std::span<const libertas::rhi::PresentationTarget>{});
+            REQUIRE_MSG(result, "{}", error);
+            const double ms =
+                std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin)
+                    .count();
+            if (projecting)
+                foreign = true;
+            if (i >= 10)
+                (projecting ? projector : baseline).push_back(ms);
+        }
+        std::ranges::sort(baseline);
+        std::ranges::sort(projector);
+        std::fprintf(stderr,
+                     "PROJECTOR_BENCH %dx%d %s %s baseline median=%.3f p95=%.3f ms "
+                     "projector median=%.3f p95=%.3f ms\n",
+                     width, height, libertas::rhi::vk_device_name(*d).c_str(),
+                     host ? "shared-system-memory" : "device-memory", baseline[25], baseline[47],
+                     projector[25], projector[47]);
+        libertas::rhi::vk_destroy_exportable(*d, display);
     }
 }
 
@@ -655,6 +782,8 @@ LTEST_CASE(a_real_capture_slot_stays_on_device_until_preview_readback) {
 }
 
 int main() {
+    if (std::getenv("LIBERTAS_BENCH_PROJECTOR"))
+        std::erase_if(ltest::registry(), [](const auto& test) { return test.name != "benchmark_shared_projector_copy"; });
     if (!std::getenv("LIBERTAS_TEST_GPU"))
         return 77;
     if (!std::getenv("LIBERTAS_TEST_CAPTURE"))

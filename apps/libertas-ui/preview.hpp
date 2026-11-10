@@ -88,6 +88,14 @@ class Preview : public QObject {
     Q_INVOKABLE void setManualTransition(double progress);
     Q_INVOKABLE QString setFilterTarget(const QString& owner);
 
+    /// Projectors use renderer-owned GPU windows, independent of dock resolution/UI activity.
+    Q_INVOKABLE QVariantList projectorScreens() const;
+    Q_INVOKABLE QVariantList projectors() const { return projectors_; }
+    Q_INVOKABLE bool openProjector(const QString& canvasId, bool preview, bool fullscreen,
+                                  const QString& screen);
+    Q_INVOKABLE void closeProjector(int id);
+    Q_INVOKABLE void closeProjectors();
+
     /// The latest document. Called from the session's change notification, never from the
     /// return of the command that caused it (ADR-0024). A snapshot already in flight is not
     /// sent twice: the newest one goes when the renderer acknowledges.
@@ -142,6 +150,7 @@ class Preview : public QObject {
 
   signals:
     void changed();
+    void projectorsChanged();
     void recordingChanged();
     void replaySaved(const QString& path, const QString& error);
     void notice(const QString& text);
@@ -152,6 +161,8 @@ class Preview : public QObject {
     struct Link;
 
     void start();
+    void queueProjector(const QByteArray& request);
+    void flushProjectors();
     void tick();
     void schedule_tick();
     void try_send();
@@ -171,6 +182,10 @@ class Preview : public QObject {
     QString first_canvas_;
     std::unique_ptr<Link> link_;
     QTimer* live_ = nullptr;
+    QTimer* projector_poll_ = nullptr;
+    QVariantList projectors_;
+    QString projector_error_;
+    unsigned next_projector_ = 1;
     std::chrono::nanoseconds live_period_{};
     std::chrono::steady_clock::time_point live_deadline_{};
     bool output_stats_available_ = false;

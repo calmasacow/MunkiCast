@@ -33,6 +33,7 @@ The generated surface includes:
 | Audio | Buses, gain, pan, mute, monitors, sends/routing, node strips, audio encoders |
 | Outputs | Video/audio encodes, graph connections/positions, destinations/services, presets, streaming, recording, replay |
 | Studio operation | Program/preview, Studio Mode, transitions, stingers, quick transitions, manual transition progress |
+| Projectors | Native windowed/fullscreen Program/Preview, monitor enumeration, close and asynchronous display status; see [projectors](projectors.md) |
 | Countdown sources | Create, configure, start/stop/reset, reorder, import |
 | Application settings | Preferences, cache, shortcuts, telemetry, connector configuration |
 | Workspace | Panels, focus, docking/dividers, layouts, workspaces, browser docks |

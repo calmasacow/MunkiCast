@@ -4,7 +4,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 -->
 # Current status
 
-Reviewed against the implementation on **2026-10-29**. This is a pre-alpha studio;
+Reviewed against the implementation on **2026-11-09**. This is a pre-alpha studio;
 implemented controls do not establish production readiness across every device.
 The actionable backlog is [todo.md](todo.md). Dated benchmarks and earlier development
 notes are preserved in [development-history.md](development-history.md).
@@ -21,9 +21,42 @@ notes are preserved in [development-history.md](development-history.md).
   source cloning, countdown text bindings and file-backed stingers. These are
   implemented subsets of the corresponding OBS/plugin workflows.
 - Studio Mode with preview/program, quick transitions and manual transition control.
+- Native GPU Program/Preview projectors with windowed/fullscreen monitor selection.
+  Program works outside Studio Mode; renderer-owned DMA-BUF presentation continues
+  independently of the UI. See [projectors](projectors.md) for timing and hardware limits.
 - One H.264/AAC RTMP/RTMPS stream, MKV recording and RAM replay buffering. Concurrent
   stream/record/replay share compatible encodes; independent simultaneous encodes,
   multistreaming, automatic reconnect and background operation remain pending.
+  V4L2 buffering now adds a bounded two-frame presentation delay without waiting
+  inside renders; see [recording cadence](recording-cadence.md) for hardware checks
+  and remaining camera/clock limits.
+  Elgato fast-motion repeats remain under investigation: original-file repeats are
+  confirmed, the isolated numbered-frame NVENC test passes, and buffering is now
+  enabled in the live document. The 16:34 capture trace isolated buffer eligibility
+  chatter despite different input already waiting. Matching-rate hysteresis removes
+  all 27 application holds in the exact 90,275-frame replay; focused jitter/drift
+  regressions pass. The 18:02 hardware recording now confirms zero selected-frame
+  reuse across all 16,436 pictures, matching the corrected replay exactly.
+  Separate output-deadline stalls (19 slots near 4:08), long-show/lip-sync coverage
+  and attribution of a few near-identical moving-crop candidates remain open;
+  see the recording-cadence investigation.
+  The later hour-long simultaneous stream/SMB recording confirms 844 missed output
+  slots. Per-destination bounded packet writers now keep file/socket writes off
+  the render thread; a stalled-destination regression verifies continued encoding
+  and complete delivery to the healthy destination. Periodic CPU/GPU stalls and
+  long-stream acceptance remain open; ordinary runs now log deadline-stage timings.
+  Current 120-to-60 capture also uses bounded integer-stride phase tolerance, and
+  recording reuses full-resolution readback storage. Focused capture/preview/encoder
+  checks and all 15 GPU cases pass. A final 5:23 recording has 19,386 packets and no
+  missed output slots; the app exited normally before the next periodic-refresh
+  window, so periodic-stall and concurrent-live acceptance remain open.
+  A later operator run had a roughly 1 fps preview despite low render-time readings;
+  full captured-picture hashing was enabled. A clean restart without diagnostic
+  flags restored measured 60 fps preview delivery, around 2 ms preview-only rendering,
+  and around 4.5–5.6 ms while recording. Separate 30-second local and media-store
+  recordings each have zero missing output slots, including healthy preview delivery
+  after stopping. Restart and tracing removal were combined, so the freeze's cause
+  is not yet isolated. The cadence checker now uses sampling-only diagnostics.
 - Encoder graph settings/presets, destination catalog, keyring-backed stream keys,
   Twitch/YouTube authorization flows, and prepared asset caching.
 - Libertas/OBS WebSocket modes, native Companion module with Studio Mode toggle and
@@ -54,6 +87,26 @@ All 41 configured tests passed across the ordinary, opt-in GPU, and UI/integrati
 runs. The final panel check also passed on the rebuilt launch binary. Detailed
 validation and remaining acceptance work are recorded in [todo.md](todo.md).
 No live destinations or saved operator collections are needed for the panel checks.
+
+## Launch recovery: 2026-11-09
+
+The root/home Btrfs filesystem reached 100% usage (64 KiB available). Libertas
+failed with SIGBUS in Chromium's cache thread; the separate Omcontrol desktop
+plugin's Python/SQLite processes also failed with SIGBUS. The journal could not
+store their dumps because the disk was full. No stored core was available to
+symbolize; recovery after freeing space supports filesystem exhaustion as the
+common trigger.
+
+Recovery removed 2.32 GB of downloadable debug symbols and 74 unindexed prepared
+media files (23.00 GB logical), each SHA-256 verified against a retained indexed
+copy. Btrfs sharing means logical deletions do not equal physical space recovered:
+after delayed Btrfs reclamation, the filesystem reported 23 GiB available. All 54 indexed media copies,
+original assets, recordings, projects and databases were retained. Both Python and
+the SQLite CLI passed read-only `PRAGMA quick_check` on Omcontrol's history database.
+The exact `build-make` application launched with its renderer attached, restored
+the saved show and displayed live capture; native MCP and window capture responded.
+No new error-priority journal entries appeared during the recovery observation.
+Cache lifecycle and disk-full acceptance remain in [todo.md](todo.md).
 
 ## Run and validate the application
 

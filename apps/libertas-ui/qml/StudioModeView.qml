@@ -97,8 +97,7 @@ Item {
                 color: Theme.c.textMuted
             }
             ProgramOverlay {
-                visible: monitor.editable
-                enabled: monitor.editable
+                editable: monitor.editable
                 inputSurface: monitor
                 canvasId: ""
                 canvasWidth: studio.canvasSize.width
