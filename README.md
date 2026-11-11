@@ -29,8 +29,12 @@ What exists is a workspace you can use and a document you can edit:
 - **A project on disk** — a git-diffable directory of JSON, saved as a transaction. A corrupt scene
   costs one scene, not the collection.
 - **Keyboard and hotkeys** — configurable application shortcuts and keyboard workspace navigation.
+  Tab reaches every input (number fields, dropdowns, checkboxes, colour swatches, mixer faders,
+  the source list), and each takes the expected keys; the focused control shows an accent outline.
   System-wide portal registration remains pending; a global scope in the table does not mean
   that the shortcut works while another application has focus.
+- **Projectors** — Program or Preview, windowed, fullscreen, or fullscreen on a chosen screen, from
+  the canvas's context menu. The render process presents them directly from the GPU.
 - **Machine telemetry** — CPU, memory, free disk, and GPU, VRAM and *encoder* load read live from
   NVML, plus actual renderer and active output statistics. Unavailable metrics display "—".
 
@@ -41,7 +45,9 @@ With no render process running, the canvas reads "no pipeline attached".
 
 1. Open **Encode**. Connect a canvas to an H.264 video encoder, a Program bus to an AAC
    audio encoder, and both encoders to a streaming destination. Choose x264 for software encoding
-   or NVENC when supported by the installed GPU and driver.
+   or NVENC when supported by the installed GPU and driver. On NVIDIA, NVENC reads the canvas
+   from GPU memory (NV12 converted on the GPU, shared through CUDA external memory) with no
+   system-RAM readback; x264, other vendors and odd canvas sizes use the host path.
 2. Choose a destination type. Services provide their ingest servers; choose **RTMP** for a
    custom server URL, for example `rtmp://server/live`.
    Enter the stream key separately; leaving the field saves it to the keyring.
