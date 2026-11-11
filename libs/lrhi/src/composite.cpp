@@ -24,6 +24,7 @@
 #include <poll.h>
 #include <stdexcept>
 #include <unistd.h>
+#include <utility>
 
 namespace libertas::rhi {
 namespace {
@@ -235,7 +236,7 @@ struct GpuCompositor::Impl {
     VkPipeline composite = VK_NULL_HANDLE, preview = VK_NULL_HANDLE, filter = VK_NULL_HANDLE,
                yuv = VK_NULL_HANDLE, nv12 = VK_NULL_HANDLE;
     std::vector<std::unique_ptr<Nv12Slot>> nv12_slots;
-    bool nv12_broken = false;
+    bool nv12_broken = false, nv12_exhausted_warned = false;
     VkDescriptorPool descriptors = VK_NULL_HANDLE;
     VkSampler sampler = VK_NULL_HANDLE;
     std::vector<std::unique_ptr<Image>> images;
@@ -796,7 +797,10 @@ struct GpuCompositor::Impl {
     }
 
     // A free slot of this size, or null when NVENC still holds all of them (or export failed);
-    // the caller then reads back RGBA instead. Eight covers NVENC's surfaces plus one in hand.
+    // the caller then reads back RGBA instead. NVENC holds up to its surface count (12 with two
+    // B-frames, more with lookahead); slots are made on demand, so the ring stops at that.
+    // ponytail: fixed cap of 32; size it from the encoder's surface count if a deeper NVENC
+    // config ever exhausts it (the warning below says when).
     Nv12Slot* nv12_slot(int width, int height) {
         const auto idle = [](const auto& slot) { return slot->frame.use_count() == 1; };
         std::erase_if(nv12_slots, [&](const auto& slot) {
@@ -805,8 +809,16 @@ struct GpuCompositor::Impl {
         for (auto& slot : nv12_slots)
             if (slot->width == width && slot->height == height && idle(slot))
                 return slot.get();
-        if (nv12_broken || nv12_slots.size() >= 8 || !c->get_memory_fd)
+        if (nv12_broken || !c->get_memory_fd)
             return nullptr;
+        if (nv12_slots.size() >= 32) {
+            if (!std::exchange(nv12_exhausted_warned, true))
+                std::fprintf(stderr,
+                             "GPU NV12 ring exhausted (%zu slots held); frame read back through "
+                             "the CPU\n",
+                             nv12_slots.size());
+            return nullptr;
+        }
         try {
             auto slot = std::make_unique<Nv12Slot>(*c);
             slot->width = width;

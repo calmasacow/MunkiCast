@@ -791,7 +791,7 @@ LTEST_CASE(nvenc_encodes_gpu_nv12_frames_without_readback) {
     std::string error;
     auto gpu = libertas::rhi::GpuCompositor::create(*d, error);
     REQUIRE_MSG(gpu, "{}", error);
-    constexpr int w = 256, h = 144, count = 30;
+    constexpr int w = 256, h = 144, count = 60;
     libertas::encode::RuntimeConfig cfg;
     cfg.path = (std::filesystem::temp_directory_path() / "libertas-gpu-nv12.mkv").string();
     std::filesystem::remove(cfg.path);
@@ -800,7 +800,7 @@ LTEST_CASE(nvenc_encodes_gpu_nv12_frames_without_readback) {
     cfg.source_rgba = true;
     cfg.audio_channels = 0;
     cfg.force_tier = "h264_nvenc";
-    cfg.video_options = {{"preset", "p4"}, {"tune", "lossless"}};
+    cfg.video_options = {{"preset", "p4"}, {"tune", "lossless"}, {"bf", "2"}};
     cfg.gpu_uuid = libertas::rhi::vk_device_uuid(*d);
     auto encoder = libertas::encode::encoder_open(cfg, error);
     REQUIRE_MSG(encoder, "{}", error);
