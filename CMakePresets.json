@@ -12,7 +12,7 @@
       },
       "cacheVariables": {
         "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
-        "LIBERTAS_DEPS": "system"
+        "MUNKICAST_DEPS": "system"
       }
     },
     {
@@ -30,7 +30,7 @@
       "name": "linux-system-ffmpeg",
       "displayName": "Linux with system FFmpeg (rollback)",
       "inherits": "linux",
-      "cacheVariables": { "LIBERTAS_USE_SYSTEM_FFMPEG": "ON" },
+      "cacheVariables": { "MUNKICAST_USE_SYSTEM_FFMPEG": "ON" },
       "environment": { "PATH": "$penv{PATH}" }
     },
     {
@@ -45,7 +45,7 @@
       "inherits": "base",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "RelWithDebInfo",
-        "LIBERTAS_WERROR": "ON"
+        "MUNKICAST_WERROR": "ON"
       }
     },
     {
@@ -54,8 +54,8 @@
       "inherits": "base",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "LIBERTAS_SANITIZE": "ON",
-        "LIBERTAS_WERROR": "ON"
+        "MUNKICAST_SANITIZE": "ON",
+        "MUNKICAST_WERROR": "ON"
       }
     },
     {
@@ -64,8 +64,8 @@
       "inherits": "base",
       "cacheVariables": {
         "CMAKE_BUILD_TYPE": "Debug",
-        "LIBERTAS_TSAN": "ON",
-        "LIBERTAS_WERROR": "ON"
+        "MUNKICAST_TSAN": "ON",
+        "MUNKICAST_WERROR": "ON"
       }
     }
   ],

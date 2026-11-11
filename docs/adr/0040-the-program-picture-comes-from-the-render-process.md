@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: Libertas-Studio contributors
+SPDX-FileCopyrightText: MunkiCast contributors
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 # ADR 0040 — The program picture comes from the render process
@@ -12,7 +12,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 The shell edits a real document and nothing draws it. The Program panel is a framing guide that says "no pipeline attached", and the mixer says "no audio host — levels only". Both sentences are doing a job: a panel that looks finished while being incapable cannot be trusted later.
 
-The pieces that would fill the panel already exist as measured spikes, and the process that should own them does not exist at all. `libertas-render` was an empty directory. So was `lcomp`. Putting the first picture in the UI, because that is where the panel is, is the move ADR-0024 exists to prevent: every caller that reaches into the thing directly has to be found again the day it moves, and the ones that are missed fail during a show.
+The pieces that would fill the panel already exist as measured spikes, and the process that should own them does not exist at all. `munkicast-render` was an empty directory. So was `lcomp`. Putting the first picture in the UI, because that is where the panel is, is the move ADR-0024 exists to prevent: every caller that reaches into the thing directly has to be found again the day it moves, and the ones that are missed fail during a show.
 
 Four questions had to be answered before any of that code was written.
 
@@ -23,9 +23,9 @@ Four questions had to be answered before any of that code was written.
 
 ## Decision
 
-**The Program panel shows frames published by `libertas-render`. It does not draw them.**
+**The Program panel shows frames published by `munkicast-render`. It does not draw them.**
 
-`lcomp` walks the scene tree and produces one picture per canvas. `libertas-render` is the process that runs it. The UI spawns that process, sends the document, and copies out the pixels it is sent. Spawning is a stand-in for `libertas-session`, which still does not exist; the protocol does not know which process the parent is, so the stand-in can go away without the messages changing.
+`lcomp` walks the scene tree and produces one picture per canvas. `munkicast-render` is the process that runs it. The UI spawns that process, sends the document, and copies out the pixels it is sent. Spawning is a stand-in for `munkicast-session`, which still does not exist; the protocol does not know which process the parent is, so the stand-in can go away without the messages changing.
 
 ### What the first picture is allowed to be
 
@@ -57,9 +57,9 @@ The client sends from the session notification. `run()` may one day return befor
 
 ## Rejected alternatives
 
-**Composite in the UI process.** The panel is right there, and a colour fill does not need a GPU. Rejected because it is the ADR-0024 failure in a new shape: the day the picture moves to `libertas-render`, every call site that built a `QImage` itself is a call site that shows a stale frame. The check drives the real process for that reason. A unit test may call `composite_canvas` directly; the panel may not.
+**Composite in the UI process.** The panel is right there, and a colour fill does not need a GPU. Rejected because it is the ADR-0024 failure in a new shape: the day the picture moves to `munkicast-render`, every call site that built a `QImage` itself is a call site that shows a stale frame. The check drives the real process for that reason. A unit test may call `composite_canvas` directly; the panel may not.
 
-**Import a dma-buf into the UI's EGL.** That is the encode-shaped answer, and it is the failure ADR-0011 spent its time on: a buffer the compositor and a client could not agree how to import. The Program panel is a view at panel resolution. It does not need the encode buffer, and putting Qt on the device that will one day encode would make a toolkit bug a dropped show. The GPU path stays inside `libertas-render`, where ADR-0006 put it, and it is not this picture.
+**Import a dma-buf into the UI's EGL.** That is the encode-shaped answer, and it is the failure ADR-0011 spent its time on: a buffer the compositor and a client could not agree how to import. The Program panel is a view at panel resolution. It does not need the encode buffer, and putting Qt on the device that will one day encode would make a toolkit bug a dropped show. The GPU path stays inside `munkicast-render`, where ADR-0006 put it, and it is not this picture.
 
 **One `memfd` per frame, or the pixels inline in the message.** The first leaks a descriptor a frame. The second does not fit, and ADR-0026 already says a payload that does not fit belongs in shared memory with the descriptor sent beside it.
 
@@ -73,7 +73,7 @@ The client sends from the session notification. `run()` may one day return befor
 
 ## Consequences
 
-- `libertas-render` publishes a preview and does nothing else. No encode, no output, no capture, no device. Adding those is further work in this process, not a new process and not a change to the message that carries the document.
+- `munkicast-render` publishes a preview and does nothing else. No encode, no output, no capture, no device. Adding those is further work in this process, not a new process and not a change to the message that carries the document.
 - The panel's caption is the honesty mechanism. "no pipeline attached" means the process is not there. "nothing in the scene" and "N not drawn" mean it is there and has said what it could not draw. A bare `1920x1080` means the scene was drawn in full.
 - Tests cover the walk without a process, the walk through the real process, and the panel: the self-check puts a red colour on the program scene and reads the window. A green run that only called `composite_canvas` would not have noticed a panel still drawing the guide.
 - The software picture must not grow into a second compositor that disagrees with the GPU one. When `lrhi` exists, the scene walk is the part worth sharing. A blend mode, a rotation or a capture implemented only here would be the disagreement.

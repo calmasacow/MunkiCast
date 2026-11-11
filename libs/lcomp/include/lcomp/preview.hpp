@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
@@ -242,7 +242,7 @@ class PreviewLink {
 ///
 /// `frames` is where captured screens come from, and is empty for a caller with no device -- a
 /// test, or a build of this process that has not opened one. This library never opens a device
-/// itself: ADR-0005 puts the GPU in `libertas-render`, and taking the frame source as a parameter
+/// itself: ADR-0005 puts the GPU in `munkicast-render`, and taking the frame source as a parameter
 /// is what keeps `lcomp` free of Vulkan while the process that links it is not.
 /// Called when a composite has finished with every frame it borrowed, so the supplier can let
 /// its capture threads move on. Empty when there is nothing to release.
@@ -292,12 +292,12 @@ serve_preview(lipc::Channel channel, FrameSource frames = {}, FramesDone done = 
               AudioPcm pcm = {}, RecordHooks record = {},
               std::function<std::vector<CaptureState>()> capture = {}, ProjectorHooks projectors = {});
 
-/// Start `libertas-render` with one end of a channel.
+/// Start `munkicast-render` with one end of a channel.
 ///
 /// `child_end` is handed to the child and closed here. The child inherits that descriptor and
 /// no other — `posix_spawn` with `closefrom`, not `fork`, because the UI is multithreaded and
 /// a fork there can only call async-signal-safe functions. The child's descriptor is 3, named
-/// by `LIBERTAS_CHANNEL_FD`, so it does not depend on which number this process happened to
+/// by `MUNKICAST_CHANNEL_FD`, so it does not depend on which number this process happened to
 /// hold.
 [[nodiscard]] std::expected<pid_t, std::string> spawn_renderer(const std::filesystem::path& exe,
                                                                lipc::Fd child_end);

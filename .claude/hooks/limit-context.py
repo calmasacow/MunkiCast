@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: Libertas-Studio contributors
+# SPDX-FileCopyrightText: MunkiCast contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 """Refuse Read calls that would pin a large blob into the Claude Code transcript.
@@ -108,7 +108,7 @@ def main():
             deny(
                 f"Refusing to read {path} ({detail}). "
                 "A full capture stays in the transcript and is resent on every later turn. "
-                "Scale it first: magick INPUT -resize '1280x1280>' -quality 60 /tmp/libertas-view.jpg "
+                "Scale it first: magick INPUT -resize '1280x1280>' -quality 60 /tmp/munkicast-view.jpg "
                 "and Read that file once."
             )
         return
@@ -128,7 +128,7 @@ def main():
     deny(
         f"Refusing to read {path} whole ({size} bytes). "
         f"Read a range: offset plus limit of at most {MAX_READ_LINES} lines. "
-        "For a panel widget, start at apps/libertas-ui/qml/<Name>Panel.qml."
+        "For a panel widget, start at apps/munkicast-ui/qml/<Name>Panel.qml."
     )
 
 

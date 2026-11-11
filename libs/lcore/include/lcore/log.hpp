@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
@@ -10,7 +10,7 @@ namespace lc {
 
 enum class Level { Trace, Debug, Info, Warn, Error };
 
-/// Minimum level that will be emitted. Defaults to Info; LIBERTAS_LOG=debug etc. overrides.
+/// Minimum level that will be emitted. Defaults to Info; MUNKICAST_LOG=debug etc. overrides.
 void set_level(Level lvl);
 Level level();
 
@@ -40,7 +40,7 @@ template <typename... Args> void error(std::format_string<Args...> f, Args&&... 
     log(Level::Error, f, std::forward<Args>(a)...);
 }
 
-/// Reads LIBERTAS_LOG from the environment. Call once at startup.
+/// Reads MUNKICAST_LOG from the environment. Call once at startup.
 void init_from_env();
 
 } // namespace lc

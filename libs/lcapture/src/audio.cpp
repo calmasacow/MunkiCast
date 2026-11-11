@@ -9,7 +9,7 @@
 #include <pulse/pulseaudio.h>
 #include <thread>
 
-namespace libertas::capture {
+namespace munkicast::capture {
 namespace {
 std::string physical_device(const std::filesystem::path& device) {
     std::error_code error;
@@ -65,7 +65,7 @@ struct Connection {
             error = "cannot allocate audio main loop";
             return false;
         }
-        context = pa_context_new(pa_threaded_mainloop_get_api(loop), "Libertas Studio");
+        context = pa_context_new(pa_threaded_mainloop_get_api(loop), "MunkiCast");
         if (!context || pa_context_connect(context, nullptr, PA_CONTEXT_NOFLAGS, nullptr) < 0 ||
             !(started = pa_threaded_mainloop_start(loop) == 0) ||
             !wait([&] { return pa_context_get_state(context) == PA_CONTEXT_READY; })) {
@@ -300,7 +300,7 @@ std::unique_ptr<AudioMonitor> AudioMonitor::open(std::string& error, const std::
     auto& connection = state->connection;
     pa_sample_spec format{PA_SAMPLE_FLOAT32NE, 48000, 2};
     pa_threaded_mainloop_lock(connection.loop);
-    state->stream = pa_stream_new(connection.context, "Libertas Monitor", &format, nullptr);
+    state->stream = pa_stream_new(connection.context, "MunkiCast Monitor", &format, nullptr);
     if (!state->stream) {
         pa_threaded_mainloop_unlock(connection.loop);
         error = "cannot create monitor stream";
@@ -444,4 +444,4 @@ std::unique_ptr<AudioCapture> AudioCapture::open(const std::string& device, bool
     }
     return std::unique_ptr<AudioCapture>(new AudioCapture(std::move(state)));
 }
-} // namespace libertas::capture
+} // namespace munkicast::capture

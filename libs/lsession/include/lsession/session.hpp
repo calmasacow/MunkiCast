@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
@@ -16,7 +16,7 @@
 
 /// The boundary between whoever is editing a document and whoever owns it.
 ///
-/// ADR-0005 puts the document in `libertas-session` and gives the UI **zero authority** over it.
+/// ADR-0005 puts the document in `munkicast-session` and gives the UI **zero authority** over it.
 /// That process split is not built yet, and this interface is what makes building it later a
 /// change of transport rather than a rewrite: today `LocalSession` owns the document in the same
 /// process, and tomorrow a proxy over `lipc` implements the same five operations by talking to

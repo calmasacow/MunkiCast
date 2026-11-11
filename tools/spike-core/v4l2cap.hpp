@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-namespace libertas::spike {
+namespace munkicast::spike {
 
 struct V4l2Config {
     std::string device;
@@ -68,4 +68,4 @@ std::string v4l2_ycbcr_enc_str(std::uint32_t e);
 std::string v4l2_xfer_func_str(std::uint32_t x);
 std::uint32_t v4l2_fourcc_parse(const std::string& s);
 
-} // namespace libertas::spike
+} // namespace munkicast::spike

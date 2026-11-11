@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Libertas-Studio contributors
+# SPDX-FileCopyrightText: MunkiCast contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # Theme tokens and the Omarchy provider. No Qt: a palette is a set of named colours, and the
@@ -10,10 +10,10 @@ add_library(ltheme STATIC
     src/omarchy.cpp
     src/palette.cpp
 )
-add_library(libertas::ltheme ALIAS ltheme)
+add_library(munkicast::ltheme ALIAS ltheme)
 
 target_include_directories(ltheme PUBLIC include)
 target_link_libraries(ltheme
-    PUBLIC libertas::flags
+    PUBLIC munkicast::flags
     PRIVATE tomlplusplus::tomlplusplus
 )

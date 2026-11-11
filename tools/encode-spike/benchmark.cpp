@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <lcore/atomic_file.hpp>
@@ -42,7 +42,7 @@ double p95(std::vector<double> values) {
 
 int main(int argc, char** argv) try {
     if (argc != 3)
-        throw std::runtime_error("usage: libertas-encode-bench PROJECT.json OUTPUT_DIRECTORY");
+        throw std::runtime_error("usage: munkicast-encode-bench PROJECT.json OUTPUT_DIRECTORY");
     const auto text = lc::read_file(argv[1]);
     if (!text)
         throw std::runtime_error(text.error());
@@ -64,7 +64,7 @@ int main(int argc, char** argv) try {
         throw std::runtime_error("benchmark needs an audio encode");
     const std::filesystem::path directory{argv[2]};
     std::filesystem::create_directories(directory);
-    auto cfg = libertas::encode::runtime_config(video, *audio, *canvas, "");
+    auto cfg = munkicast::encode::runtime_config(video, *audio, *canvas, "");
     cfg.source_rgba = true;
     const auto width = static_cast<std::size_t>(canvas->width);
     const auto height = static_cast<std::size_t>(canvas->height);
@@ -89,7 +89,7 @@ int main(int argc, char** argv) try {
     for (int trial = 0; trial <= 3; ++trial) {
         cfg.path = (directory / ("trial-" + std::to_string(trial) + ".mkv")).string();
         std::string error;
-        auto encoder = libertas::encode::encoder_open(cfg, error);
+        auto encoder = munkicast::encode::encoder_open(cfg, error);
         if (!encoder)
             throw std::runtime_error(error);
         const int count = trial == 0 ? 120 : 600;
@@ -105,10 +105,10 @@ int main(int argc, char** argv) try {
             const auto next =
                 static_cast<std::int64_t>(frame + 1) * cfg.audio_rate * cfg.fps_den / cfg.fps_num;
             if (next - first > 48000 ||
-                !libertas::encode::encoder_video(
+                !munkicast::encode::encoder_video(
                     *encoder, frames[static_cast<std::size_t>(frame) % frames.size()].data(),
                     width * 4, pts, error) ||
-                !libertas::encode::encoder_audio(
+                !munkicast::encode::encoder_audio(
                     *encoder, &tone[static_cast<std::size_t>(first % 48000) * 2],
                     static_cast<std::uint32_t>(next - first), pts, error))
                 throw std::runtime_error(error.empty() ? "invalid audio block" : error);
@@ -116,12 +116,12 @@ int main(int argc, char** argv) try {
                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t)
                     .count());
         }
-        if (!libertas::encode::encoder_finish(*encoder, error))
+        if (!munkicast::encode::encoder_finish(*encoder, error))
             throw std::runtime_error(error);
         const auto wall =
             std::chrono::duration<double>(std::chrono::steady_clock::now() - started).count();
         const auto used_cpu = cpu_seconds() - cpu;
-        const auto& stats = libertas::encode::encoder_stats(*encoder);
+        const auto& stats = munkicast::encode::encoder_stats(*encoder);
         if (stats.video_frames != static_cast<std::uint64_t>(count) ||
             stats.video_encoder != cfg.force_tier)
             throw std::runtime_error("frame count or selected encoder changed");

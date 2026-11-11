@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: Libertas-Studio contributors
+SPDX-FileCopyrightText: MunkiCast contributors
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 # ADR 0007 — Dual-GPU concurrent encode is a first-class requirement
@@ -21,7 +21,7 @@ This reclassifies three things the plan had mis-weighted:
 
 1. **Per-destination encode at differing resolutions is day-one**, not a Phase-2 differentiator.
 2. **Cross-GPU frame transfer is a core path**, not the fallback edge case it was listed as.
-3. **The Vulkan-native encode path (ADR-0006) covers only the NVIDIA output.** `libertas probe`
+3. **The Vulkan-native encode path (ADR-0006) covers only the NVIDIA output.** `munkicast probe`
    confirms the Intel UHD 770 does **not** support `VK_KHR_video_encode_queue`, so the Intel output
    must go through QSV or VAAPI.
 
@@ -65,7 +65,7 @@ over VAAPI and therefore cannot create a session at all.
    Device choice is persisted in the project, because "Twitch on the iGPU, YouTube on the dGPU" is a
    deliberate user decision, not something to re-derive heuristically each launch.
 
-2. **Libertas sets `LIBVA_DRIVER_NAME` per encode worker**, derived from the target node's kernel
+2. **MunkiCast sets `LIBVA_DRIVER_NAME` per encode worker**, derived from the target node's kernel
    driver (`i915`/`xe` -> `iHD`, `amdgpu` -> `radeonsi`), rather than inheriting the session
    environment. Because this is a per-process environment variable and we need *different* values
    for different devices concurrently, **each VAAPI/QSV encoder runs in its own encode worker
@@ -106,9 +106,9 @@ processes.
 - **The spike's capture half gains a second question**: does cross-vendor NVIDIA -> Intel dmabuf
   import work with a linear modifier, or must we fall back to a sysmem roundtrip? Both paths ship
   regardless; the question is which is the default.
-- `libertas probe` must report, per render node: kernel driver, the libva driver actually bound, the
+- `munkicast probe` must report, per render node: kernel driver, the libva driver actually bound, the
   driver that *would* work if forced, available encode entrypoints, and
   `VK_KHR_video_encode_queue` support. Partly implemented; QSV session checking still to add.
 - Encode workers become their own process class in the supervision model.
 - **The development box is not the target.** All measurements here must be re-taken on the streaming
-  machine; `libertas probe` is the instrument for that.
+  machine; `munkicast probe` is the instrument for that.

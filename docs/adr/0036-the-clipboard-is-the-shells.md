@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: Libertas-Studio contributors
+SPDX-FileCopyrightText: MunkiCast contributors
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 # ADR 0036 — The clipboard is the shell's, and a paste keeps its coordinates

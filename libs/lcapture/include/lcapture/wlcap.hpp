@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
@@ -10,7 +10,7 @@
 #include <string>
 #include <vector>
 
-namespace libertas::capture {
+namespace munkicast::capture {
 
 /// One output, as the compositor names it. `name` is the connector ("DP-1"), which is the same
 /// identifier Hyprland and the portal's `mapping_id` use, so sources are comparable across
@@ -129,4 +129,4 @@ std::string wlcap_idle_reason(std::uint32_t idle_timeout_ms);
 /// major:minor of the dmabuf device, for matching against a Vulkan device's DRM properties.
 std::string wlcap_device_str(std::uint64_t dev);
 
-} // namespace libertas::capture
+} // namespace munkicast::capture

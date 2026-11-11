@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Which prepared form an asset should take (ADR-0069 stage 3), and the settings reading that
@@ -14,7 +14,7 @@
 
 #include "ltest.hpp"
 
-using namespace libertas::ui;
+using namespace munkicast::ui;
 
 namespace {
 

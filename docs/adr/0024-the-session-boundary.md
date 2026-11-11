@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: Libertas-Studio contributors
+SPDX-FileCopyrightText: MunkiCast contributors
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 # ADR 0024 — The session boundary exists before the process split does
@@ -10,10 +10,10 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 ## Context
 
-ADR-0005 puts the document in `libertas-session` and gives the UI zero authority over it. That
+ADR-0005 puts the document in `munkicast-session` and gives the UI zero authority over it. That
 process does not exist yet, and the UI needs a document now.
 
-The tempting move is to hold a `ldoc::Project` in `libertas-ui` and split it later. That is the
+The tempting move is to hold a `ldoc::Project` in `munkicast-ui` and split it later. That is the
 move that makes the split a rewrite: every place that reaches into the document directly, every
 repaint driven by a synchronous return value, and every error reported by an exception has to be
 found and changed, and the ones that are missed fail at runtime rather than at compile time.
@@ -80,7 +80,7 @@ turning a latent bug into a visible one, two layers up, is the argument for both
 
 ## Still open
 
-- **The process split itself**: `lipc`, `libertas-session`, and the proxy. This ADR is the
+- **The process split itself**: `lipc`, `munkicast-session`, and the proxy. This ADR is the
   preparation for it, not the thing.
 - **The action registry**, which is the next piece to sit on this boundary. Decided now so it is
   not decided by accident later: an action is **data** — `{id, title, scope, default_trigger}` —

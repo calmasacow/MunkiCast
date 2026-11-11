@@ -1,6 +1,6 @@
-# Native Libertas Studio MCP
+# Native MunkiCast MCP
 
-Libertas Studio contains its own MCP server. It calls the native application directly;
+MunkiCast contains its own MCP server. It calls the native application directly;
 it does not use the WebSocket listener, OBS protocol or Companion module. No Node.js
 process is needed for clients supporting Streamable HTTP.
 
@@ -12,7 +12,7 @@ connection with `Authorization: Bearer YOUR_TOKEN`. For clients using this forma
 ```json
 {
   "mcpServers": {
-    "libertas-studio": {
+    "munkicast": {
       "url": "http://127.0.0.1:4466/mcp",
       "headers": { "Authorization": "Bearer YOUR_TOKEN" }
     }
@@ -73,12 +73,12 @@ npm ci --prefix integrations/mcp
 ```json
 {
   "mcpServers": {
-    "libertas-studio": {
+    "munkicast": {
       "command": "node",
-      "args": ["/absolute/path/Libertas-Studio/integrations/mcp/main.js"],
+      "args": ["/absolute/path/MunkiCast/integrations/mcp/main.js"],
       "env": {
-        "LIBERTAS_MCP_URL": "http://127.0.0.1:4466/mcp",
-        "LIBERTAS_MCP_TOKEN_FILE": "/absolute/path/private/libertas-mcp-token"
+        "MUNKICAST_MCP_URL": "http://127.0.0.1:4466/mcp",
+        "MUNKICAST_MCP_TOKEN_FILE": "/absolute/path/private/munkicast-mcp-token"
       }
     }
   }
@@ -86,13 +86,13 @@ npm ci --prefix integrations/mcp
 ```
 
 The token file contains the token, optionally followed by a newline; use mode 600.
-`LIBERTAS_MCP_TOKEN` is also supported. The stdio process forwards to the native MCP
+`MUNKICAST_MCP_TOKEN` is also supported. The stdio process forwards to the native MCP
 server using the official SDK. It has no WebSocket settings or password. Version 2
 replaces the old 1.x WebSocket adapter; old adapter configuration is not compatible.
 
 ## Validation and remaining external work
 
-Run `./build-make/apps/libertas-ui/libertas-ui --check --check-mcp` with dependencies
+Run `./build-make/apps/munkicast-ui/munkicast-ui --check --check-mcp` with dependencies
 installed for SDK integration checks. `npm test --prefix integrations/mcp` checks stdio
 configuration validation. `npm pack` creates the optional stdio package.
 

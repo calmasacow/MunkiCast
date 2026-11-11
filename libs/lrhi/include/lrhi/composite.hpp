@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
@@ -6,7 +6,7 @@
 #include <lrhi/vulkan.hpp>
 #include <span>
 
-namespace libertas::rhi {
+namespace munkicast::rhi {
 
 /// A compositor-owned display slot. A foreign slot has been released by Wayland before
 /// being reused; the GPU must acquire ownership before overwriting it. Never write a slot
@@ -34,4 +34,4 @@ class GpuCompositor {
     std::unique_ptr<Impl> impl_;
 };
 
-} // namespace libertas::rhi
+} // namespace munkicast::rhi

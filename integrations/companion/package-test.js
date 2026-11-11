@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
@@ -7,7 +7,7 @@ import { mkdtemp, cp, rm } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 test('relocated Companion package registers through the real module IPC entrypoint', async () => {
-  const directory = await mkdtemp(join(tmpdir(), 'libertas-companion-'))
+  const directory = await mkdtemp(join(tmpdir(), 'munkicast-companion-'))
   let child
   try {
     await cp(new URL('./pkg', import.meta.url), directory, { recursive: true })

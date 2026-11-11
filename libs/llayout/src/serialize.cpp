@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "llayout/serialize.hpp"
@@ -76,7 +76,7 @@ std::string layout_body(const Layout& l, std::string_view table_prefix) {
 
 std::string to_toml(const Layout& l) {
     std::string out;
-    out += "# Libertas-Studio workspace layout.\n";
+    out += "# MunkiCast workspace layout.\n";
     out += "#\n";
     out += "# Proportions only. No pixel geometry is stored here (ADR-0015 rule 4), so this file\n";
     out += "# restores correctly at any resolution and on any monitor arrangement. It is safe to\n";
@@ -261,7 +261,7 @@ std::expected<Layout, std::string> layout_from_table(const toml::table& tbl, int
 
 std::string to_toml(const Workspaces& w) {
     std::string out;
-    out += "# Libertas-Studio saved workspaces.\n";
+    out += "# MunkiCast saved workspaces.\n";
     out += "#\n";
     out += "# Each [[workspace]] is one saved arrangement -- which panels are on screen and how\n";
     out += "# they are divided. These are not compositor workspaces: nothing here is an OS\n";

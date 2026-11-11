@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: Libertas-Studio contributors
+SPDX-FileCopyrightText: MunkiCast contributors
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 # ADR 0025 — When the show cannot be supervised, broadcast something safe
@@ -186,7 +186,7 @@ to black and silence — never to the live scene.
   objection to isolation was that an unsupervised broadcast may be worse than no broadcast; with
   a safe state, the isolated design keeps everything that is good about continuity and removes
   what was dangerous about it.
-- `libertas-render` owns the safe state and can enter it with no help from anything else. It
+- `munkicast-render` owns the safe state and can enter it with no help from anything else. It
   cannot depend on the UI, the session process, or a disk read at the moment of entry.
 - The document model grows `Canvas::emergency_scene`, plus the audio policy, the deadman interval
   and which outputs the fallback applies to. These are project state rather than settings, since a

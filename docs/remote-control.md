@@ -1,8 +1,8 @@
 # Remote control, OBS compatibility, Companion and MCP
 
-Start or restart the newly built `build/linux/apps/libertas-ui/libertas-ui`.
+Start or restart the newly built `build/linux/apps/munkicast-ui/munkicast-ui`.
 Tools > WebSocket Server Settings now places **Mode** directly below Password.
-Choose **Libertas Studio** for the native Companion module, or **OBS**
+Choose **MunkiCast** for the native Companion module, or **OBS**
 for an existing Companion OBS Studio connection. Apply persists the mode and
 restarts the listener, disconnecting existing clients. Default: native, port 4455.
 Existing settings without a mode migrate to native mode; native also accepts the
@@ -11,7 +11,7 @@ OBS transports, preserving existing replay clients.
 The native MCP server is separate: **Tools > MCP Server Settings**, default
 `http://127.0.0.1:4466/mcp`, with its own token. It works with WebSockets disabled.
 See [native MCP](native-mcp.md). Rebuild the directory you launch from; operators
-using `./build-make/apps/libertas-ui/libertas-ui` must rebuild `build-make`.
+using `./build-make/apps/munkicast-ui/munkicast-ui` must rebuild `build-make`.
 
 The listener binds all IPv4 interfaces, requires a password, limits clients to eight,
 limits incoming messages to 1 MiB, and times out unauthenticated connections after
@@ -20,8 +20,8 @@ permissions. The password grants full application control and access to files th
 application's user can access. Use a trusted control network or authenticated TLS
 tunnel; the built-in listener does not provide TLS.
 
-Environment overrides: `LIBERTAS_WEBSOCKET_PASSWORD`, `LIBERTAS_WEBSOCKET_PORT`,
-`LIBERTAS_WEBSOCKET_MODE=libertas|obs`. Overrides affect the running application;
+Environment overrides: `MUNKICAST_WEBSOCKET_PASSWORD`, `MUNKICAST_WEBSOCKET_PORT`,
+`MUNKICAST_WEBSOCKET_MODE=munkicast|obs`. Overrides affect the running application;
 Apply saves the selected values. `websocket.json` lives in the existing application
 configuration directory. `websocket-data.json` beside it stores OBS global data.
 Profile persistent data belongs to the current collection and is undoable.
@@ -32,7 +32,7 @@ Both modes use the OBS WebSocket v5 RPC 1 handshake and envelopes. JSON and
 MessagePack work, including the default MessagePack transport used by
 `obs-websocket-js` and Companion's OBS module. Supported subprotocols:
 `obswebsocket.json`, `obswebsocket.msgpack`; native additionally accepts
-`libertaswebsocket.json`. Authentication uses the standard SHA-256 challenge flow
+`munkicastwebsocket.json`. Authentication uses the standard SHA-256 challenge flow
 with a fresh salt/challenge per connection and constant-time proof comparison.
 The server never logs the password, proof, or request payload.
 
@@ -46,14 +46,14 @@ Document command batches are atomic; OBS request batches intentionally are not.
 Scene/input identifiers are the document's stable ULIDs in the OBS `*Uuid` fields.
 Numeric scene item IDs remain stable across edits, reordering and rename for the
 life of a listener. Reconnect/discover IDs after changing mode or restarting Studio.
-OBS list indices count from bottom to top; Libertas tree order is translated.
+OBS list indices count from bottom to top; MunkiCast tree order is translated.
 Use names only when unique. Main is the default program/preview deck; native
 methods expose every canvas/deck. Optional OBS canvas routing is implemented for
 scene lookup/listing/creation, not every newer OBS canvas-specific request.
 
 OBS mode exposes a numeric compatibility `obsVersion` of `32.0.0` so existing
 clients' version parsing works. `platformDescription` explicitly identifies
-Libertas Studio. This value does not claim the application contains OBS.
+MunkiCast. This value does not claim the application contains OBS.
 `GetVersion.availableRequests` advertises implemented requests only. Requests for
 unavailable features return failure status 204, not successful no-ops. Invalid
 fields, missing resources, busy outputs and renderer failures return explicit
@@ -65,20 +65,20 @@ Native mode includes the supported OBS-shaped operations plus:
 
 | Request | Result |
 | --- | --- |
-| `LibertasGetState` | Revision, Main deck, real stream/record/replay state, output pending state, paths and render statistics. |
-| `LibertasGetProject` | Project manifest, complete scene documents and assets. Stream credentials are not stored in the document. |
-| `LibertasGetCapabilities` | Every request's availability/schema plus document methods. |
-| `LibertasGetMethods` | Exact invokable document signatures, named arguments, return types, including overloads/default-argument forms. |
-| `LibertasGetCommandTemplates` | Every command variant serialized with its fields. Replace template IDs/values with valid project values. |
-| `LibertasInvoke` | Invoke an advertised signature with a positional `arguments` array. Only public, typed document invokables are eligible; QObject internals/signals are excluded. |
-| `LibertasExecuteCommand` | Parse and apply a document command through the existing validated session bus. Atomic batches, journal persistence, undo and failure handling are preserved. |
-| `LibertasGetScreenshot` | Base64 PNG of a canvas's current program frame for agents to inspect. |
+| `MunkiCastGetState` | Revision, Main deck, real stream/record/replay state, output pending state, paths and render statistics. |
+| `MunkiCastGetProject` | Project manifest, complete scene documents and assets. Stream credentials are not stored in the document. |
+| `MunkiCastGetCapabilities` | Every request's availability/schema plus document methods. |
+| `MunkiCastGetMethods` | Exact invokable document signatures, named arguments, return types, including overloads/default-argument forms. |
+| `MunkiCastGetCommandTemplates` | Every command variant serialized with its fields. Replace template IDs/values with valid project values. |
+| `MunkiCastInvoke` | Invoke an advertised signature with a positional `arguments` array. Only public, typed document invokables are eligible; QObject internals/signals are excluded. |
+| `MunkiCastExecuteCommand` | Parse and apply a document command through the existing validated session bus. Atomic batches, journal persistence, undo and failure handling are preserved. |
+| `MunkiCastGetScreenshot` | Base64 PNG of a canvas's current program frame for agents to inspect. |
 
 For example:
 
 ```json
-{"op":6,"d":{"requestId":"rename","requestType":"LibertasExecuteCommand","requestData":{"command":{"cmd":"project.set-name","name":"Evening show"}}}}
-{"op":6,"d":{"requestId":"undo","requestType":"LibertasInvoke","requestData":{"method":"undo()","arguments":[]}}}
+{"op":6,"d":{"requestId":"rename","requestType":"MunkiCastExecuteCommand","requestData":{"command":{"cmd":"project.set-name","name":"Evening show"}}}}
+{"op":6,"d":{"requestId":"undo","requestType":"MunkiCastInvoke","requestData":{"method":"undo()","arguments":[]}}}
 ```
 
 This exposes the existing document features, including canvases, linked scenes,
@@ -88,9 +88,9 @@ signatures and command templates rather than guessing serialized command fields.
 Runtime availability of sources/encoders still depends on devices, drivers and
 renderer capabilities; remote control does not fabricate hardware support.
 
-OBS mode isolates direct `Libertas*` requests. An integration needing native
+OBS mode isolates direct `MunkiCast*` requests. An integration needing native
 operations from an OBS connection can use standard `CallVendorRequest` with
-`vendorName: "libertas-studio"`, the native `requestType`, and `requestData`.
+`vendorName: "munkicast"`, the native `requestType`, and `requestData`.
 
 ## Output and feedback behavior
 
@@ -106,7 +106,7 @@ Events include scene create/remove/rename/list, program/preview changes, input
 create/remove/rename/settings/mute/volume/monitor changes, filter stack changes,
 scene item creation/removal/visibility/lock/order/blend/transform changes, Studio
 Mode and transition selection/duration, output state, replay saved, custom events,
-and native `LibertasStateChanged`. Transform events use the OBS high-volume
+and native `MunkiCastStateChanged`. Transform events use the OBS high-volume
 SceneItemTransformChanged subscription bit. Native state events use Vendors (512).
 The full OBS event catalog, volume meters and transition-frame timing are not
 claimed; unimplemented event telemetry is a remaining compatibility gap.
@@ -130,7 +130,7 @@ has no equivalent.
 | Stream service | Reads configured RTMP/RTMPS destination; updates custom server URL. Keys stay in the existing secret-store path. | Complete asynchronous remote secret-store writes before accepting `key`; do not put keys in project JSON. |
 | Statistics | Render/output frame counters, FPS, render time, disk space, UI-process CPU/RSS and per-client message counters. Some output status fields are zero/false placeholders because per-output bytes/congestion/reconnection telemetry is absent. | Extend renderer IPC telemetry; do not interpret placeholder zeros as measured network health. |
 | Hotkeys | Advertises available native action refs; triggers by name or mapped existing keyboard binding. No OS key injection. | Extend the explicit key ID map for additional keys; configure bindings in Studio. |
-| Profiles | Lists a single `Libertas Studio` compatibility profile. Collections and encoder presets are native concepts. | Decide whether a separate OBS-style global profile model is wanted before implementing profile CRUD/INI parameters. |
+| Profiles | Lists a single `MunkiCast` compatibility profile. Collections and encoder presets are native concepts. | Decide whether a separate OBS-style global profile model is wanted before implementing profile CRUD/INI parameters. |
 | Media playback | Files render, but runtime seek/pause/restart/cursor/status controls have no renderer IPC interface. | Add media transport commands and playback telemetry, then map the four media requests and Companion actions. |
 | Deinterlacing | No native per-input deinterlace mode/field-order controls. | Add decoder/capture processing settings with runtime support checks. |
 | Recording pause/split/chapters | No corresponding renderer operations. | Add recorder commands, acknowledgement/state, timestamp continuity and playable-file tests. |
@@ -151,9 +151,9 @@ npm test --prefix integrations/companion
 npm run package --prefix integrations/companion
 ```
 
-Import `integrations/companion/libertas-studio-1.0.0.tgz` in Companion's module
-manager. Add **Libertas / Studio**, configure host, port and password. The module uses Companion’s secret field/store for the password. Select
-**Libertas Studio** mode in Studio. Presets include scenes and output toggles;
+Import `integrations/companion/munkicast-1.0.0.tgz` in Companion's module
+manager. Add **MunkiCast / Studio**, configure host, port and password. The module uses Companion’s secret field/store for the password. Select
+**MunkiCast** mode in Studio. Presets include scenes and output toggles;
 actions/feedback/variables cover program, preview, Take, Studio Mode, mute, volume,
 streaming, recording and replay. Generic request, serialized command and native
 method actions expose the full advertised control surface. See the bundled HELP.
@@ -194,7 +194,7 @@ external acceptance work:
 
 1. **Actual Companion installation and button bank:** import the archive, connect
    the existing OBS module in OBS mode, try a representative button bank; then use
-   the native module in Libertas Studio mode. Record Companion version, module
+   the native module in MunkiCast mode. Record Companion version, module
    version, failed request/status and intended behavior. Physical hardware/that
    installation are not present in this workspace.
 2. **Real streaming destination:** provide an armed RTMP/RTMPS destination with
@@ -213,7 +213,7 @@ external acceptance work:
 
 115 of 147 OBS request names have implementations, including the partial mappings explicitly identified below. Native adds 8 discovery/control requests. These counts are not feature-parity percentages.
 
-Schema/description baseline: [OBS WebSocket generated protocol](https://github.com/obsproject/obs-websocket/blob/master/docs/generated/protocol.json), retrieved 2026-10-28. Machine-readable copy: `apps/libertas-ui/data/remote-protocol.json`. Runtime discovery comes from the same file.
+Schema/description baseline: [OBS WebSocket generated protocol](https://github.com/obsproject/obs-websocket/blob/master/docs/generated/protocol.json), retrieved 2026-10-28. Machine-readable copy: `apps/munkicast-ui/data/remote-protocol.json`. Runtime discovery comes from the same file.
 
 | Request | Status | Limitation / missing feature |
 | --- | --- | --- |
@@ -223,7 +223,7 @@ Schema/description baseline: [OBS WebSocket generated protocol](https://github.c
 | `GetSceneCollectionList` | Implemented |  |
 | `SetCurrentSceneCollection` | Implemented |  |
 | `CreateSceneCollection` | Implemented |  |
-| `GetProfileList` | Partial | Single compatibility profile, Libertas Studio. |
+| `GetProfileList` | Partial | Single compatibility profile, MunkiCast. |
 | `SetCurrentProfile` | Unavailable | No OBS-style global profile/INI model. Native collections and encoder presets are available. |
 | `CreateProfile` | Unavailable | No OBS-style global profile/INI model. Native collections and encoder presets are available. |
 | `RemoveProfile` | Unavailable | No OBS-style global profile/INI model. Native collections and encoder presets are available. |
@@ -248,7 +248,7 @@ Schema/description baseline: [OBS WebSocket generated protocol](https://github.c
 | `GetVersion` | Implemented |  |
 | `GetStats` | Partial | UI-process CPU/RSS; frame statistics from renderer; some output/network metrics unavailable. Session counters are per client. |
 | `BroadcastCustomEvent` | Implemented |  |
-| `CallVendorRequest` | Partial | libertas-studio native request tunnel only; OBS plugins are not loaded. |
+| `CallVendorRequest` | Partial | munkicast native request tunnel only; OBS plugins are not loaded. |
 | `GetHotkeyList` | Implemented |  |
 | `TriggerHotkeyByName` | Implemented |  |
 | `TriggerHotkeyByKeySequence` | Implemented |  |
@@ -286,9 +286,9 @@ Schema/description baseline: [OBS WebSocket generated protocol](https://github.c
 | `OffsetMediaInputCursor` | Unavailable | No renderer media transport/cursor/status IPC. Add acknowledged playback controls and telemetry. |
 | `TriggerMediaInputAction` | Unavailable | No renderer media transport/cursor/status IPC. Add acknowledged playback controls and telemetry. |
 | `GetVirtualCamStatus` | Partial | Reports inactive; no native virtual camera destination exists. |
-| `ToggleVirtualCam` | Unavailable | No OBS-compatible mapping implemented. Native Libertas controls remain available through LibertasGetMethods/LibertasInvoke; see the parity report. |
-| `StartVirtualCam` | Unavailable | No OBS-compatible mapping implemented. Native Libertas controls remain available through LibertasGetMethods/LibertasInvoke; see the parity report. |
-| `StopVirtualCam` | Unavailable | No OBS-compatible mapping implemented. Native Libertas controls remain available through LibertasGetMethods/LibertasInvoke; see the parity report. |
+| `ToggleVirtualCam` | Unavailable | No OBS-compatible mapping implemented. Native MunkiCast controls remain available through MunkiCastGetMethods/MunkiCastInvoke; see the parity report. |
+| `StartVirtualCam` | Unavailable | No OBS-compatible mapping implemented. Native MunkiCast controls remain available through MunkiCastGetMethods/MunkiCastInvoke; see the parity report. |
+| `StopVirtualCam` | Unavailable | No OBS-compatible mapping implemented. Native MunkiCast controls remain available through MunkiCastGetMethods/MunkiCastInvoke; see the parity report. |
 | `GetReplayBufferStatus` | Implemented |  |
 | `ToggleReplayBuffer` | Implemented |  |
 | `StartReplayBuffer` | Implemented |  |
@@ -364,19 +364,19 @@ Schema/description baseline: [OBS WebSocket generated protocol](https://github.c
 | `GetMonitorList` | Implemented |  |
 | `OpenVideoMixProjector` | Unavailable | Native Program/Preview GPU projectors exist; OBS request/geometry and multiview mapping remain pending. |
 | `OpenSourceProjector` | Unavailable | No native source projector windows/API. |
-| `LibertasGetState` | Implemented |  |
-| `LibertasGetProject` | Implemented |  |
-| `LibertasGetMethods` | Implemented |  |
-| `LibertasGetCapabilities` | Implemented |  |
-| `LibertasInvoke` | Implemented |  |
-| `LibertasExecuteCommand` | Implemented |  |
-| `LibertasGetScreenshot` | Implemented |  |
-| `LibertasGetCommandTemplates` | Implemented |  |
+| `MunkiCastGetState` | Implemented |  |
+| `MunkiCastGetProject` | Implemented |  |
+| `MunkiCastGetMethods` | Implemented |  |
+| `MunkiCastGetCapabilities` | Implemented |  |
+| `MunkiCastInvoke` | Implemented |  |
+| `MunkiCastExecuteCommand` | Implemented |  |
+| `MunkiCastGetScreenshot` | Implemented |  |
+| `MunkiCastGetCommandTemplates` | Implemented |  |
 
 ## Prior remote-control baseline
 
 - `cmake --preset linux` and `cmake --build --preset linux -j 6`: passed;
-  `LIBERTAS_WERROR=ON` in the configured build.
+  `MUNKICAST_WERROR=ON` in the configured build.
 - `ctest --preset linux`: 38 passed, 1 GPU composite test skipped, 0 failures.
 - Expanded remote/Companion/MCP checks: passed after the final changes.
 - Companion archive: built; relocated package registered through the actual module
@@ -388,6 +388,6 @@ Schema/description baseline: [OBS WebSocket generated protocol](https://github.c
 - WebSocket settings screenshot rendered and inspected:
   `build/remote/screenshots/websocket-settings.png`.
 
-Ready-to-import archives: `build/remote/libertas-studio-1.0.1.tgz` and
-`build/remote/libertas-studio-mcp-2.0.0.tgz`. Generated archives/build products are
+Ready-to-import archives: `build/remote/munkicast-1.0.1.tgz` and
+`build/remote/munkicast-mcp-2.0.0.tgz`. Generated archives/build products are
 ignored by git; package sources and lockfiles remain in `integrations/`.

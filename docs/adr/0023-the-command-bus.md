@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: Libertas-Studio contributors
+SPDX-FileCopyrightText: MunkiCast contributors
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 # ADR 0023 — Every mutation is a command, and every command carries its own undo
@@ -72,7 +72,7 @@ ones that do.
 
 ## The journal
 
-`.libertas/journal.jsonl`: one JSON object per line, appended and **fsynced as each command is
+`.munkicast/journal.jsonl`: one JSON object per line, appended and **fsynced as each command is
 applied**, tagged with the generation of the saved project it was applied to. On open, the entries
 tagged with the generation actually loaded are replayed; saving commits a new generation and
 clears it.
@@ -113,5 +113,5 @@ Both are now dedicated cases alongside the random sequences, because a property 
 - The 20 commands here cover scenes, nodes, effects and decks. Canvases, buses, sources, assets
   and outputs are still edited by touching the model directly, which means those edits are not
   undoable. They follow the same pattern and are mechanical.
-- Command ids and an author field, for the multi-process story: `libertas-session` owns the
+- Command ids and an author field, for the multi-process story: `munkicast-session` owns the
   document and everything else sends it commands.

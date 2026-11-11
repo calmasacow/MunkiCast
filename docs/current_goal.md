@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: Libertas-Studio contributors
+SPDX-FileCopyrightText: MunkiCast contributors
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 # Current status
@@ -59,7 +59,7 @@ notes are preserved in [development-history.md](development-history.md).
   is not yet isolated. The cadence checker now uses sampling-only diagnostics.
 - Encoder graph settings/presets, destination catalog, keyring-backed stream keys,
   Twitch/YouTube authorization flows, and prepared asset caching.
-- Libertas/OBS WebSocket modes, native Companion module with Studio Mode toggle and
+- MunkiCast/OBS WebSocket modes, native Companion module with Studio Mode toggle and
   timecode presets, and an independent native HTTP MCP server with document and UI
   control. MCP defaults to loopback port 4466; WebSockets default to port 4455.
   See [remote control](remote-control.md), [MCP coverage](native-mcp.md), and
@@ -90,7 +90,7 @@ No live destinations or saved operator collections are needed for the panel chec
 
 ## Launch recovery: 2026-11-09
 
-The root/home Btrfs filesystem reached 100% usage (64 KiB available). Libertas
+The root/home Btrfs filesystem reached 100% usage (64 KiB available). MunkiCast
 failed with SIGBUS in Chromium's cache thread; the separate Omcontrol desktop
 plugin's Python/SQLite processes also failed with SIGBUS. The journal could not
 store their dumps because the disk was full. No stored core was available to
@@ -113,8 +113,8 @@ Cache lifecycle and disk-full acceptance remain in [todo.md](todo.md).
 Rebuild the directory used to launch the application:
 
 ```sh
-cmake --build build-make --target libertas-ui -j8
-./build-make/apps/libertas-ui/libertas-ui
+cmake --build build-make --target munkicast-ui -j8
+./build-make/apps/munkicast-ui/munkicast-ui
 ctest --test-dir build-make -R panel_loading_self_check --output-on-failure
 ctest --test-dir build-make --output-on-failure
 ```

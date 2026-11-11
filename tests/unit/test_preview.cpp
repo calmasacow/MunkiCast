@@ -1,7 +1,7 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
-// Drives the real libertas-render binary. A test that called composite_canvas in-process would
+// Drives the real munkicast-render binary. A test that called composite_canvas in-process would
 // pass with the process boundary broken, which is the boundary this preview exists to prove.
 
 #include "lcomp/preview.hpp"
@@ -33,8 +33,8 @@ extern "C" {
 #include <libswscale/swscale.h>
 }
 
-#ifndef LIBERTAS_RENDER
-#error "LIBERTAS_RENDER must name the libertas-render binary"
+#ifndef MUNKICAST_RENDER
+#error "MUNKICAST_RENDER must name the munkicast-render binary"
 #endif
 
 namespace {
@@ -138,7 +138,7 @@ LTEST_CASE(browser_scene_switch_preserves_page_unless_shutdown_is_enabled) {
     for (bool shutdown : {false, true}) {
         auto ends = lipc::Channel::pair();
         REQUIRE(ends);
-        auto child = lcomp::spawn_renderer(LIBERTAS_RENDER, std::move(ends->second).take_socket());
+        auto child = lcomp::spawn_renderer(MUNKICAST_RENDER, std::move(ends->second).take_socket());
         REQUIRE(child);
         lcomp::PreviewLink link{std::move(ends->first)};
         REQUIRE(link.take_hello(5000));
@@ -148,7 +148,7 @@ LTEST_CASE(browser_scene_switch_preserves_page_unless_shutdown_is_enabled) {
         browser.settings["width"] = std::int64_t{64};
         browser.settings["height"] = std::int64_t{32};
         browser.settings["ignoreAudio"] = true;
-        browser.settings["url"] = std::string("file://") + LIBERTAS_IMAGE_FIXTURES +
+        browser.settings["url"] = std::string("file://") + MUNKICAST_IMAGE_FIXTURES +
                                   "/browser-lifecycle.html";
         // Absence must preserve the page for existing projects as well as new sources.
         if (shutdown) browser.settings["shutdownWhenHidden"] = true;
@@ -210,7 +210,7 @@ LTEST_CASE(browser_scene_switch_preserves_page_unless_shutdown_is_enabled) {
 static void output_writes_playable_video_and_routed_audio(bool streaming, int shared = 0) {
     auto ends = lipc::Channel::pair();
     REQUIRE(ends);
-    auto child = lcomp::spawn_renderer(LIBERTAS_RENDER, std::move(ends->second).take_socket());
+    auto child = lcomp::spawn_renderer(MUNKICAST_RENDER, std::move(ends->second).take_socket());
     REQUIRE(child);
     lcomp::PreviewLink link{std::move(ends->first)};
     REQUIRE(link.take_hello(5000));
@@ -220,7 +220,7 @@ static void output_writes_playable_video_and_routed_audio(bool streaming, int sh
     red.settings["height"] = std::int64_t{64};
     auto tone = colour_source(0, 0, 0);
     tone.type = "source.media";
-    tone.settings["localFile"] = std::string(LIBERTAS_IMAGE_FIXTURES) + "/alpha-tone.webm";
+    tone.settings["localFile"] = std::string(MUNKICAST_IMAGE_FIXTURES) + "/alpha-tone.webm";
     tone.settings["loop"] = true;
     auto background = bound_to(red);
     background.layout.fit = ldoc::FitMode::Stretch;
@@ -266,7 +266,7 @@ static void output_writes_playable_video_and_routed_audio(bool streaming, int sh
     }
     if (shared) project.outputs[1].audio_encode = audio.id;
     const auto path = std::filesystem::temp_directory_path() /
-                      ("libertas-record-" + video.id.to_string() + ".mkv");
+                      ("munkicast-record-" + video.id.to_string() + ".mkv");
     const auto simultaneous = path.string() + ".local.mkv";
 
     struct Listener {
@@ -297,7 +297,7 @@ static void output_writes_playable_video_and_routed_audio(bool streaming, int sh
         listener.pid = ::fork();
         REQUIRE(listener.pid >= 0);
         if (listener.pid == 0) {
-            ::execl(LIBERTAS_TEST_FFMPEG, LIBERTAS_TEST_FFMPEG, "-nostdin", "-v", "error",
+            ::execl(MUNKICAST_TEST_FFMPEG, MUNKICAST_TEST_FFMPEG, "-nostdin", "-v", "error",
                     "-listen", "1", "-timeout", "10", "-i", address.c_str(), "-c", "copy", "-f",
                     "matroska", path.c_str(), nullptr);
             ::_exit(127);
@@ -484,7 +484,7 @@ LTEST_CASE(shared_encode_can_start_stream_then_record_and_stop_stream_independen
 LTEST_CASE(recording_failure_reaches_the_client_without_killing_preview) {
     auto ends = lipc::Channel::pair();
     REQUIRE(ends);
-    auto child = lcomp::spawn_renderer(LIBERTAS_RENDER, std::move(ends->second).take_socket());
+    auto child = lcomp::spawn_renderer(MUNKICAST_RENDER, std::move(ends->second).take_socket());
     REQUIRE(child);
     lcomp::PreviewLink link{std::move(ends->first)};
     REQUIRE(link.take_hello(5000));
@@ -497,7 +497,7 @@ LTEST_CASE(recording_failure_reaches_the_client_without_killing_preview) {
     video.encoder.preset = "ultrafast";
     project.encodes.push_back(video);
     const auto path = std::filesystem::temp_directory_path() /
-                      ("libertas-failure-" + video.id.to_string() + ".mkv");
+                      ("munkicast-failure-" + video.id.to_string() + ".mkv");
     commit(link, project);
     REQUIRE(link.send_record({true, video.id, path.string()}));
     bool started = false;
@@ -697,11 +697,11 @@ LTEST_CASE(projector_clock_survives_paused_ui_without_changing_recording_cadence
 
 // Explicit opt-in: opens a short-lived window on the current desktop, never an operator show.
 LTEST_CASE(native_projector_presents_gpu_frames_while_ui_is_paused) {
-    if (!std::getenv("LIBERTAS_TEST_PROJECTORS"))
+    if (!std::getenv("MUNKICAST_TEST_PROJECTORS"))
         return;
     auto ends = lipc::Channel::pair();
     REQUIRE(ends);
-    auto child = lcomp::spawn_renderer(LIBERTAS_RENDER, std::move(ends->second).take_socket());
+    auto child = lcomp::spawn_renderer(MUNKICAST_RENDER, std::move(ends->second).take_socket());
     REQUIRE(child);
 
     struct Child {
@@ -760,7 +760,7 @@ LTEST_CASE(native_projector_presents_gpu_frames_while_ui_is_paused) {
     std::fprintf(stderr, "PROJECTOR_NATIVE %s\n", status.c_str());
     status = command(R"({"closeAll":true})");
     CHECK(status.find(R"("windows":[])") != std::string::npos);
-    if (const char* monitor = std::getenv("LIBERTAS_TEST_PROJECTOR_FULLSCREEN")) {
+    if (const char* monitor = std::getenv("MUNKICAST_TEST_PROJECTOR_FULLSCREEN")) {
         // Explicit second opt-in: the selected monitor briefly shows this test's fullscreen.
         command(std::format(R"({{"id":3,"canvas":"{}","fullscreen":true,"screen":"{}"}})",
                             project.canvases[0].id.to_string(), monitor));
@@ -1004,7 +1004,7 @@ LTEST_CASE(a_picture_crosses_the_process_and_the_renderer_exits_when_the_client_
     {
         auto ends = lipc::Channel::pair();
         REQUIRE_MSG(ends.has_value(), "{}", ends.error());
-        auto pid = lcomp::spawn_renderer(LIBERTAS_RENDER, std::move(ends->second).take_socket());
+        auto pid = lcomp::spawn_renderer(MUNKICAST_RENDER, std::move(ends->second).take_socket());
         REQUIRE_MSG(pid.has_value(), "{}", pid.error());
 
         lcomp::PreviewLink link{std::move(ends->first)};
@@ -1114,7 +1114,7 @@ LTEST_CASE(a_picture_crosses_the_process_and_the_renderer_exits_when_the_client_
 LTEST_CASE(text_source_crosses_worker_and_renderer_and_obeys_placement) {
     auto ends = lipc::Channel::pair();
     REQUIRE(ends.has_value());
-    auto child = lcomp::spawn_renderer(LIBERTAS_RENDER, std::move(ends->second).take_socket());
+    auto child = lcomp::spawn_renderer(MUNKICAST_RENDER, std::move(ends->second).take_socket());
     REQUIRE(child.has_value());
     lcomp::PreviewLink link{std::move(ends->first)};
     REQUIRE(link.take_hello(2000).has_value());
@@ -1155,13 +1155,13 @@ LTEST_CASE(text_source_crosses_worker_and_renderer_and_obeys_placement) {
 LTEST_CASE(native_alpha_media_crosses_worker_and_keeps_authored_box_and_letterboxing) {
     auto ends = lipc::Channel::pair();
     REQUIRE(ends);
-    auto child = lcomp::spawn_renderer(LIBERTAS_RENDER, std::move(ends->second).take_socket());
+    auto child = lcomp::spawn_renderer(MUNKICAST_RENDER, std::move(ends->second).take_socket());
     REQUIRE(child);
     lcomp::PreviewLink link{std::move(ends->first)};
     REQUIRE(link.take_hello(2000));
     auto source = colour_source(0, 0, 0);
     source.type = "source.media";
-    source.settings["localFile"] = std::string(LIBERTAS_IMAGE_FIXTURES) + "/alpha.webm";
+    source.settings["localFile"] = std::string(MUNKICAST_IMAGE_FIXTURES) + "/alpha.webm";
     source.settings["width"] = std::int64_t{32};
     source.settings["height"] = std::int64_t{32};
     auto node = bound_to(source);
@@ -1192,7 +1192,7 @@ LTEST_CASE(native_alpha_media_crosses_worker_and_keeps_authored_box_and_letterbo
 LTEST_CASE(manual_fades_render_intermediate_frames_and_can_be_reversed) {
     auto ends = lipc::Channel::pair();
     REQUIRE(ends);
-    auto child = lcomp::spawn_renderer(LIBERTAS_RENDER, std::move(ends->second).take_socket());
+    auto child = lcomp::spawn_renderer(MUNKICAST_RENDER, std::move(ends->second).take_socket());
     REQUIRE(child);
     lcomp::PreviewLink link{std::move(ends->first)};
     REQUIRE(link.take_hello(2000));
@@ -1251,13 +1251,13 @@ LTEST_CASE(manual_fades_render_intermediate_frames_and_can_be_reversed) {
 LTEST_CASE(manual_fades_scale_audio_and_preview_decks_stay_silent) {
     auto ends = lipc::Channel::pair();
     REQUIRE(ends);
-    auto child = lcomp::spawn_renderer(LIBERTAS_RENDER, std::move(ends->second).take_socket());
+    auto child = lcomp::spawn_renderer(MUNKICAST_RENDER, std::move(ends->second).take_socket());
     REQUIRE(child);
     lcomp::PreviewLink link{std::move(ends->first)};
     REQUIRE(link.take_hello(2000));
     auto tone = colour_source(0, 0, 0);
     tone.type = "source.media";
-    tone.settings["localFile"] = std::string(LIBERTAS_IMAGE_FIXTURES) + "/alpha-tone.webm";
+    tone.settings["localFile"] = std::string(MUNKICAST_IMAGE_FIXTURES) + "/alpha-tone.webm";
     tone.settings["loop"] = true;
     ldoc::Scene audible;
     audible.id = ldoc::Id::generate(); audible.roots = {bound_to(tone)};
@@ -1309,7 +1309,7 @@ LTEST_CASE(manual_fades_scale_audio_and_preview_decks_stay_silent) {
 LTEST_CASE(stinger_overlays_alpha_switches_at_cut_and_routes_audio) {
     auto ends = lipc::Channel::pair();
     REQUIRE(ends);
-    auto child = lcomp::spawn_renderer(LIBERTAS_RENDER, std::move(ends->second).take_socket());
+    auto child = lcomp::spawn_renderer(MUNKICAST_RENDER, std::move(ends->second).take_socket());
     REQUIRE(child);
     lcomp::PreviewLink link{std::move(ends->first)};
     REQUIRE(link.take_hello(2000));
@@ -1321,7 +1321,7 @@ LTEST_CASE(stinger_overlays_alpha_switches_at_cut_and_routes_audio) {
     auto stinger = blue;
     stinger.id = ldoc::Id::generate();
     stinger.type = "source.media";
-    stinger.settings["localFile"] = std::string(LIBERTAS_IMAGE_FIXTURES) + "/alpha-tone.webm";
+    stinger.settings["localFile"] = std::string(MUNKICAST_IMAGE_FIXTURES) + "/alpha-tone.webm";
     stinger.settings["transitionStinger"] = true;
     stinger.settings["loop"] = false;
     stinger.settings["stingerCutMs"] = std::int64_t{500};
@@ -1374,15 +1374,15 @@ LTEST_CASE(stinger_overlays_alpha_switches_at_cut_and_routes_audio) {
 LTEST_CASE(inactive_media_is_preloaded_for_first_scene_cut) {
     auto ends = lipc::Channel::pair();
     REQUIRE(ends);
-    auto child = lcomp::spawn_renderer(LIBERTAS_RENDER, std::move(ends->second).take_socket());
+    auto child = lcomp::spawn_renderer(MUNKICAST_RENDER, std::move(ends->second).take_socket());
     REQUIRE(child);
     lcomp::PreviewLink link{std::move(ends->first)};
     REQUIRE(link.take_hello(2000));
     auto source = colour_source(0, 0, 0);
     source.type = "source.media";
-    const auto* actual = std::getenv("LIBERTAS_BENCH_MEDIA");
+    const auto* actual = std::getenv("MUNKICAST_BENCH_MEDIA");
     source.settings["localFile"] = actual ? std::string(actual)
-                                           : std::string(LIBERTAS_IMAGE_FIXTURES) + "/motion.mkv";
+                                           : std::string(MUNKICAST_IMAGE_FIXTURES) + "/motion.mkv";
     source.settings["loop"] = true;
     source.settings["restartOnActivate"] = false;
     ldoc::Scene media;
@@ -1421,13 +1421,13 @@ LTEST_CASE(inactive_media_is_preloaded_for_first_scene_cut) {
 LTEST_CASE(media_audio_crosses_worker_mixer_and_meter_transport) {
     auto ends = lipc::Channel::pair();
     REQUIRE(ends.has_value());
-    auto child = lcomp::spawn_renderer(LIBERTAS_RENDER, std::move(ends->second).take_socket());
+    auto child = lcomp::spawn_renderer(MUNKICAST_RENDER, std::move(ends->second).take_socket());
     REQUIRE(child.has_value());
     lcomp::PreviewLink link{std::move(ends->first)};
     REQUIRE(link.take_hello(2000).has_value());
     auto source = colour_source(0, 0, 0);
     source.type = "source.media";
-    source.settings["localFile"] = std::string(LIBERTAS_IMAGE_FIXTURES) + "/motion-tone.mkv";
+    source.settings["localFile"] = std::string(MUNKICAST_IMAGE_FIXTURES) + "/motion-tone.mkv";
     source.settings["width"] = std::int64_t{32};
     source.settings["height"] = std::int64_t{24};
     auto node = bound_to(source);
@@ -1519,13 +1519,13 @@ LTEST_CASE(media_audio_crosses_worker_mixer_and_meter_transport) {
 LTEST_CASE(source_clone_audio_uses_original_worker_and_independent_route) {
     auto ends = lipc::Channel::pair();
     REQUIRE(ends.has_value());
-    auto child = lcomp::spawn_renderer(LIBERTAS_RENDER, std::move(ends->second).take_socket());
+    auto child = lcomp::spawn_renderer(MUNKICAST_RENDER, std::move(ends->second).take_socket());
     REQUIRE(child.has_value());
     lcomp::PreviewLink link{std::move(ends->first)};
     REQUIRE(link.take_hello(2000).has_value());
     auto source = colour_source(0, 0, 0);
     source.type = "source.media";
-    source.settings["localFile"] = std::string(LIBERTAS_IMAGE_FIXTURES) + "/motion-tone.mkv";
+    source.settings["localFile"] = std::string(MUNKICAST_IMAGE_FIXTURES) + "/motion-tone.mkv";
     source.settings["width"] = std::int64_t{32};
     source.settings["height"] = std::int64_t{24};
     auto clone = source;
@@ -1590,7 +1590,7 @@ LTEST_CASE(source_clone_audio_uses_original_worker_and_independent_route) {
 LTEST_CASE(static_filter_preview_does_not_stop_program_scroll_animation) {
     auto ends = lipc::Channel::pair();
     REQUIRE(ends);
-    auto child = lcomp::spawn_renderer(LIBERTAS_RENDER, std::move(ends->second).take_socket());
+    auto child = lcomp::spawn_renderer(MUNKICAST_RENDER, std::move(ends->second).take_socket());
     REQUIRE(child);
     lcomp::PreviewLink link{std::move(ends->first)};
     REQUIRE(link.take_hello(2000));
@@ -1626,12 +1626,12 @@ LTEST_CASE(static_filter_preview_does_not_stop_program_scroll_animation) {
 }
 
 LTEST_CASE(monitoring_routes_real_renderer_audio_to_selected_sink_and_none) {
-    if (!std::getenv("LIBERTAS_TEST_MONITOR"))
+    if (!std::getenv("MUNKICAST_TEST_MONITOR"))
         return;
     std::string error;
-    const auto base = "libertas_monitor_test_" + ldoc::Id::generate().to_string();
-    auto sink1 = libertas::capture::AudioSink::open(base + "_1", error);
-    auto sink2 = libertas::capture::AudioSink::open(base + "_2", error);
+    const auto base = "munkicast_monitor_test_" + ldoc::Id::generate().to_string();
+    auto sink1 = munkicast::capture::AudioSink::open(base + "_1", error);
+    auto sink2 = munkicast::capture::AudioSink::open(base + "_2", error);
     REQUIRE_MSG(sink1 && sink2, "{}", error);
 
     struct Signal {
@@ -1650,20 +1650,20 @@ LTEST_CASE(monitoring_routes_real_renderer_audio_to_selected_sink_and_none) {
         }
     } first, second;
 
-    auto capture1 = libertas::capture::AudioCapture::open(
+    auto capture1 = munkicast::capture::AudioCapture::open(
         base + "_1.monitor", true, [&](auto samples) { first.add(samples); }, error);
-    auto capture2 = libertas::capture::AudioCapture::open(
+    auto capture2 = munkicast::capture::AudioCapture::open(
         base + "_2.monitor", true, [&](auto samples) { second.add(samples); }, error);
     REQUIRE_MSG(capture1 && capture2, "{}", error);
     auto ends = lipc::Channel::pair();
     REQUIRE(ends);
-    auto child = lcomp::spawn_renderer(LIBERTAS_RENDER, std::move(ends->second).take_socket());
+    auto child = lcomp::spawn_renderer(MUNKICAST_RENDER, std::move(ends->second).take_socket());
     REQUIRE(child);
     lcomp::PreviewLink link{std::move(ends->first)};
     REQUIRE(link.take_hello(2000));
     auto source = colour_source(0, 0, 0);
     source.type = "source.media";
-    source.settings["localFile"] = std::string(LIBERTAS_IMAGE_FIXTURES) + "/motion-tone.mkv";
+    source.settings["localFile"] = std::string(MUNKICAST_IMAGE_FIXTURES) + "/motion-tone.mkv";
     source.settings["loop"] = true;
     auto node = bound_to(source);
     std::get<ldoc::SourceData>(node.data).audio.monitor = true;
@@ -1684,7 +1684,7 @@ LTEST_CASE(monitoring_routes_real_renderer_audio_to_selected_sink_and_none) {
             if (selected >= 11) {
                 effect.type = "filter.vst";
                 effect.params.clear();
-                effect.params["path"] = std::string(LIBERTAS_VST_FIXTURE);
+                effect.params["path"] = std::string(MUNKICAST_VST_FIXTURE);
                 effect.params["parameter.0"] = selected == 14 ? 1.0 : selected == 13 ? 0.5 : 0.0;
                 effect.enabled = selected != 12 && selected != 15;
             }
@@ -1740,20 +1740,20 @@ LTEST_CASE(monitoring_routes_real_renderer_audio_to_selected_sink_and_none) {
     link.quit();
     link.close();
     CHECK_EQ(reap(*child, 3000), 0);
-    CHECK(!libertas::capture::AudioMonitor::open(error, base + "_missing"));
+    CHECK(!munkicast::capture::AudioMonitor::open(error, base + "_missing"));
 }
 
 LTEST_CASE(video_capture_audio_uses_one_source_and_respects_none_and_deletion) {
-    if (!std::getenv("LIBERTAS_TEST_MONITOR"))
+    if (!std::getenv("MUNKICAST_TEST_MONITOR"))
         return;
     std::string error;
-    const auto name = "libertas_video_audio_" + ldoc::Id::generate().to_string();
-    auto input = libertas::capture::AudioSink::open(name, error);
-    auto other_input = libertas::capture::AudioSink::open(name + "_other", error);
-    auto output = libertas::capture::AudioSink::open(name + "_out", error);
+    const auto name = "munkicast_video_audio_" + ldoc::Id::generate().to_string();
+    auto input = munkicast::capture::AudioSink::open(name, error);
+    auto other_input = munkicast::capture::AudioSink::open(name + "_other", error);
+    auto output = munkicast::capture::AudioSink::open(name + "_out", error);
     REQUIRE_MSG(input && other_input && output, "{}", error);
-    auto tone = libertas::capture::AudioMonitor::open(error, name);
-    auto other_tone = libertas::capture::AudioMonitor::open(error, name + "_other");
+    auto tone = munkicast::capture::AudioMonitor::open(error, name);
+    auto other_tone = munkicast::capture::AudioMonitor::open(error, name + "_other");
     REQUIRE_MSG(tone && other_tone, "{}", error);
     std::jthread feed([&](std::stop_token stop) {
         std::vector<float> block(960, 0.1f);
@@ -1766,7 +1766,7 @@ LTEST_CASE(video_capture_audio_uses_one_source_and_respects_none_and_deletion) {
     });
     std::mutex mutex;
     float peak = 0;
-    auto received = libertas::capture::AudioCapture::open(
+    auto received = munkicast::capture::AudioCapture::open(
         name + "_out.monitor", true,
         [&](auto samples) {
             std::lock_guard lock(mutex);
@@ -1777,13 +1777,13 @@ LTEST_CASE(video_capture_audio_uses_one_source_and_respects_none_and_deletion) {
     REQUIRE(received);
     auto ends = lipc::Channel::pair();
     REQUIRE(ends);
-    auto child = lcomp::spawn_renderer(LIBERTAS_RENDER, std::move(ends->second).take_socket());
+    auto child = lcomp::spawn_renderer(MUNKICAST_RENDER, std::move(ends->second).take_socket());
     REQUIRE(child);
     lcomp::PreviewLink link{std::move(ends->first)};
     REQUIRE(link.take_hello(2000));
     auto source = colour_source(0, 0, 0);
     source.type = "source.v4l2";
-    source.settings["device"] = std::string("/dev/libertas-missing-test-video");
+    source.settings["device"] = std::string("/dev/munkicast-missing-test-video");
     source.settings["audioDevice"] = name + ".monitor";
     auto node = bound_to(source);
     std::get<ldoc::SourceData>(node.data).audio.monitor = true;
@@ -1853,26 +1853,26 @@ LTEST_CASE(video_capture_audio_uses_one_source_and_respects_none_and_deletion) {
 }
 
 LTEST_CASE(video_audio_default_matches_physical_capture_card) {
-    const char* video = std::getenv("LIBERTAS_TEST_VIDEO_AUDIO");
+    const char* video = std::getenv("MUNKICAST_TEST_VIDEO_AUDIO");
     if (!video)
         return;
     std::string error;
-    const auto input = libertas::capture::video_audio_device(video, error);
+    const auto input = munkicast::capture::video_audio_device(video, error);
     REQUIRE_MSG(!input.empty(), "{}", error);
-    const char* expected = std::getenv("LIBERTAS_TEST_VIDEO_AUDIO_EXPECTED");
+    const char* expected = std::getenv("MUNKICAST_TEST_VIDEO_AUDIO_EXPECTED");
     REQUIRE(expected);
     CHECK_EQ(input, std::string(expected));
 }
 
 LTEST_CASE(capture_reuses_one_snapshot_across_direct_and_nested_placements) {
-    const char* connector = std::getenv("LIBERTAS_TEST_CAPTURE");
-    const char* video = std::getenv("LIBERTAS_TEST_VIDEO");
-    const char* window = std::getenv("LIBERTAS_TEST_WINDOW");
+    const char* connector = std::getenv("MUNKICAST_TEST_CAPTURE");
+    const char* video = std::getenv("MUNKICAST_TEST_VIDEO");
+    const char* window = std::getenv("MUNKICAST_TEST_WINDOW");
     if (!connector && !video && !window)
         return;
     auto ends = lipc::Channel::pair();
     REQUIRE(ends.has_value());
-    auto child = lcomp::spawn_renderer(LIBERTAS_RENDER, std::move(ends->second).take_socket());
+    auto child = lcomp::spawn_renderer(MUNKICAST_RENDER, std::move(ends->second).take_socket());
     REQUIRE(child.has_value());
     lcomp::PreviewLink link{std::move(ends->first)};
     REQUIRE(link.take_hello(2000).has_value());
@@ -1973,13 +1973,13 @@ LTEST_CASE(capture_reuses_one_snapshot_across_direct_and_nested_placements) {
 }
 
 LTEST_CASE(measure_saved_scene_through_real_renderer) {
-    const auto* path = std::getenv("LIBERTAS_BENCH_PROJECT");
+    const auto* path = std::getenv("MUNKICAST_BENCH_PROJECT");
     if (!path)
         return;
     auto opened = ldoc::open_project(path);
     REQUIRE_MSG(opened, "{}", opened.error());
     auto& project = opened->project;
-    const auto* name = std::getenv("LIBERTAS_BENCH_SCENE");
+    const auto* name = std::getenv("MUNKICAST_BENCH_SCENE");
     const auto scene = std::ranges::find_if(project.scenes, [&](const auto& entry) {
         return entry.name == (name ? name : "FS.W.CAM");
     });
@@ -1989,17 +1989,17 @@ LTEST_CASE(measure_saved_scene_through_real_renderer) {
             deck.program_scene = scene->id;
     auto ends = lipc::Channel::pair();
     REQUIRE(ends);
-    auto child = lcomp::spawn_renderer(LIBERTAS_RENDER, std::move(ends->second).take_socket());
+    auto child = lcomp::spawn_renderer(MUNKICAST_RENDER, std::move(ends->second).take_socket());
     REQUIRE(child);
     lcomp::PreviewLink link{std::move(ends->first)};
     REQUIRE(link.take_hello(2000));
     REQUIRE(link.send_project(project, 960));
     lcomp::PreviewFrame baseline, last, checkpoint;
-    const auto* switch_name = std::getenv("LIBERTAS_BENCH_SWITCH");
-    const auto* warmup = std::getenv("LIBERTAS_BENCH_WARMUP");
+    const auto* switch_name = std::getenv("MUNKICAST_BENCH_SWITCH");
+    const auto* warmup = std::getenv("MUNKICAST_BENCH_WARMUP");
     const int cut_at = warmup ? std::clamp(std::atoi(warmup), 120, 35000) : 360;
     auto switch_started = std::chrono::steady_clock::time_point{};
-    const auto* requested = std::getenv("LIBERTAS_BENCH_FRAMES");
+    const auto* requested = std::getenv("MUNKICAST_BENCH_FRAMES");
     const int iterations = requested ? std::clamp(std::atoi(requested), 240, 36000) : 1920;
     for (int iteration = 0; iteration < iterations; ++iteration) {
         const auto start = std::chrono::steady_clock::now();
@@ -2045,7 +2045,7 @@ LTEST_CASE(measure_saved_scene_through_real_renderer) {
             REQUIRE(link.refresh(960));
     }
     REQUIRE(last.rendered_frames > baseline.rendered_frames);
-    if (const auto* frame_path = std::getenv("LIBERTAS_BENCH_FRAME")) {
+    if (const auto* frame_path = std::getenv("MUNKICAST_BENCH_FRAME")) {
         std::ofstream image(frame_path, std::ios::binary);
         image << "P6\n" << last.width << ' ' << last.height << "\n255\n";
         for (int y = 0; y < last.height; ++y)
@@ -2069,21 +2069,21 @@ LTEST_CASE(measure_saved_scene_through_real_renderer) {
 }
 
 int main() {
-    if (std::getenv("LIBERTAS_TEST_PROJECTORS")) {
-        setenv("LIBERTAS_RENDER_BACKEND", "gpu", 1);
+    if (std::getenv("MUNKICAST_TEST_PROJECTORS")) {
+        setenv("MUNKICAST_RENDER_BACKEND", "gpu", 1);
         std::erase_if(ltest::registry(), [](const auto& test) {
             return test.name != "native_projector_presents_gpu_frames_while_ui_is_paused";
         });
     }
-    if (std::getenv("LIBERTAS_TEST_STUDIO"))
+    if (std::getenv("MUNKICAST_TEST_STUDIO"))
         std::erase_if(ltest::registry(), [](const auto& test) {
             return !test.name.starts_with("manual_fades_");
         });
-    if (std::getenv("LIBERTAS_BENCH_PROJECT"))
+    if (std::getenv("MUNKICAST_BENCH_PROJECT"))
         std::erase_if(ltest::registry(), [](const auto& test) {
             return test.name != "measure_saved_scene_through_real_renderer";
         });
-    if (!std::getenv("LIBERTAS_TEST_CAPTURE") && !std::getenv("LIBERTAS_TEST_VIDEO") && !std::getenv("LIBERTAS_TEST_WINDOW"))
+    if (!std::getenv("MUNKICAST_TEST_CAPTURE") && !std::getenv("MUNKICAST_TEST_VIDEO") && !std::getenv("MUNKICAST_TEST_WINDOW"))
         std::erase_if(ltest::registry(), [](const auto& test) {
             return test.name == "capture_reuses_one_snapshot_across_direct_and_nested_placements";
         });

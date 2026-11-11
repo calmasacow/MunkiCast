@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Libertas-Studio contributors
+# SPDX-FileCopyrightText: MunkiCast contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # The scene walk and the preview that carries its picture to another process.
@@ -24,13 +24,13 @@ add_library(lcomp STATIC
     src/image.cpp
     src/preview.cpp
 )
-add_library(libertas::lcomp ALIAS lcomp)
-target_compile_definitions(lcomp PRIVATE LIBERTAS_VST_EXE="$<TARGET_FILE:libertas-vst>")
-add_dependencies(lcomp libertas-vst)
+add_library(munkicast::lcomp ALIAS lcomp)
+target_compile_definitions(lcomp PRIVATE MUNKICAST_VST_EXE="$<TARGET_FILE:munkicast-vst>")
+add_dependencies(lcomp munkicast-vst)
 
 target_include_directories(lcomp PUBLIC include)
 target_link_libraries(lcomp
-    PUBLIC libertas::flags libertas::ldoc libertas::lipc
+    PUBLIC munkicast::flags munkicast::ldoc munkicast::lipc
     PRIVATE PkgConfig::LIBPNG PkgConfig::LIBJPEG PkgConfig::LIBWEBP
             PkgConfig::RNNOISE PkgConfig::SPEEXDSP
 )

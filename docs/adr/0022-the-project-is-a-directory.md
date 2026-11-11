@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: Libertas-Studio contributors
+SPDX-FileCopyrightText: MunkiCast contributors
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 # ADR 0022 — A project is a directory, and saving it is a transaction
@@ -19,11 +19,11 @@ per-source-id table of what an absent key used to mean.
 ## Decision
 
 ```
-MyShow.libertas/
+MyShow.munkicast/
   project.json          canvases, buses, decks, sources, outputs, settings, scene manifest
   assets.json           the asset manifest
   scenes/<ulid>.json    one file per scene
-  .libertas/
+  .munkicast/
     lock                an OS-held lock
     staging-<gen>/      the next generation, until it is committed
     quarantine/         scene files that would not parse
@@ -31,7 +31,7 @@ MyShow.libertas/
 
 ### 1. One file per scene, so corruption is bounded
 
-A scene that fails to parse is **moved to `.libertas/quarantine/`**, reported by name with the
+A scene that fails to parse is **moved to `.munkicast/quarantine/`**, reported by name with the
 path its bytes went to, and every other scene opens. The project is usable, nothing is silently
 dropped, and the operator can decide what to do with the file. Losing a whole collection to one
 bad byte is not reproducible here, which is the entire reason the directory exists.
@@ -53,7 +53,7 @@ Per-file `tmp` → `fsync` → `rename` protects each file individually and give
 across `project.json`, `assets.json` and `scenes/*.json`. An interruption can leave a project
 naming scenes that were never written.
 
-1. Everything is written into `.libertas/staging-<gen>/` and fsynced. The project directory is
+1. Everything is written into `.munkicast/staging-<gen>/` and fsynced. The project directory is
    untouched until this finishes.
 2. Scene files and the asset manifest are **hard-linked** into place, not moved. Staging stays
    complete, so an install interrupted part-way can still be finished from it. Moving them would

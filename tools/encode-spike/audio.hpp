@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
@@ -7,7 +7,7 @@
 #include <string>
 #include <vector>
 
-namespace libertas::spike {
+namespace munkicast::spike {
 
 struct AudioConfig {
     std::uint32_t rate = 48000;
@@ -42,4 +42,4 @@ bool audio_running(AudioCapture& cap);
 
 std::string audio_format_str(AudioCapture& cap);
 
-} // namespace libertas::spike
+} // namespace munkicast::spike

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // One screen, captured into a ring of our own buffers. Consumers lease completed slots.
@@ -20,7 +20,7 @@
 #include <thread>
 #include <format>
 
-namespace libertas::capture {
+namespace munkicast::capture {
 
 namespace {
 
@@ -201,4 +201,4 @@ void ScreenCapture::stop() {
     }
 }
 
-} // namespace libertas::capture
+} // namespace munkicast::capture

@@ -1,17 +1,17 @@
 {
   "$schema": "../node_modules/@companion-module/base/assets/manifest.schema.json",
   "type": "connection",
-  "id": "libertas-studio",
-  "name": "libertas-studio",
-  "shortname": "libertas",
-  "description": "Control Libertas Studio scenes, audio, outputs, transitions and native document commands",
+  "id": "munkicast",
+  "name": "munkicast",
+  "shortname": "munkicast",
+  "description": "Control MunkiCast scenes, audio, outputs, transitions and native document commands",
   "version": "1.0.1",
   "license": "GPL-3.0-or-later",
-  "repository": "https://github.com/CalmAsACow/Libertas-Studio",
-  "bugs": "https://github.com/CalmAsACow/Libertas-Studio/issues",
+  "repository": "https://github.com/CalmAsACow/MunkiCast",
+  "bugs": "https://github.com/CalmAsACow/MunkiCast/issues",
   "maintainers": [
     {
-      "name": "Libertas-Studio contributors"
+      "name": "MunkiCast contributors"
     }
   ],
   "legacyIds": [],
@@ -21,7 +21,7 @@
     "apiVersion": "1.13.2",
     "entrypoint": "../main.js"
   },
-  "manufacturer": "Libertas",
+  "manufacturer": "MunkiCast",
   "products": [
     "Studio"
   ],

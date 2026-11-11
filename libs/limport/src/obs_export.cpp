@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include <QImageReader>
 #include <QUrl>
@@ -579,7 +579,7 @@ std::expected<std::string, std::string> export_obs(const ldoc::Project& project,
                       std::to_string(c.fps.den) + " fps.\n\n";
         }
         report +=
-            "Scene collection JSON does not carry Libertas outputs, credentials, encoder settings, "
+            "Scene collection JSON does not carry MunkiCast outputs, credentials, encoder settings, "
             "bus routing, hotkeys, favourites, emergency scenes or canvas links. Review OBS audio "
             "mixer, "
             "devices and media paths. External media is referenced, not embedded.\n";

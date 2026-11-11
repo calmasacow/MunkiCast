@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: Libertas-Studio contributors
+# SPDX-FileCopyrightText: MunkiCast contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 """Record an isolated saved show; assert capture sampling and output keep their cadence.
 
@@ -26,7 +26,7 @@ parser.add_argument("--scene", help="Main scene to select in the temporary snaps
 parser.add_argument("--source", help="Assert cadence for this exact source name; report all")
 parser.add_argument("--projector", action="store_true", help="Also open a windowed Program projector")
 parser.add_argument("--renderer", type=Path, default=Path(
-    __file__).resolve().parents[1] / "build-make/apps/libertas-render/libertas-render")
+    __file__).resolve().parents[1] / "build-make/apps/munkicast-render/munkicast-render")
 parser.add_argument("--seconds", type=int, choices=range(5, 121), default=12, metavar="5..120")
 args = parser.parse_args()
 project = json.loads((args.project / "project.json").read_text())
@@ -41,15 +41,15 @@ if args.scene:
 encode = next(e for e in project["encodes"] if e["canvas"] == canvas["id"])
 fps = canvas["fps"]["num"] / canvas["fps"]["den"]
 assert fps > 0
-directory = Path(tempfile.mkdtemp(prefix="libertas-cadence-"))
+directory = Path(tempfile.mkdtemp(prefix="munkicast-cadence-"))
 print(f"Diagnostic recording and log: {directory}", flush=True)
 client, child = socket.socketpair(socket.AF_UNIX, socket.SOCK_SEQPACKET)
 child.setblocking(False)
 client.settimeout(30)
 log = (directory / "renderer.log").open("w")
-env = dict(os.environ, LIBERTAS_CHANNEL_FD=str(child.fileno()),
-           LIBERTAS_RENDER_BACKEND="gpu", LIBERTAS_TRACE_SAMPLING="1")
-env.pop("LIBERTAS_TRACE_OUTPUT", None)  # Pixel hashes add work this cadence check does not use.
+env = dict(os.environ, MUNKICAST_CHANNEL_FD=str(child.fileno()),
+           MUNKICAST_RENDER_BACKEND="gpu", MUNKICAST_TRACE_SAMPLING="1")
+env.pop("MUNKICAST_TRACE_OUTPUT", None)  # Pixel hashes add work this cadence check does not use.
 process = subprocess.Popen([str(args.renderer.resolve())], env=env,
                            pass_fds=[child.fileno()], stdout=log, stderr=log)
 child.close()

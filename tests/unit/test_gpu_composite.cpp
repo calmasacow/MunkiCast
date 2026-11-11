@@ -1,6 +1,6 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Explicit hardware check: LIBERTAS_TEST_GPU=1. No fallback is allowed to pass this check.
+// Explicit hardware check: MUNKICAST_TEST_GPU=1. No fallback is allowed to pass this check.
 #include "ltest.hpp"
 
 #include <chrono>
@@ -54,10 +54,10 @@ void compare(const lcomp::Picture& cpu, const lcomp::Picture& gpu) {
     CHECK_MSG(maximum <= 2, "GPU/CPU maximum channel error: {} (allowed 2)", maximum);
 }
 
-libertas::rhi::VkCtxPtr device() {
+munkicast::rhi::VkCtxPtr device() {
     std::string error;
-    const char* selected = std::getenv("LIBERTAS_RENDER_DEVICE");
-    auto result = libertas::rhi::vk_init(selected ? selected : "", error);
+    const char* selected = std::getenv("MUNKICAST_RENDER_DEVICE");
+    auto result = munkicast::rhi::vk_init(selected ? selected : "", error);
     REQUIRE_MSG(result != nullptr, "{}", error);
     return result;
 }
@@ -66,7 +66,7 @@ libertas::rhi::VkCtxPtr device() {
 LTEST_CASE(one_composition_exports_matching_full_size_and_preview_frames) {
     auto d = device();
     std::string error;
-    auto gpu = libertas::rhi::GpuCompositor::create(*d, error);
+    auto gpu = munkicast::rhi::GpuCompositor::create(*d, error);
     REQUIRE_MSG(gpu, "{}", error);
     auto project = show(48, 32);
     std::vector<std::uint8_t> pixels(48 * 32 * 4);
@@ -91,21 +91,21 @@ LTEST_CASE(one_composition_exports_matching_full_size_and_preview_frames) {
 LTEST_CASE(projector_gpu_exports_match_encoder_frames_and_letterbox_without_readback) {
     auto d = device();
     std::string error;
-    auto gpu = libertas::rhi::GpuCompositor::create(*d, error);
+    auto gpu = munkicast::rhi::GpuCompositor::create(*d, error);
     REQUIRE_MSG(gpu, "{}", error);
-    const auto formats = libertas::rhi::vk_supported_modifiers(*d, DRM_FORMAT_XBGR8888);
+    const auto formats = munkicast::rhi::vk_supported_modifiers(*d, DRM_FORMAT_XBGR8888);
 
     struct Display {
-        libertas::rhi::VkCtx& device;
-        libertas::rhi::VkExportedImage image{};
+        munkicast::rhi::VkCtx& device;
+        munkicast::rhi::VkExportedImage image{};
 
-        ~Display() { libertas::rhi::vk_destroy_exportable(device, image); }
+        ~Display() { munkicast::rhi::vk_destroy_exportable(device, image); }
     } exact{*d}, boxed{*d};
 
-    REQUIRE_MSG(libertas::rhi::vk_create_exportable(*d, 48, 32, DRM_FORMAT_XBGR8888, formats, false,
+    REQUIRE_MSG(munkicast::rhi::vk_create_exportable(*d, 48, 32, DRM_FORMAT_XBGR8888, formats, false,
                                                     exact.image, error),
                 "{}", error);
-    REQUIRE_MSG(libertas::rhi::vk_create_exportable(*d, 48, 48, DRM_FORMAT_XBGR8888, formats, false,
+    REQUIRE_MSG(munkicast::rhi::vk_create_exportable(*d, 48, 48, DRM_FORMAT_XBGR8888, formats, false,
                                                     boxed.image, error),
                 "{}", error);
     auto project = show(48, 32);
@@ -120,13 +120,13 @@ LTEST_CASE(projector_gpu_exports_match_encoder_frames_and_letterbox_without_read
         const auto plan = lcomp::plan_canvas(project, project.canvases[0].id, [&](const auto&) {
             return lcomp::CapturedPicture{48, 32, pixels.data(), pixels.size()};
         });
-        const libertas::rhi::PresentationTarget targets[]{{&exact.image, foreign},
+        const munkicast::rhi::PresentationTarget targets[]{{&exact.image, foreign},
                                                           {&boxed.image, foreign}};
         auto small = gpu->render(plan, 12, error, &encoded, targets);
         REQUIRE_MSG(small, "{}", error);
         compare(lcomp::execute_cpu(plan), encoded);
         std::vector<std::uint8_t> displayed;
-        REQUIRE_MSG(libertas::rhi::vk_readback_exported(*d, exact.image, true, displayed, error),
+        REQUIRE_MSG(munkicast::rhi::vk_readback_exported(*d, exact.image, true, displayed, error),
                     "{}", error);
         REQUIRE(displayed.size() == encoded.pixels.size());
         for (std::size_t i = 0; i < displayed.size(); i += 4) {
@@ -134,7 +134,7 @@ LTEST_CASE(projector_gpu_exports_match_encoder_frames_and_letterbox_without_read
             CHECK_EQ(displayed[i + 1], encoded.pixels[i + 1]);
             CHECK_EQ(displayed[i + 2], encoded.pixels[i]);
         }
-        REQUIRE(libertas::rhi::vk_readback_exported(*d, boxed.image, true, displayed, error));
+        REQUIRE(munkicast::rhi::vk_readback_exported(*d, boxed.image, true, displayed, error));
         for (int y = 0; y < 48; ++y)
             for (int x = 0; x < 48; ++x) {
                 const auto at = std::size_t(y * 48 + x) * 4;
@@ -153,31 +153,31 @@ LTEST_CASE(projector_gpu_exports_match_encoder_frames_and_letterbox_without_read
     const auto plan = lcomp::plan_canvas(project, project.canvases[0].id, [&](const auto&) {
         return lcomp::CapturedPicture{48, 32, pixels.data(), pixels.size()};
     });
-    const libertas::rhi::PresentationTarget target{&exact.image, true};
+    const munkicast::rhi::PresentationTarget target{&exact.image, true};
     const auto display_only = gpu->render(plan, 1, error, nullptr, {&target, 1});
     REQUIRE_MSG(display_only, "{}", error);
     CHECK_EQ(display_only->pixels.size(), 4u);
 }
 
 LTEST_CASE(benchmark_shared_projector_copy) {
-    if (!std::getenv("LIBERTAS_BENCH_PROJECTOR"))
+    if (!std::getenv("MUNKICAST_BENCH_PROJECTOR"))
         return;
-    const bool host = std::getenv("LIBERTAS_BENCH_PROJECTOR_HOST") != nullptr;
+    const bool host = std::getenv("MUNKICAST_BENCH_PROJECTOR_HOST") != nullptr;
     auto d = device();
     std::string error;
     for (const int width : {1920, 3840}) {
         const int height = width * 9 / 16;
-        auto gpu = libertas::rhi::GpuCompositor::create(*d, error);
+        auto gpu = munkicast::rhi::GpuCompositor::create(*d, error);
         REQUIRE(gpu);
         auto p = show(width, height);
         p.sources[0].type = "source.color";
         p.sources[0].settings["color"] = ldoc::Rgba::from_srgb8(40, 120, 200);
         const auto plan = lcomp::plan_canvas(p, p.canvases[0].id);
-        auto allowed = libertas::rhi::vk_supported_modifiers(*d, DRM_FORMAT_XBGR8888);
+        auto allowed = munkicast::rhi::vk_supported_modifiers(*d, DRM_FORMAT_XBGR8888);
         if (host)
             std::erase_if(allowed, [](auto modifier) { return modifier != DRM_FORMAT_MOD_LINEAR; });
-        libertas::rhi::VkExportedImage display;
-        REQUIRE_MSG(libertas::rhi::vk_create_exportable(*d, unsigned(width), unsigned(height),
+        munkicast::rhi::VkExportedImage display;
+        REQUIRE_MSG(munkicast::rhi::vk_create_exportable(*d, unsigned(width), unsigned(height),
                                                         DRM_FORMAT_XBGR8888, allowed, host, display,
                                                         error),
                     "{}", error);
@@ -185,13 +185,13 @@ LTEST_CASE(benchmark_shared_projector_copy) {
         std::vector<double> baseline, projector;
         for (int i = 0; i < 110; ++i) {
             const bool projecting = i % 2 != 0;
-            const libertas::rhi::PresentationTarget target{&display, foreign};
+            const munkicast::rhi::PresentationTarget target{&display, foreign};
             lcomp::Picture full;
             const auto begin = std::chrono::steady_clock::now();
             auto result =
                 gpu->render(plan, 480, error, &full,
                             projecting ? std::span(&target, 1)
-                                       : std::span<const libertas::rhi::PresentationTarget>{});
+                                       : std::span<const munkicast::rhi::PresentationTarget>{});
             REQUIRE_MSG(result, "{}", error);
             const double ms =
                 std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - begin)
@@ -206,17 +206,17 @@ LTEST_CASE(benchmark_shared_projector_copy) {
         std::fprintf(stderr,
                      "PROJECTOR_BENCH %dx%d %s %s baseline median=%.3f p95=%.3f ms "
                      "projector median=%.3f p95=%.3f ms\n",
-                     width, height, libertas::rhi::vk_device_name(*d).c_str(),
+                     width, height, munkicast::rhi::vk_device_name(*d).c_str(),
                      host ? "shared-system-memory" : "device-memory", baseline[25], baseline[47],
                      projector[25], projector[47]);
-        libertas::rhi::vk_destroy_exportable(*d, display);
+        munkicast::rhi::vk_destroy_exportable(*d, display);
     }
 }
 
 LTEST_CASE(native_media_frames_preserve_output_box_letterboxing_crop_and_filters) {
     auto d = device();
     std::string error;
-    auto gpu = libertas::rhi::GpuCompositor::create(*d, error);
+    auto gpu = munkicast::rhi::GpuCompositor::create(*d, error);
     REQUIRE(gpu);
     for (int height : {4, 8}) {
         auto p = show(8, 8);
@@ -262,7 +262,7 @@ LTEST_CASE(native_media_frames_preserve_output_box_letterboxing_crop_and_filters
 LTEST_CASE(stock_video_filters_execute_on_cpu_and_gpu_from_the_same_scene) {
     auto d = device();
     std::string error;
-    auto gpu = libertas::rhi::GpuCompositor::create(*d, error);
+    auto gpu = munkicast::rhi::GpuCompositor::create(*d, error);
     REQUIRE(gpu);
     std::vector<std::uint8_t> pixels(16 * 16 * 4);
     for (std::size_t i = 0; i < pixels.size(); i += 4) {
@@ -284,9 +284,9 @@ LTEST_CASE(stock_video_filters_execute_on_cpu_and_gpu_from_the_same_scene) {
         for (const auto& f : info.fields)
             effect.params[f.key] = f.value;
         if (info.type == "filter.mask")
-            effect.params["path"] = std::string(LIBERTAS_IMAGE_FIXTURES) + "/two.png";
+            effect.params["path"] = std::string(MUNKICAST_IMAGE_FIXTURES) + "/two.png";
         if (info.type == "filter.lut")
-            effect.params["path"] = std::string(LIBERTAS_IMAGE_FIXTURES) + "/identity.cube";
+            effect.params["path"] = std::string(MUNKICAST_IMAGE_FIXTURES) + "/identity.cube";
         if (info.type == "filter.scale") {
             effect.params["width"] = std::int64_t{8};
             effect.params["height"] = std::int64_t{12};
@@ -319,13 +319,13 @@ LTEST_CASE(stock_video_filters_execute_on_cpu_and_gpu_from_the_same_scene) {
 LTEST_CASE(still_images_share_pixels_and_cached_uploads_follow_replacement) {
     namespace fs = std::filesystem;
     const auto path = fs::temp_directory_path() / (ldoc::Id::generate().to_string() + ".png");
-    fs::copy_file(fs::path(LIBERTAS_IMAGE_FIXTURES) / "two.png", path);
+    fs::copy_file(fs::path(MUNKICAST_IMAGE_FIXTURES) / "two.png", path);
     auto project = show(32, 24);
     project.sources[0].type = "source.image";
     project.sources[0].settings["file"] = path.string();
     auto second = project.sources[0];
     second.id = ldoc::Id::generate();
-    second.settings["file"] = std::string(LIBERTAS_IMAGE_FIXTURES) + "/alpha.webp";
+    second.settings["file"] = std::string(MUNKICAST_IMAGE_FIXTURES) + "/alpha.webp";
     project.sources.push_back(second);
     auto placed = project.scenes[0].roots[0];
     placed.id = ldoc::Id::generate();
@@ -337,7 +337,7 @@ LTEST_CASE(still_images_share_pixels_and_cached_uploads_follow_replacement) {
     REQUIRE(original.ops[0].image.owner);
     auto d = device();
     std::string error;
-    auto gpu = libertas::rhi::GpuCompositor::create(*d, error);
+    auto gpu = munkicast::rhi::GpuCompositor::create(*d, error);
     REQUIRE(gpu);
     const auto before = lcomp::execute_cpu(original);
     for (int tick = 0; tick < 3; ++tick) {
@@ -348,7 +348,7 @@ LTEST_CASE(still_images_share_pixels_and_cached_uploads_follow_replacement) {
         REQUIRE_MSG(result, "{}", error);
         compare(before, *result);
     }
-    fs::copy_file(fs::path(LIBERTAS_IMAGE_FIXTURES) / "red.webp", path,
+    fs::copy_file(fs::path(MUNKICAST_IMAGE_FIXTURES) / "red.webp", path,
                   fs::copy_options::overwrite_existing);
     const auto changed = lcomp::plan_canvas(project, project.canvases[0].id);
     CHECK(changed.ops[1].image.owner != original.ops[1].image.owner);
@@ -365,10 +365,10 @@ LTEST_CASE(still_images_share_pixels_and_cached_uploads_follow_replacement) {
 LTEST_CASE(cached_masks_follow_file_replacement) {
     namespace fs = std::filesystem;
     const auto path = fs::temp_directory_path() / (ldoc::Id::generate().to_string() + ".webp");
-    fs::copy_file(fs::path(LIBERTAS_IMAGE_FIXTURES) / "alpha.webp", path);
+    fs::copy_file(fs::path(MUNKICAST_IMAGE_FIXTURES) / "alpha.webp", path);
     auto d = device();
     std::string error;
-    auto gpu = libertas::rhi::GpuCompositor::create(*d, error);
+    auto gpu = munkicast::rhi::GpuCompositor::create(*d, error);
     REQUIRE(gpu);
     auto project = show(32, 24);
     ldoc::Effect mask;
@@ -383,7 +383,7 @@ LTEST_CASE(cached_masks_follow_file_replacement) {
     });
     std::vector<std::uint8_t> previous;
     for (const auto* file : {"alpha.webp", "red.webp"}) {
-        fs::copy_file(fs::path(LIBERTAS_IMAGE_FIXTURES) / file, path,
+        fs::copy_file(fs::path(MUNKICAST_IMAGE_FIXTURES) / file, path,
                       fs::copy_options::overwrite_existing);
         for (int repeat = 0; repeat < 3; ++repeat) {
             const auto image = gpu->render(plan, 0, error);
@@ -400,7 +400,7 @@ LTEST_CASE(cached_masks_follow_file_replacement) {
 LTEST_CASE(sampling_modes_and_key_adjustments_match_on_both_backends) {
     auto d = device();
     std::string error;
-    auto gpu = libertas::rhi::GpuCompositor::create(*d, error);
+    auto gpu = munkicast::rhi::GpuCompositor::create(*d, error);
     REQUIRE(gpu);
     std::vector<std::uint8_t> pixels(16 * 16 * 4);
     for (std::size_t i = 0; i < pixels.size(); i += 4) {
@@ -448,7 +448,7 @@ LTEST_CASE(sampling_modes_and_key_adjustments_match_on_both_backends) {
 LTEST_CASE(video_delay_uses_prior_frames_and_scroll_advances_without_source_damage) {
     auto d = device();
     std::string error;
-    auto gpu = libertas::rhi::GpuCompositor::create(*d, error);
+    auto gpu = munkicast::rhi::GpuCompositor::create(*d, error);
     REQUIRE(gpu);
     auto p = show(4, 4);
     std::vector<std::uint8_t> pixels(4 * 4 * 4, 0);
@@ -507,7 +507,7 @@ LTEST_CASE(video_delay_uses_prior_frames_and_scroll_advances_without_source_dama
 LTEST_CASE(a_4k_filter_chain_stays_within_the_compositor_memory_budget) {
     auto d = device();
     std::string error;
-    auto gpu = libertas::rhi::GpuCompositor::create(*d, error);
+    auto gpu = munkicast::rhi::GpuCompositor::create(*d, error);
     REQUIRE(gpu);
     auto p = show(3840, 2160);
     auto& source = p.sources[0];
@@ -539,7 +539,7 @@ LTEST_CASE(a_4k_filter_chain_stays_within_the_compositor_memory_budget) {
 LTEST_CASE(gpu_executes_the_shared_walk_for_opacity_precomps_rotations_and_flips) {
     auto d = device();
     std::string error;
-    auto gpu = libertas::rhi::GpuCompositor::create(*d, error);
+    auto gpu = munkicast::rhi::GpuCompositor::create(*d, error);
     REQUIRE_MSG(gpu != nullptr, "{}", error);
     std::vector<std::uint8_t> pixels(7 * 5 * 4);
     for (std::size_t i = 0; i < pixels.size(); ++i)
@@ -578,7 +578,7 @@ LTEST_CASE(gpu_executes_the_shared_walk_for_opacity_precomps_rotations_and_flips
     // The other texture path is the real decoder, with RGBA instead of capture's BGRA.
     project.sources[0].type = "source.image";
     project.scenes[0].roots[0].layout.crop = {};
-    project.sources[0].settings["file"] = std::string(LIBERTAS_IMAGE_FIXTURES) + "/two.png";
+    project.sources[0].settings["file"] = std::string(MUNKICAST_IMAGE_FIXTURES) + "/two.png";
     auto group = ldoc::make_node(ldoc::NodeKind::Group, "opacity group");
     group.blend.opacity = 0.5;
     group.transform.position = {2, 1};
@@ -608,7 +608,7 @@ LTEST_CASE(gpu_executes_the_shared_walk_for_opacity_precomps_rotations_and_flips
 LTEST_CASE(all_seven_blends_match_cpu_for_textures_transparency_and_nested_groups) {
     auto d = device();
     std::string error;
-    auto gpu = libertas::rhi::GpuCompositor::create(*d, error);
+    auto gpu = munkicast::rhi::GpuCompositor::create(*d, error);
     REQUIRE_MSG(gpu != nullptr, "{}", error);
     auto project = show();
     std::vector<std::uint8_t> pixels(7 * 5 * 4);
@@ -655,7 +655,7 @@ LTEST_CASE(all_seven_blends_match_cpu_for_textures_transparency_and_nested_group
 LTEST_CASE(host_video_uploads_to_a_4k_canvas) {
     auto d = device();
     std::string error;
-    auto gpu = libertas::rhi::GpuCompositor::create(*d, error);
+    auto gpu = munkicast::rhi::GpuCompositor::create(*d, error);
     REQUIRE_MSG(gpu != nullptr, "{}", error);
     auto project = show(3840, 2160);
     std::vector<std::uint8_t> pixels(2560 * 1440 * 4, 255);
@@ -665,7 +665,7 @@ LTEST_CASE(host_video_uploads_to_a_4k_canvas) {
         });
     REQUIRE(gpu->render(plan, 640, error).has_value());
     const auto started = std::chrono::steady_clock::now();
-    const int count = std::getenv("LIBERTAS_BENCHMARK") ? 180 : 3;
+    const int count = std::getenv("MUNKICAST_BENCHMARK") ? 180 : 3;
     for (int i = 0; i < count; ++i) {
         auto frame = gpu->render(plan, 640, error);
         REQUIRE_MSG(frame.has_value(), "{}", error);
@@ -673,7 +673,7 @@ LTEST_CASE(host_video_uploads_to_a_4k_canvas) {
         CHECK_EQ(frame->height, 360);
         CHECK_EQ(frame->pixels.front(), 255);
     }
-    if (std::getenv("LIBERTAS_BENCHMARK"))
+    if (std::getenv("MUNKICAST_BENCHMARK"))
         std::fprintf(stderr, "1440p host upload + 4K composite + 640 preview: %.3f ms/frame\n",
             std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - started).count() / count);
 }
@@ -681,7 +681,7 @@ LTEST_CASE(host_video_uploads_to_a_4k_canvas) {
 LTEST_CASE(nested_4k_capture_with_alternating_vertical_canvas) {
     auto d = device();
     std::string error;
-    auto gpu = libertas::rhi::GpuCompositor::create(*d, error);
+    auto gpu = munkicast::rhi::GpuCompositor::create(*d, error);
     REQUIRE_MSG(gpu, "{}", error);
     auto project = show(3840, 2160);
     auto inner = project.scenes.front();
@@ -694,13 +694,13 @@ LTEST_CASE(nested_4k_capture_with_alternating_vertical_canvas) {
     const auto plan = lcomp::plan_canvas(project, project.canvases[0].id, [&](const ldoc::Source&) {
         return lcomp::CapturedPicture{2560, 1440, pixels.data(), pixels.size()};
     });
-    auto verticalGpu = libertas::rhi::GpuCompositor::create(*d, error);
+    auto verticalGpu = munkicast::rhi::GpuCompositor::create(*d, error);
     REQUIRE_MSG(verticalGpu, "{}", error);
     lcomp::DrawPlan vertical;
     vertical.width = 1080;
     vertical.height = 1920;
     for (const bool alternate : {false, true}) {
-        const int count = std::getenv("LIBERTAS_BENCHMARK") ? 120 : 3;
+        const int count = std::getenv("MUNKICAST_BENCHMARK") ? 120 : 3;
         const auto start = std::chrono::steady_clock::now();
         for (int i = 0; i < count; ++i) {
             auto frame = gpu->render(plan, 960, error);
@@ -718,24 +718,24 @@ LTEST_CASE(nested_4k_capture_with_alternating_vertical_canvas) {
 }
 
 LTEST_CASE(a_real_capture_slot_stays_on_device_until_preview_readback) {
-    const char* output = std::getenv("LIBERTAS_TEST_CAPTURE");
+    const char* output = std::getenv("MUNKICAST_TEST_CAPTURE");
     if (!output)
         return;
     auto d = device();
     std::string error;
-    auto gpu = libertas::rhi::GpuCompositor::create(*d, error);
+    auto gpu = munkicast::rhi::GpuCompositor::create(*d, error);
     REQUIRE_MSG(gpu != nullptr, "{}", error);
-    auto capture = libertas::capture::ScreenCapture::open(*d, output, true, error);
+    auto capture = munkicast::capture::ScreenCapture::open(*d, output, true, error);
     REQUIRE_MSG(capture != nullptr, "{}", error);
     std::mutex mu;
     std::condition_variable ready;
-    std::shared_ptr<const libertas::capture::DmabufImage> frame;
+    std::shared_ptr<const munkicast::capture::DmabufImage> frame;
     capture->start_images([&](auto image) {
         std::lock_guard lock(mu);
         frame = std::move(image);
         ready.notify_one();
     });
-    std::shared_ptr<const libertas::capture::DmabufImage> snapshot;
+    std::shared_ptr<const munkicast::capture::DmabufImage> snapshot;
     {
         std::unique_lock lock(mu);
         ready.wait_for(lock, std::chrono::seconds(5), [&] { return bool(frame); });
@@ -766,7 +766,7 @@ LTEST_CASE(a_real_capture_slot_stays_on_device_until_preview_readback) {
                          .count() /
                      60);
     std::vector<std::uint8_t> host;
-    REQUIRE_MSG(libertas::rhi::vk_readback_exported(*d, *snapshot, true, host, error), "{}", error);
+    REQUIRE_MSG(munkicast::rhi::vk_readback_exported(*d, *snapshot, true, host, error), "{}", error);
     lcomp::FrameSource cpu = [&](const ldoc::Source&) {
         return lcomp::CapturedPicture{static_cast<int>(snapshot->width),
                                       static_cast<int>(snapshot->height), host.data(), host.size()};
@@ -789,11 +789,11 @@ LTEST_CASE(a_real_capture_slot_stays_on_device_until_preview_readback) {
 LTEST_CASE(nvenc_encodes_gpu_nv12_frames_without_readback) {
     auto d = device();
     std::string error;
-    auto gpu = libertas::rhi::GpuCompositor::create(*d, error);
+    auto gpu = munkicast::rhi::GpuCompositor::create(*d, error);
     REQUIRE_MSG(gpu, "{}", error);
     constexpr int w = 256, h = 144, count = 60;
-    libertas::encode::RuntimeConfig cfg;
-    cfg.path = (std::filesystem::temp_directory_path() / "libertas-gpu-nv12.mkv").string();
+    munkicast::encode::RuntimeConfig cfg;
+    cfg.path = (std::filesystem::temp_directory_path() / "munkicast-gpu-nv12.mkv").string();
     std::filesystem::remove(cfg.path);
     cfg.width = cfg.source_width = w;
     cfg.height = cfg.source_height = h;
@@ -801,10 +801,10 @@ LTEST_CASE(nvenc_encodes_gpu_nv12_frames_without_readback) {
     cfg.audio_channels = 0;
     cfg.force_tier = "h264_nvenc";
     cfg.video_options = {{"preset", "p4"}, {"tune", "lossless"}, {"bf", "2"}};
-    cfg.gpu_uuid = libertas::rhi::vk_device_uuid(*d);
-    auto encoder = libertas::encode::encoder_open(cfg, error);
+    cfg.gpu_uuid = munkicast::rhi::vk_device_uuid(*d);
+    auto encoder = munkicast::encode::encoder_open(cfg, error);
     REQUIRE_MSG(encoder, "{}", error);
-    REQUIRE_MSG(libertas::encode::encoder_takes_device_frames(*encoder),
+    REQUIRE_MSG(munkicast::encode::encoder_takes_device_frames(*encoder),
                 "NVENC did not open on the compositor's GPU");
 
     auto project = show(w, h);
@@ -837,14 +837,14 @@ LTEST_CASE(nvenc_encodes_gpu_nv12_frames_without_readback) {
         expected_luma.push_back(std::move(luma));
         const auto& frame = full.nv12;
         const auto pts = i * 1'000'000'000LL / 60;
-        REQUIRE_MSG(host ? libertas::encode::encoder_video(*encoder, full.pixels.data(),
+        REQUIRE_MSG(host ? munkicast::encode::encoder_video(*encoder, full.pixels.data(),
                                                             full.stride, pts, error)
-                         : libertas::encode::encoder_video_device(*encoder, frame->fd,
+                         : munkicast::encode::encoder_video_device(*encoder, frame->fd,
                                                                   frame->size, frame->id,
                                                                   frame->pitch, frame, pts, error),
                     "{}", error);
     }
-    REQUIRE_MSG(libertas::encode::encoder_finish(*encoder, error), "{}", error);
+    REQUIRE_MSG(munkicast::encode::encoder_finish(*encoder, error), "{}", error);
     encoder.reset();
 
     AVFormatContext* file = nullptr;
@@ -886,11 +886,11 @@ LTEST_CASE(nvenc_encodes_gpu_nv12_frames_without_readback) {
 }
 
 int main() {
-    if (std::getenv("LIBERTAS_BENCH_PROJECTOR"))
+    if (std::getenv("MUNKICAST_BENCH_PROJECTOR"))
         std::erase_if(ltest::registry(), [](const auto& test) { return test.name != "benchmark_shared_projector_copy"; });
-    if (!std::getenv("LIBERTAS_TEST_GPU"))
+    if (!std::getenv("MUNKICAST_TEST_GPU"))
         return 77;
-    if (!std::getenv("LIBERTAS_TEST_CAPTURE"))
+    if (!std::getenv("MUNKICAST_TEST_CAPTURE"))
         std::erase_if(ltest::registry(), [](const auto& test) {
             return test.name == "a_real_capture_slot_stays_on_device_until_preview_readback";
         });
@@ -900,7 +900,7 @@ int main() {
 LTEST_CASE(camera_yuv_converts_on_the_gpu_like_swscale) {
     auto d = device();
     std::string error;
-    auto gpu = libertas::rhi::GpuCompositor::create(*d, error);
+    auto gpu = munkicast::rhi::GpuCompositor::create(*d, error);
     REQUIRE(gpu);
     constexpr int w = 16, h = 8;
     auto p = show(w, h);

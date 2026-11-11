@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "lcomp/composite.hpp"
@@ -64,7 +64,7 @@ ldoc::Source image_source(std::string path) {
 }
 
 std::filesystem::path image_fixture(const char* name) {
-    return std::filesystem::path{LIBERTAS_IMAGE_FIXTURES} / name;
+    return std::filesystem::path{MUNKICAST_IMAGE_FIXTURES} / name;
 }
 
 ldoc::Source screen_source(std::string connector) {
@@ -441,7 +441,7 @@ LTEST_CASE(a_jpeg_and_a_webp_are_drawn) {
 
 LTEST_CASE(an_image_that_cannot_be_read_leaves_what_is_behind_it) {
     ldoc::Source red = colour_source(255, 0, 0, 4, 4);
-    ldoc::Source missing = image_source("/no/such/libertas-still.png");
+    ldoc::Source missing = image_source("/no/such/munkicast-still.png");
     missing.name = "Missing";
     ldoc::Scene scene = scene_named("Scene");
     scene.roots = {bound_to(missing), bound_to(red)};
@@ -461,7 +461,7 @@ LTEST_CASE(an_image_that_cannot_be_read_leaves_what_is_behind_it) {
     CHECK_EQ(empty.gaps.front().reason, GapReason::Unreadable);
     CHECK_EQ(pixel(empty, 0, 0), std::tuple(0, 0, 0, 255));
 
-    const auto junk = std::filesystem::temp_directory_path() / "libertas-not-an-image";
+    const auto junk = std::filesystem::temp_directory_path() / "munkicast-not-an-image";
     {
         std::ofstream out(junk);
         out << "not a picture\n";

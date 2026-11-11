@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // A project on disk: the commit protocol, recovery from an interrupted save, and the promise
@@ -26,7 +26,7 @@ namespace {
 class ScratchDir {
 public:
     explicit ScratchDir(std::string_view tag) {
-        path_ = fs::temp_directory_path() / std::format("libertas-io-{}-{}", ::getpid(), tag);
+        path_ = fs::temp_directory_path() / std::format("munkicast-io-{}-{}", ::getpid(), tag);
         std::error_code ec;
         fs::remove_all(path_, ec);
         fs::create_directories(path_, ec);
@@ -38,7 +38,7 @@ public:
     ScratchDir(const ScratchDir&) = delete;
     ScratchDir& operator=(const ScratchDir&) = delete;
 
-    [[nodiscard]] fs::path project() const { return path_ / "Show.libertas"; }
+    [[nodiscard]] fs::path project() const { return path_ / "Show.munkicast"; }
 
 private:
     fs::path path_;
@@ -132,7 +132,7 @@ LTEST_CASE(a_successful_save_leaves_no_litter) {
 
     // No staging directory survives a save that finished.
     std::error_code ec;
-    for (auto it = fs::directory_iterator(sd.project() / ".libertas", ec);
+    for (auto it = fs::directory_iterator(sd.project() / ".munkicast", ec);
          it != fs::directory_iterator(); it.increment(ec)) {
         CHECK_MSG(it->path().filename().string().find("staging") == std::string::npos,
                   "a staging directory was left behind: {}", it->path().string());
@@ -277,7 +277,7 @@ LTEST_CASE(a_save_interrupted_while_writing_rolls_back_instead) {
 
     // Simulate the interruption landing mid-write: one staged scene file never made it.
     std::error_code ec;
-    const fs::path staging = sd.project() / ".libertas" / "staging-2" / "scenes";
+    const fs::path staging = sd.project() / ".munkicast" / "staging-2" / "scenes";
     bool removed = false;
     for (auto it = fs::directory_iterator(staging, ec); it != fs::directory_iterator();
          it.increment(ec)) {
@@ -292,7 +292,7 @@ LTEST_CASE(a_save_interrupted_while_writing_rolls_back_instead) {
     CHECK_MSG(!reopened->recovered, "an incomplete save was rolled forward");
     CHECK_EQ(reopened->project.generation, std::uint64_t{1});
     CHECK_EQ(scene_names(reopened->project), (std::vector<std::string>{"Gameplay", "Intro"}));
-    CHECK(!fs::exists(sd.project() / ".libertas" / "staging-2"));
+    CHECK(!fs::exists(sd.project() / ".munkicast" / "staging-2"));
     CHECK_MSG(errors_of(reopened->problems).empty(), "{}", errors_of(reopened->problems));
 }
 
@@ -317,8 +317,8 @@ LTEST_CASE(a_corrupt_scene_costs_one_scene_and_not_the_collection) {
     CHECK(errs.find("Gameplay") != std::string::npos);
     CHECK(errs.find("quarantine") != std::string::npos);
     CHECK(!fs::exists(path));
-    CHECK(fs::exists(sd.project() / ".libertas" / "quarantine"));
-    CHECK_EQ(count_files(sd.project() / ".libertas" / "quarantine"), std::size_t{1});
+    CHECK(fs::exists(sd.project() / ".munkicast" / "quarantine"));
+    CHECK_EQ(count_files(sd.project() / ".munkicast" / "quarantine"), std::size_t{1});
 }
 
 LTEST_CASE(a_missing_scene_file_is_reported_rather_than_ignored) {

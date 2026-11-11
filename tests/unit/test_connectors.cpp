@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "connectors.hpp"
 #include "ltest.hpp"
@@ -6,7 +6,7 @@
 #include <QCoreApplication>
 #include <QSet>
 
-using namespace libertas::ui;
+using namespace munkicast::ui;
 
 LTEST_CASE(oauth_callback_requires_the_expected_state_and_decodes_the_code) {
     const QByteArray request =

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 import assert from 'node:assert/strict'
 import OBSWebSocket from 'obs-websocket-js'
@@ -6,15 +6,15 @@ const port = Number(process.argv[2])
 const obs = new OBSWebSocket()
 obs.on('ConnectionError', () => {})
 const address = `ws://127.0.0.1:${port}`
-await obs.connect(address, process.env.LIBERTAS_WEBSOCKET_PASSWORD, { rpcVersion: 1 })
+await obs.connect(address, process.env.MUNKICAST_WEBSOCKET_PASSWORD, { rpcVersion: 1 })
 assert.equal((await obs.call('GetVersion')).rpcVersion, 1)
 const batch = await obs.callBatch([{ requestType: 'GetSceneList' }, { requestType: 'GetInputList' }, { requestType: 'GetRecordStatus' }])
 assert(batch.every(r => r.requestStatus.result))
 await obs.disconnect()
 // Drive the native Companion module against the real listener without a Companion UI.
-const { LibertasInstance } = await import('../companion/main.js')
-const companion = Object.assign(Object.create(LibertasInstance.prototype), {
-  config: { host: '127.0.0.1', port }, secrets: { password: process.env.LIBERTAS_WEBSOCKET_PASSWORD },
+const { MunkiCastInstance } = await import('../companion/main.js')
+const companion = Object.assign(Object.create(MunkiCastInstance.prototype), {
+  config: { host: '127.0.0.1', port }, secrets: { password: process.env.MUNKICAST_WEBSOCKET_PASSWORD },
   generation: 0, scenes: [], inputs: [], state: {},
   updateStatus: (_status, message) => { if (message) throw new Error(message) },
   setActionDefinitions: value => { companion.actions = value },

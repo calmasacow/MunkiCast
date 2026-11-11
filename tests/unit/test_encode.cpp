@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ltest.hpp"
 
@@ -22,7 +22,7 @@ extern "C" {
 #include <libavformat/avformat.h>
 }
 
-using namespace libertas::encode;
+using namespace munkicast::encode;
 
 namespace {
 std::atomic<ino_t> stalled_inode = 0;
@@ -78,7 +78,7 @@ RuntimeConfig configured(const std::string& implementation, const std::string& c
     auto cfg = runtime_config(video, audio, canvas, "");
     cfg.audio_channels = 0;
     cfg.path = (std::filesystem::temp_directory_path() /
-                ("libertas-options-" + ldoc::Id::generate().to_string() + ".mkv"))
+                ("munkicast-options-" + ldoc::Id::generate().to_string() + ".mkv"))
                    .string();
     return cfg;
 }
@@ -148,19 +148,19 @@ LTEST_CASE(crf_and_custom_buffer_reach_the_codec) {
 
 LTEST_CASE(unknown_codec_options_are_reported_instead_of_ignored) {
     auto cfg = configured("x264");
-    cfg.video_options["libertas-invalid-option"] = "1";
+    cfg.video_options["munkicast-invalid-option"] = "1";
     std::string error;
     CHECK(!encoder_open(cfg, error));
-    CHECK(error.contains("libertas-invalid-option"));
+    CHECK(error.contains("munkicast-invalid-option"));
     CHECK(!std::filesystem::exists(cfg.path));
 }
 
 LTEST_CASE(explicit_codec_selection_never_falls_back_to_h264) {
     auto cfg = configured("x264");
-    cfg.force_tier = "libertas-missing-encoder";
+    cfg.force_tier = "munkicast-missing-encoder";
     std::string error;
     CHECK(!encoder_open(cfg, error));
-    CHECK(error.contains("libertas-missing-encoder"));
+    CHECK(error.contains("munkicast-missing-encoder"));
     CHECK(!std::filesystem::exists(cfg.path));
 }
 
@@ -190,7 +190,7 @@ LTEST_CASE(opus_audio_selection_reaches_the_muxer) {
 }
 
 LTEST_CASE(nvenc_h264_and_hevc_use_the_requested_settings) {
-    if (!std::getenv("LIBERTAS_TEST_NVENC"))
+    if (!std::getenv("MUNKICAST_TEST_NVENC"))
         return;
     auto h264 = configured("nvenc");
     CHECK_EQ(h264.video_options.at("preset"), std::string("p5"));
@@ -205,7 +205,7 @@ LTEST_CASE(nvenc_h264_and_hevc_use_the_requested_settings) {
 
 LTEST_CASE(moving_frames_survive_conversion_encoder_reordering_and_input_reuse) {
     for (const bool nvenc : {false, true}) {
-        if (nvenc && !std::getenv("LIBERTAS_TEST_NVENC"))
+        if (nvenc && !std::getenv("MUNKICAST_TEST_NVENC"))
             continue;
         auto cfg = configured(nvenc ? "nvenc" : "x264", "h264", "cbr", {60, 1});
         if (nvenc) {

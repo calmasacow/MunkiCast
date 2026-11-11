@@ -1,8 +1,8 @@
 <!--
-SPDX-FileCopyrightText: Libertas-Studio contributors
+SPDX-FileCopyrightText: MunkiCast contributors
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
-# Libertas-Studio
+# MunkiCast
 
 A live streaming and recording studio for Linux, built clean-sheet. Omarchy (Arch + Hyprland) is the
 bedrock target; the rest of Linux follows, then macOS and Windows.
@@ -13,7 +13,7 @@ available. See [current status](docs/current_goal.md) and the [remaining work](d
 
 What exists is a workspace you can use and a document you can edit:
 
-- **`libertas-ui`** — one window holding the whole workspace, with Adobe-style drop-zone docking,
+- **`munkicast-ui`** — one window holding the whole workspace, with Adobe-style drop-zone docking,
   dividers, tab groups, live Omarchy theme following, and a layout that survives being saved and
   restored at any resolution.
 - **Saved workspaces** — `Build`, `Live`, and the `Encode` graph across the top, plus any you add. Building a show and
@@ -34,7 +34,7 @@ What exists is a workspace you can use and a document you can edit:
 - **Machine telemetry** — CPU, memory, free disk, and GPU, VRAM and *encoder* load read live from
   NVML, plus actual renderer and active output statistics. Unavailable metrics display "—".
 
-The program canvas is published by `libertas-render`, which also owns capture and encoding.
+The program canvas is published by `munkicast-render`, which also owns capture and encoding.
 With no render process running, the canvas reads "no pipeline attached".
 
 ## Testing basic RTMP
@@ -85,19 +85,19 @@ enable the server, choose a port and password, then click **Apply**. Changes tak
 and persist in an owner-only `websocket.json` file beside the application preferences. The server
 starts disabled; authentication is required. It binds to `0.0.0.0` (all IPv4 interfaces),
 port `4455` by default. Connect to `ws://<studio-machine-ip>:4455`.
-`LIBERTAS_WEBSOCKET_PASSWORD` and `LIBERTAS_WEBSOCKET_PORT` can override startup settings.
-Choose **OBS** mode for existing OBS clients, or **Libertas Studio** for the native Companion
+`MUNKICAST_WEBSOCKET_PASSWORD` and `MUNKICAST_WEBSOCKET_PORT` can override startup settings.
+Choose **OBS** mode for existing OBS clients, or **MunkiCast** for the native Companion
 module. Both support OBS WebSocket v5 authentication and replay requests/events, alongside
 scene, source, transform, audio, filter, output, and other supported requests. See the
 [request inventory and limitations](docs/remote-control.md); full OBS parity is not claimed.
 The server uses the system `libsoup3` and `msgpack-c` libraries.
 
 Run the focused end-to-end check with
-`./build/linux/apps/libertas-ui/libertas-ui --check --check-replay`.
+`./build/linux/apps/munkicast-ui/munkicast-ui --check --check-replay`.
 
 ## Why
 
-Libertas is not an OBS fork and uses no `libobs` code. Two reasons:
+MunkiCast is not an OBS fork and uses no `libobs` code. Two reasons:
 
 - **Independence.** A new frontend over `libobs` would still mean tracking upstream releases,
   GPL-linking to their code and inheriting their engine decisions. That is a reskin, not
@@ -120,7 +120,7 @@ rejected alternatives.
 | **Vulkan, explicit sync** | Composite in scene-linear RGBA16F. Encode on the same `VkDevice` via `VK_KHR_video_encode_queue` where available. ([ADR-0006](docs/adr/0006-nvenc-interop-path.md)) |
 | **Multi-GPU encode** | Concurrent encode across different GPUs at different resolutions is a first-class requirement, not a bolt-on. ([ADR-0007](docs/adr/0007-dual-gpu-concurrent-encode.md)) |
 | **Theme-aware** | Follows the live Omarchy theme; ships a token fallback so other platforms are theme-driven too. |
-| **The UI owns its layout** | Wayland cannot restore a client's window geometry, so Libertas lays panels out inside one surface and persists proportions, never pixels. The program canvas is never a separate window and cannot be lost. ([ADR-0015](docs/adr/0015-ui-owns-its-layout.md), [ADR-0016](docs/adr/0016-panel-docking-drop-zones.md)) |
+| **The UI owns its layout** | Wayland cannot restore a client's window geometry, so MunkiCast lays panels out inside one surface and persists proportions, never pixels. The program canvas is never a separate window and cannot be lost. ([ADR-0015](docs/adr/0015-ui-owns-its-layout.md), [ADR-0016](docs/adr/0016-panel-docking-drop-zones.md)) |
 | **One transport** | Our processes talk over `SOCK_SEQPACKET` carrying whole messages and file descriptors, and nothing in it knows what a message means. An empty message is refused, because the kernel reports one exactly as it reports a dead peer. ([ADR-0026](docs/adr/0026-the-process-transport.md)) |
 | **A safe state** | When the show cannot be supervised — a crash, a wedged frontend, or a panic button — the render process cuts to an emergency scene rather than broadcasting whatever happened to be on screen. ([ADR-0025](docs/adr/0025-the-safe-state.md)) |
 
@@ -160,8 +160,8 @@ for rollback; `linux-ffmpeg-9.1` remains a compatibility alias.
 ## Running it
 
 ```sh
-./build/linux/apps/libertas-ui/libertas-ui --project ~/Shows/MyShow.libertas
-./build/linux/apps/libertas/libertas probe
+./build/linux/apps/munkicast-ui/munkicast-ui --project ~/Shows/MyShow.munkicast
+./build/linux/apps/munkicast/munkicast probe
 ```
 
 [Custom browser docks](docs/browser-docks.md) are available under **Docks > Custom Browser Docks…**.
@@ -170,8 +170,8 @@ When using the older `build-make` launch path, rebuild that same directory befor
 
 ```sh
 cmake -S . -B build-make
-cmake --build build-make --target libertas-ui -j8
-./build-make/apps/libertas-ui/libertas-ui
+cmake --build build-make --target munkicast-ui -j8
+./build-make/apps/munkicast-ui/munkicast-ui
 ```
 
 Without `--project` the shell restores the last collection when available, otherwise starts
@@ -182,8 +182,8 @@ was drawn — and forces the offscreen platform, so it cannot reach a display ev
 ## Importing OBS Scene Collections
 
 ```sh
-./build/linux/apps/libertas/libertas import-obs collection.json ~/Shows/Imported.libertas 3840 2160 60 1
-./build/linux/apps/libertas-ui/libertas-ui --project ~/Shows/Imported.libertas
+./build/linux/apps/munkicast/munkicast import-obs collection.json ~/Shows/Imported.munkicast 3840 2160 60 1
+./build/linux/apps/munkicast-ui/munkicast-ui --project ~/Shows/Imported.munkicast
 ```
 
 Destination must not exist. Width, height and rational frame rate are required: OBS normally
@@ -203,13 +203,13 @@ ctest --preset linux-asan     # the same, under ASan + UBSan
 ctest --preset linux-tsan     # the threaded code, under TSan
 ```
 
-The shell's own check, `libertas-ui --check`, loads the real QML, drives
+The shell's own check, `munkicast-ui --check`, loads the real QML, drives
 the real gestures through the same API the panels use, grabs frames and asserts what was drawn
 on the offscreen platform, so it cannot reach a display even by accident. It is
 excluded from the TSan preset, because Qt here is built without TSan and starting its QML thread
 makes the tool itself fail an internal check; the reason is recorded beside the exclusion.
 
-`libertas-ui --check --check-panels` focuses on first-open dock contents, collection switches,
+`munkicast-ui --check --check-panels` focuses on first-open dock contents, collection switches,
 per-canvas source selection, and browser dock attachment. It uses temporary projects/settings.
 For the `build-make` binary, run `ctest --test-dir build-make --output-on-failure`;
 `ctest --test-dir build-make -N` lists the tests available in that build. Node integration
@@ -222,7 +222,7 @@ the sharper bugs in this repository were found by those rather than by reading t
 has a named case beside the random one — a property test tells you *that* something is wrong, a
 named case tells you *what*.
 
-## `libertas probe`
+## `munkicast probe`
 
 Reports everything about a machine that affects capture, composite and encode: GPUs and their DRM
 nodes, Vulkan extension support per device (including video encode), the libva driver actually bound
@@ -243,7 +243,7 @@ rejected permissive options.
 
 ## Remote control
 
-The WebSocket settings include **Libertas Studio** and **OBS** modes. Existing
+The WebSocket settings include **MunkiCast** and **OBS** modes. Existing
 Companion OBS connections can use OBS mode; a native Companion module lives under
 `integrations/companion`. **Tools > MCP Server Settings** runs an independent native
 MCP server with app-wide editing and UI controls, its own port/token, and no

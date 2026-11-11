@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: Libertas-Studio contributors
+SPDX-FileCopyrightText: MunkiCast contributors
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 # ADR 0042 — One scene walk, two render backends
@@ -56,7 +56,7 @@ This version does not wire encoders or outputs into the product.
 
 ### No usable device
 
-`libertas-render` owns device and backend selection. Offscreen self-checks explicitly use CPU;
+`munkicast-render` owns device and backend selection. Offscreen self-checks explicitly use CPU;
 normal runs try Vulkan and retain CPU fallback. Device failure does not make colours, stills,
 or precomps unavailable. Capture can remain unavailable when there is no usable capture device,
 and is reported as a gap. Hardware checks explicitly request GPU so fallback cannot pass them.

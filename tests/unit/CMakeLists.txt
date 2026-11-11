@@ -1,101 +1,101 @@
-# SPDX-FileCopyrightText: Libertas-Studio contributors
+# SPDX-FileCopyrightText: MunkiCast contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 # ltest.hpp is the whole harness; see the comment at the top of it for why there is no framework.
 add_library(ltest INTERFACE)
-add_library(libertas::ltest ALIAS ltest)
+add_library(munkicast::ltest ALIAS ltest)
 target_include_directories(ltest INTERFACE "${CMAKE_CURRENT_SOURCE_DIR}")
-target_link_libraries(ltest INTERFACE libertas::flags)
+target_link_libraries(ltest INTERFACE munkicast::flags)
 
-function(libertas_unit_test name)
+function(munkicast_unit_test name)
     add_executable(${name} ${name}.cpp)
-    target_link_libraries(${name} PRIVATE libertas::ltest ${ARGN})
+    target_link_libraries(${name} PRIVATE munkicast::ltest ${ARGN})
     add_test(NAME ${name} COMMAND ${name})
     set_tests_properties(${name} PROPERTIES TIMEOUT 120)
 endfunction()
 
-libertas_unit_test(test_actions          libertas::lsession)
-libertas_unit_test(test_capture          libertas::lcapture)
-libertas_unit_test(test_video            libertas::lcapture)
-libertas_unit_test(test_audio            libertas::lcapture)
-libertas_unit_test(test_filters          libertas::lcomp)
+munkicast_unit_test(test_actions          munkicast::lsession)
+munkicast_unit_test(test_capture          munkicast::lcapture)
+munkicast_unit_test(test_video            munkicast::lcapture)
+munkicast_unit_test(test_audio            munkicast::lcapture)
+munkicast_unit_test(test_filters          munkicast::lcomp)
 add_library(vst_fixture MODULE vst_fixture.cpp)
-target_link_libraries(vst_fixture PRIVATE libertas::flags)
-target_compile_definitions(test_filters PRIVATE LIBERTAS_VST_FIXTURE="$<TARGET_FILE:vst_fixture>")
+target_link_libraries(vst_fixture PRIVATE munkicast::flags)
+target_compile_definitions(test_filters PRIVATE MUNKICAST_VST_FIXTURE="$<TARGET_FILE:vst_fixture>")
 add_dependencies(test_filters vst_fixture)
-libertas_unit_test(test_source_worker    libertas::lcomp libertas::lcore)
-target_sources(test_source_worker PRIVATE ../../apps/libertas-render/source_worker.cpp)
+munkicast_unit_test(test_source_worker    munkicast::lcomp munkicast::lcore)
+target_sources(test_source_worker PRIVATE ../../apps/munkicast-render/source_worker.cpp)
 target_compile_definitions(test_source_worker PRIVATE
-    LIBERTAS_SOURCE_EXE="$<TARGET_FILE:libertas-source>"
-    LIBERTAS_IMAGE_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/images")
-add_dependencies(test_source_worker libertas-source)
-libertas_unit_test(test_command          libertas::ldoc)
-libertas_unit_test(test_composite        libertas::lcomp)
+    MUNKICAST_SOURCE_EXE="$<TARGET_FILE:munkicast-source>"
+    MUNKICAST_IMAGE_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/images")
+add_dependencies(test_source_worker munkicast-source)
+munkicast_unit_test(test_command          munkicast::ldoc)
+munkicast_unit_test(test_composite        munkicast::lcomp)
 target_compile_definitions(test_composite PRIVATE
-    LIBERTAS_IMAGE_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/images")
-libertas_unit_test(test_document         libertas::ldoc)
-libertas_unit_test(test_dropzone        libertas::llayout)
-libertas_unit_test(test_journal          libertas::ldoc libertas::lcore)
-libertas_unit_test(test_fuzz             libertas::ldoc libertas::llayout libertas::lsession)
-libertas_unit_test(test_golden           libertas::ldoc libertas::lcore)
+    MUNKICAST_IMAGE_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/images")
+munkicast_unit_test(test_document         munkicast::ldoc)
+munkicast_unit_test(test_dropzone        munkicast::llayout)
+munkicast_unit_test(test_journal          munkicast::ldoc munkicast::lcore)
+munkicast_unit_test(test_fuzz             munkicast::ldoc munkicast::llayout munkicast::lsession)
+munkicast_unit_test(test_golden           munkicast::ldoc munkicast::lcore)
 target_compile_definitions(test_golden PRIVATE
-    LIBERTAS_TEST_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
-libertas_unit_test(test_ipc              libertas::lipc)
-libertas_unit_test(test_json             libertas::ldoc)
+    MUNKICAST_TEST_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
+munkicast_unit_test(test_ipc              munkicast::lipc)
+munkicast_unit_test(test_json             munkicast::ldoc)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(RECORD_TEST_FFMPEG REQUIRED IMPORTED_TARGET
     libavcodec libavformat libavutil libswscale)
-libertas_unit_test(test_preview         libertas::lcomp libertas::lcapture PkgConfig::RECORD_TEST_FFMPEG)
-libertas_unit_test(test_encode          libertas::lencode PkgConfig::RECORD_TEST_FFMPEG)
+munkicast_unit_test(test_preview         munkicast::lcomp munkicast::lcapture PkgConfig::RECORD_TEST_FFMPEG)
+munkicast_unit_test(test_encode          munkicast::lencode PkgConfig::RECORD_TEST_FFMPEG)
 target_link_options(test_encode PRIVATE "-Wl,--wrap=write")
 find_program(RTMP_TEST_FFMPEG NAMES ffmpeg REQUIRED)
 target_compile_definitions(test_preview PRIVATE
-    LIBERTAS_TEST_FFMPEG="${RTMP_TEST_FFMPEG}"
-    LIBERTAS_VST_FIXTURE="$<TARGET_FILE:vst_fixture>"
-    LIBERTAS_RENDER="$<TARGET_FILE:libertas-render>"
-    LIBERTAS_IMAGE_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/images")
-add_dependencies(test_preview libertas-render vst_fixture)
-set_tests_properties(test_preview PROPERTIES ENVIRONMENT "LIBERTAS_RENDER_BACKEND=cpu")
-libertas_unit_test(test_gpu_composite libertas::lrhi libertas::lencode PkgConfig::RECORD_TEST_FFMPEG)
+    MUNKICAST_TEST_FFMPEG="${RTMP_TEST_FFMPEG}"
+    MUNKICAST_VST_FIXTURE="$<TARGET_FILE:vst_fixture>"
+    MUNKICAST_RENDER="$<TARGET_FILE:munkicast-render>"
+    MUNKICAST_IMAGE_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/images")
+add_dependencies(test_preview munkicast-render vst_fixture)
+set_tests_properties(test_preview PROPERTIES ENVIRONMENT "MUNKICAST_RENDER_BACKEND=cpu")
+munkicast_unit_test(test_gpu_composite munkicast::lrhi munkicast::lencode PkgConfig::RECORD_TEST_FFMPEG)
 target_compile_definitions(test_gpu_composite PRIVATE
-    LIBERTAS_IMAGE_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/images")
+    MUNKICAST_IMAGE_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/images")
 set_tests_properties(test_gpu_composite PROPERTIES SKIP_RETURN_CODE 77)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(GPU_TEST_SWSCALE REQUIRED IMPORTED_TARGET libswscale)
 target_link_libraries(test_gpu_composite PRIVATE PkgConfig::GPU_TEST_SWSCALE)
-libertas_unit_test(test_project_io       libertas::ldoc libertas::lcore)
+munkicast_unit_test(test_project_io       munkicast::ldoc munkicast::lcore)
 find_package(PkgConfig REQUIRED)
 find_package(Qt6 REQUIRED COMPONENTS Gui)
 pkg_check_modules(JSONCPP REQUIRED IMPORTED_TARGET jsoncpp)
-libertas_unit_test(test_obs_import libertas::limport libertas::lcomp Qt6::Gui PkgConfig::JSONCPP)
+munkicast_unit_test(test_obs_import munkicast::limport munkicast::lcomp Qt6::Gui PkgConfig::JSONCPP)
 target_compile_definitions(test_obs_import PRIVATE
-    LIBERTAS_CLI="$<TARGET_FILE:libertas>"
-    LIBERTAS_IMAGE_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/images")
-add_dependencies(test_obs_import libertas)
+    MUNKICAST_CLI="$<TARGET_FILE:munkicast>"
+    MUNKICAST_IMAGE_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/images")
+add_dependencies(test_obs_import munkicast)
 # The asset cache's decision logic (ADR-0069). Only the free functions are exercised -- the
 # recipe choice and the settings reading -- but the translation unit holds a QObject, so it
 # needs moc and Qt's Qml module to link. The shell self-check covers everything that needs a
 # running shell; this covers the branches a table of sizes can reach in milliseconds.
 find_package(Qt6 REQUIRED COMPONENTS Gui Qml)
-libertas_unit_test(test_assetcache       libertas::ldoc libertas::lcore Qt6::Gui Qt6::Qml)
+munkicast_unit_test(test_assetcache       munkicast::ldoc munkicast::lcore Qt6::Gui Qt6::Qml)
 target_sources(test_assetcache PRIVATE
-    ../../apps/libertas-ui/assetcache.cpp
-    ../../apps/libertas-ui/preferences.cpp)
-target_include_directories(test_assetcache PRIVATE ../../apps/libertas-ui)
+    ../../apps/munkicast-ui/assetcache.cpp
+    ../../apps/munkicast-ui/preferences.cpp)
+target_include_directories(test_assetcache PRIVATE ../../apps/munkicast-ui)
 set_target_properties(test_assetcache PROPERTIES AUTOMOC ON)
 
-libertas_unit_test(test_layout          libertas::llayout)
-libertas_unit_test(test_layout_history  libertas::llayout)
-libertas_unit_test(test_layout_serialize libertas::llayout libertas::lcore)
-libertas_unit_test(test_session          libertas::lsession)
-libertas_unit_test(test_theme            libertas::ltheme libertas::lcore)
-libertas_unit_test(test_workspaces       libertas::llayout libertas::lcore)
-libertas_unit_test(test_ulid             libertas::lcore)
+munkicast_unit_test(test_layout          munkicast::llayout)
+munkicast_unit_test(test_layout_history  munkicast::llayout)
+munkicast_unit_test(test_layout_serialize munkicast::llayout munkicast::lcore)
+munkicast_unit_test(test_session          munkicast::lsession)
+munkicast_unit_test(test_theme            munkicast::ltheme munkicast::lcore)
+munkicast_unit_test(test_workspaces       munkicast::llayout munkicast::lcore)
+munkicast_unit_test(test_ulid             munkicast::lcore)
 
 find_package(Qt6 REQUIRED COMPONENTS Gui Network Qml)
-libertas_unit_test(test_connectors Qt6::Gui Qt6::Network Qt6::Qml)
-target_sources(test_connectors PRIVATE ../../apps/libertas-ui/connectors.cpp)
-target_include_directories(test_connectors PRIVATE ../../apps/libertas-ui)
+munkicast_unit_test(test_connectors Qt6::Gui Qt6::Network Qt6::Qml)
+target_sources(test_connectors PRIVATE ../../apps/munkicast-ui/connectors.cpp)
+target_include_directories(test_connectors PRIVATE ../../apps/munkicast-ui)
 set_target_properties(test_connectors PROPERTIES AUTOMOC ON)
 qt_add_resources(test_connectors connector_catalog_test PREFIX "/connectors"
-    BASE ../../apps/libertas-ui FILES ../../apps/libertas-ui/data/obs-services.json)
+    BASE ../../apps/munkicast-ui FILES ../../apps/munkicast-ui/data/obs-services.json)

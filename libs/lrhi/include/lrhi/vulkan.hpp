@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
@@ -10,10 +10,10 @@
 #include <string>
 #include <vector>
 
-namespace libertas::rhi {
+namespace munkicast::rhi {
 
-using libertas::capture::CapturedFrame;
-using libertas::capture::DmabufImage;
+using munkicast::capture::CapturedFrame;
+using munkicast::capture::DmabufImage;
 
 struct VkCtx;
 
@@ -52,7 +52,7 @@ bool vk_matches_drm_device(VkCtx& ctx, std::uint64_t device);
 /// moved there and a library cannot depend on a spike. This alias keeps the spike's own name: the
 /// allocator is still here, and renaming it across fourteen call sites would put unrelated churn
 /// in the commit that moved the backend.
-using VkExportedImage = libertas::capture::DmabufImage;
+using VkExportedImage = munkicast::capture::DmabufImage;
 
 /// Creates an image the compositor can render into, picking from `allowed` (most preferred first).
 ///
@@ -91,4 +91,4 @@ CapturedFrame vk_exported_as_frame(const VkExportedImage& img, std::uint32_t drm
 bool vk_import_and_readback(VkCtx& ctx, const CapturedFrame& frame, std::vector<std::uint8_t>& out,
                             std::string& error);
 
-} // namespace libertas::rhi
+} // namespace munkicast::rhi

@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: Libertas-Studio contributors
+SPDX-FileCopyrightText: MunkiCast contributors
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 # ADR 0028 — One word for a source, in the code as well as on the screen
@@ -83,7 +83,7 @@ transforms keyed by scene, which is the second type wearing a disguise.
 one `kSchemaVersion` 2 with one migration and one set of fixtures. Doing them separately would
 mean two migrations, and the second would have to be written against the first.
 
-**Wide but mechanical.** `ldoc` (node, command, json, validate), `lsession`, the `libertas-ui`
+**Wide but mechanical.** `ldoc` (node, command, json, validate), `lsession`, the `munkicast-ui`
 bridge and models, every panel that says "layer", the CLI `inspect`, and the tests. The compiler
 finds all of it; the JSON reader is the one place it will not, since field names are strings.
 
@@ -98,7 +98,7 @@ already right.
 ## Implementation note — the C++ landed first, the wire format did not
 
 *Added 2026-10-13.* The rename in the code is done: `NodeKind::Source`, `SourceData`,
-`SetNodeSource`, and in `libertas-ui` `Document.nodes`, `nodeProperties`, `selectedNode`,
+`SetNodeSource`, and in `munkicast-ui` `Document.nodes`, `nodeProperties`, `selectedNode`,
 `addSourceNode` and the `setNode*` family. The layer/source explanation now lives at `SourceData`
 in `libs/ldoc/include/ldoc/node.hpp`.
 

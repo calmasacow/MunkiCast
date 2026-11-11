@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
@@ -10,7 +10,7 @@
 #include <stdexcept>
 #include <utility>
 
-namespace libertas::capture {
+namespace munkicast::capture {
 
 /// Bounded input jitter buffer. Caller supplies locking; sampling never waits or copies pixels.
 /// Monotonic driver timestamps supply frame intervals, independently of USB delivery jitter.
@@ -123,4 +123,4 @@ class VideoBuffer {
     std::uint32_t driver_ = 0;
     bool anchored_ = false;
 };
-} // namespace libertas::capture
+} // namespace munkicast::capture

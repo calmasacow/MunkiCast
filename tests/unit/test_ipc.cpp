@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "ltest.hpp"
@@ -140,7 +140,7 @@ LTEST_CASE(a_descriptor_arrives_pointing_at_the_same_memory) {
     REQUIRE(made.has_value());
     auto& [a, b] = *made;
 
-    auto mem = make_memfd("libertas-test-ring", 4096);
+    auto mem = make_memfd("munkicast-test-ring", 4096);
     REQUIRE_MSG(mem.has_value(), "{}", mem ? std::string{} : mem.error());
 
     void* mine = ::mmap(nullptr, 4096, PROT_READ | PROT_WRITE, MAP_SHARED, mem->get(), 0);
@@ -174,7 +174,7 @@ LTEST_CASE(a_sealed_memfd_cannot_be_shrunk_under_a_receiver) {
     // Why the seal is there: a receiver maps the whole thing and then indexes into it. If the
     // sender could shrink it afterwards, those accesses would become SIGBUS -- a crash the
     // receiver cannot prevent by validating anything it was sent.
-    auto mem = make_memfd("libertas-test-sealed", 8192);
+    auto mem = make_memfd("munkicast-test-sealed", 8192);
     REQUIRE(mem.has_value());
     CHECK_MSG(::ftruncate(mem->get(), 1024) != 0, "a sealed memfd was shrunk");
     CHECK_MSG(::ftruncate(mem->get(), 16384) != 0, "a sealed memfd was grown");
@@ -193,7 +193,7 @@ LTEST_CASE(several_descriptors_travel_together_and_none_are_lost) {
     std::vector<Fd> mine;
     std::vector<int> raw;
     for (std::size_t i = 0; i < Channel::kMaxFds; ++i) {
-        auto m = make_memfd("libertas-test-many", 64);
+        auto m = make_memfd("munkicast-test-many", 64);
         REQUIRE(m.has_value());
         // A different byte in each, so a mix-up is visible rather than merely possible.
         void* p = ::mmap(nullptr, 64, PROT_READ | PROT_WRITE, MAP_SHARED, m->get(), 0);
@@ -256,7 +256,7 @@ LTEST_CASE(receiving_does_not_leak_a_descriptor_however_it_ends) {
         auto& [a, b] = *made;
 
         for (int i = 0; i < 200; ++i) {
-            auto m = make_memfd("libertas-test-churn", 64);
+            auto m = make_memfd("munkicast-test-churn", 64);
             REQUIRE(m.has_value());
             const int raw = m->get();
             REQUIRE(a.send(bytes_of("frame"), std::span<const int>{&raw, 1}).has_value());
@@ -280,7 +280,7 @@ LTEST_CASE(a_message_dropped_without_being_read_still_closes_its_descriptors) {
         REQUIRE(made.has_value());
         auto& [a, b] = *made;
         for (int i = 0; i < 5; ++i) {
-            auto m = make_memfd("libertas-test-dropped", 64);
+            auto m = make_memfd("munkicast-test-dropped", 64);
             REQUIRE(m.has_value());
             const int raw = m->get();
             REQUIRE(a.send(bytes_of("never read"), std::span<const int>{&raw, 1}).has_value());
@@ -368,7 +368,7 @@ LTEST_CASE(a_channel_survives_being_used_from_two_threads_in_turn) {
 LTEST_CASE(a_moved_descriptor_leaves_nothing_behind) {
     const std::size_t before = open_fds();
     {
-        auto m = make_memfd("libertas-test-move", 64);
+        auto m = make_memfd("munkicast-test-move", 64);
         REQUIRE(m.has_value());
         const int raw = m->get();
         Fd moved = std::move(*m);

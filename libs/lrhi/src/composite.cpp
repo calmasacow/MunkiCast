@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "shaders/composite_spv.h"
 #include "shaders/filter_spv.h"
@@ -26,7 +26,7 @@
 #include <unistd.h>
 #include <utility>
 
-namespace libertas::rhi {
+namespace munkicast::rhi {
 namespace {
 void checked(VkResult result, const char* action) {
     if (result != VK_SUCCESS)
@@ -219,7 +219,7 @@ struct GpuCompositor::Impl {
     VkCommandPool pool = VK_NULL_HANDLE;
     VkCommandBuffer cmd = VK_NULL_HANDLE;
     VkFence fence = VK_NULL_HANDLE;
-    // LIBERTAS_BENCHMARK only: GPU timestamps splitting the fence wait into upload, compute
+    // MUNKICAST_BENCHMARK only: GPU timestamps splitting the fence wait into upload, compute
     // and readback time. Uploads are interleaved with draws, so they are summed per copy.
     VkQueryPool timestamps = VK_NULL_HANDLE;
     std::uint32_t stamp_at = 0;
@@ -247,7 +247,7 @@ struct GpuCompositor::Impl {
     std::size_t image_at = 0, upload_at = 0;
     // Images the compositor may hold. Half of the device-local heap's budget at startup, which
     // leaves room for the encoder, Qt and other programs; 512 MiB where the driver cannot say.
-    // LIBERTAS_GPU_BUDGET_MIB, set from Preferences, replaces it.
+    // MUNKICAST_GPU_BUDGET_MIB, set from Preferences, replaces it.
     std::uint64_t budget = 512ull << 20;
     std::uint64_t allocated = 0;
 
@@ -458,7 +458,7 @@ struct GpuCompositor::Impl {
                 budget = std::max(budget, largest / 2);
         }
         // Edit > Preferences: an explicit budget overrides the default (0 or unset keeps it).
-        if (const char* mib = std::getenv("LIBERTAS_GPU_BUDGET_MIB"))
+        if (const char* mib = std::getenv("MUNKICAST_GPU_BUDGET_MIB"))
             if (const auto value = std::strtoull(mib, nullptr, 10); value >= 256)
                 budget = value << 20;
         // Reserve the first device block now, at startup, not on the first frame that needs it.
@@ -481,7 +481,7 @@ struct GpuCompositor::Impl {
             arena(memory_type(*c, req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT), false)
                 .grow(0);
         }
-        if (std::getenv("LIBERTAS_BENCHMARK") && device_props.limits.timestampComputeAndGraphics) {
+        if (std::getenv("MUNKICAST_BENCHMARK") && device_props.limits.timestampComputeAndGraphics) {
             VkQueryPoolCreateInfo qi{};
             qi.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
             qi.queryType = VK_QUERY_TYPE_TIMESTAMP;
@@ -1399,4 +1399,4 @@ std::optional<lcomp::Picture> GpuCompositor::render(const lcomp::DrawPlan& plan,
         return std::nullopt;
     }
 }
-} // namespace libertas::rhi
+} // namespace munkicast::rhi

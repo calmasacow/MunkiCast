@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
@@ -12,7 +12,7 @@
 #include <string>
 #include <vector>
 
-namespace libertas::encode {
+namespace munkicast::encode {
 
 /// Which encoder tier was actually used. ADR-0006 specifies a ladder rather than one encoder,
 /// because the top rung is not available everywhere and failing to start a show is not an option.
@@ -157,4 +157,4 @@ bool encoder_video_device(Encoder& enc, int fd, std::uint64_t size, std::uint64_
                                            const ldoc::AudioEncode& audio,
                                            const ldoc::Canvas& canvas, std::string path);
 
-} // namespace libertas::encode
+} // namespace munkicast::encode

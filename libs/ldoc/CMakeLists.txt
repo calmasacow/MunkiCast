@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Libertas-Studio contributors
+# SPDX-FileCopyrightText: MunkiCast contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # The document model: the non-OBS-shaped scene/node/source/bus/canvas model, shared by the UI, the
@@ -20,10 +20,10 @@ add_library(ldoc STATIC
     src/node.cpp
     src/types.cpp
 )
-add_library(libertas::ldoc ALIAS ldoc)
+add_library(munkicast::ldoc ALIAS ldoc)
 
 target_include_directories(ldoc PUBLIC include)
 target_link_libraries(ldoc
-    PUBLIC libertas::flags libertas::lcore
+    PUBLIC munkicast::flags munkicast::lcore
     PRIVATE PkgConfig::JSONCPP
 )

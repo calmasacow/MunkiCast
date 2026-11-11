@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
@@ -9,7 +9,7 @@
 #include <numeric>
 #include <string>
 
-namespace libertas::capture::detail {
+namespace munkicast::capture::detail {
 struct SignalMode {
     int width = 0, height = 0;
     std::uint32_t numerator = 0, denominator = 1;
@@ -43,4 +43,4 @@ inline bool matches_signal_rate(const SignalMode& signal, std::uint32_t numerato
     return numerator && denominator &&
         std::abs(static_cast<double>(numerator) / denominator - signal.fps()) <= signal.fps() * 0.005;
 }
-} // namespace libertas::capture::detail
+} // namespace munkicast::capture::detail

@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: Libertas-Studio contributors
+SPDX-FileCopyrightText: MunkiCast contributors
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 # ADR-0065: Native source filters and ordered processing
@@ -12,7 +12,7 @@ The operator requires the stock OBS filter suite, native processing and source
 context-menu editing. Existing node effects and bus inserts are document records;
 enabled effects currently refuse rendering or silence a bus. OBS filter JSON is
 retained but not translated. A menu without processing would misrepresent support.
-Libertas remains independent: no libOBS linkage or embedded OBS runtime.
+MunkiCast remains independent: no libOBS linkage or embedded OBS runtime.
 
 ## Ownership and persistence
 

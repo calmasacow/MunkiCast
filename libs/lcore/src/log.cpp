@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "lcore/log.hpp"
@@ -54,7 +54,7 @@ void log_raw(Level lvl, std::string_view msg) {
 }
 
 void init_from_env() {
-    const char* env = std::getenv("LIBERTAS_LOG");
+    const char* env = std::getenv("MUNKICAST_LOG");
     if (env == nullptr)
         return;
     const std::string v(env);

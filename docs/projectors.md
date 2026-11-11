@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: Libertas-Studio contributors
+SPDX-FileCopyrightText: MunkiCast contributors
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 # Program and Preview projectors
@@ -79,17 +79,17 @@ frames accumulate when the UI stops reading. OBS WebSocket projector request map
 remains separate from these native controls.
 
 ```sh
-cmake --build build-make --target libertas-ui test_preview test_gpu_composite -j8
+cmake --build build-make --target munkicast-ui test_preview test_gpu_composite -j8
 ctest --test-dir build-make -R '^(test_preview|studio_self_check|native_mcp_self_check)$' --output-on-failure
-LIBERTAS_TEST_GPU=1 ./build-make/tests/unit/test_gpu_composite
+MUNKICAST_TEST_GPU=1 ./build-make/tests/unit/test_gpu_composite
 # Opens a temporary test window, with an isolated generated show:
-LIBERTAS_TEST_PROJECTORS=1 ./build-make/tests/unit/test_preview
+MUNKICAST_TEST_PROJECTORS=1 ./build-make/tests/unit/test_preview
 # Optional: briefly occupies this monitor to check actual fullscreen configuration:
-LIBERTAS_TEST_PROJECTORS=1 LIBERTAS_TEST_PROJECTOR_FULLSCREEN=HDMI-A-1 ./build-make/tests/unit/test_preview
+MUNKICAST_TEST_PROJECTORS=1 MUNKICAST_TEST_PROJECTOR_FULLSCREEN=HDMI-A-1 ./build-make/tests/unit/test_preview
 # Alternating warm baseline/projector composition timings, 1080p and 2160p:
-LIBERTAS_TEST_GPU=1 LIBERTAS_BENCH_PROJECTOR=1 ./build-make/tests/unit/test_gpu_composite
+MUNKICAST_TEST_GPU=1 MUNKICAST_BENCH_PROJECTOR=1 ./build-make/tests/unit/test_gpu_composite
 # Repeat for the shared system-memory path used across different GPUs:
-LIBERTAS_TEST_GPU=1 LIBERTAS_BENCH_PROJECTOR=1 LIBERTAS_BENCH_PROJECTOR_HOST=1 ./build-make/tests/unit/test_gpu_composite
+MUNKICAST_TEST_GPU=1 MUNKICAST_BENCH_PROJECTOR=1 MUNKICAST_BENCH_PROJECTOR_HOST=1 ./build-make/tests/unit/test_gpu_composite
 ```
 
 Unit checks compare exported projector GPU pixels against the full encoder picture,

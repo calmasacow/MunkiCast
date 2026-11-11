@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Libertas-Studio contributors
+# SPDX-FileCopyrightText: MunkiCast contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # The workspace layout tree (ADR-0015) and the Adobe drop-zone docking model (ADR-0016).
@@ -16,10 +16,10 @@ add_library(llayout STATIC
     src/serialize.cpp
     src/workspaces.cpp
 )
-add_library(libertas::llayout ALIAS llayout)
+add_library(munkicast::llayout ALIAS llayout)
 
 target_include_directories(llayout PUBLIC include)
 target_link_libraries(llayout
-    PUBLIC libertas::flags
-    PRIVATE libertas::lcore tomlplusplus::tomlplusplus
+    PUBLIC munkicast::flags
+    PRIVATE munkicast::lcore tomlplusplus::tomlplusplus
 )

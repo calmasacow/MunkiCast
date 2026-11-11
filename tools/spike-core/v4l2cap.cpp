@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // V4L2 capture-card source.
@@ -25,7 +25,7 @@
 
 #include <linux/videodev2.h>
 
-namespace libertas::spike {
+namespace munkicast::spike {
 
 namespace {
 
@@ -372,4 +372,4 @@ bool v4l2_capture(const V4l2Config& cfg, V4l2Result& out, std::string& error) {
     return out.captured > 0;
 }
 
-} // namespace libertas::spike
+} // namespace munkicast::spike

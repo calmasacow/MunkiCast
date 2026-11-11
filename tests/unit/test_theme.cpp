@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Theme tokens and Omarchy theme following.
@@ -21,7 +21,7 @@ class ScratchDir {
 public:
     ScratchDir() {
         path_ = std::filesystem::temp_directory_path() /
-                std::format("libertas-ltheme-{}", ::getpid());
+                std::format("munkicast-ltheme-{}", ::getpid());
         std::error_code ec;
         std::filesystem::remove_all(path_, ec);
         std::filesystem::create_directories(path_ / "current" / "theme", ec);

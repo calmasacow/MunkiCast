@@ -1,6 +1,6 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
-#include "../../apps/libertas-vst/abi.hpp"
+#include "../../apps/munkicast-vst/abi.hpp"
 
 #include <cstring>
 #include <unistd.h>

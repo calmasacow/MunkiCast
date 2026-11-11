@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include <lcapture/video.hpp>
 #include <lcapture/video_buffer.hpp>
@@ -14,7 +14,7 @@
 #include <unistd.h>
 
 LTEST_CASE(automatic_capture_reports_unavailable_input_timing_without_guessing_a_rate) {
-    const char* device = std::getenv("LIBERTAS_TEST_SIGNAL_DEVICE");
+    const char* device = std::getenv("MUNKICAST_TEST_SIGNAL_DEVICE");
     if (!device) return;
     const int fd = ::open(device, O_RDWR | O_NONBLOCK | O_CLOEXEC);
     REQUIRE(fd >= 0);
@@ -23,14 +23,14 @@ LTEST_CASE(automatic_capture_reports_unavailable_input_timing_without_guessing_a
     ::close(fd);
     if (available) return; // Devices exposing timing exercise the negotiation path instead.
     std::string error;
-    auto capture = libertas::capture::VideoCapture::open(device, "Match incoming signal",
+    auto capture = munkicast::capture::VideoCapture::open(device, "Match incoming signal",
         "Match incoming signal", "Default", error);
     CHECK(!capture);
     CHECK(error.starts_with("Incoming signal timing unavailable"));
 }
 
 LTEST_CASE(incoming_signal_rate_uses_full_frame_timing_and_rejects_invalid_signals) {
-    using namespace libertas::capture::detail;
+    using namespace munkicast::capture::detail;
     v4l2_dv_timings timing{};
     timing.type = V4L2_DV_BT_656_1120;
     timing.bt.width = 1920;
@@ -72,36 +72,36 @@ LTEST_CASE(incoming_signal_rate_uses_full_frame_timing_and_rejects_invalid_signa
 
 LTEST_CASE(unavailable_video_is_an_error_not_an_invented_frame) {
     std::string error;
-    CHECK(!libertas::capture::VideoCapture::open("/dev/video999999", "", "", "", error));
+    CHECK(!munkicast::capture::VideoCapture::open("/dev/video999999", "", "", "", error));
     CHECK(!error.empty());
 }
 
 LTEST_CASE(video_options_reject_invalid_timeouts_and_nondevices) {
     for (int frames : {0, 1, 121}) {
         std::string error;
-        libertas::capture::VideoOptions options;
+        munkicast::capture::VideoOptions options;
         options.timeout_frames = frames;
-        CHECK(!libertas::capture::VideoCapture::open("/dev/video999999", "", "", "", error, options));
+        CHECK(!munkicast::capture::VideoCapture::open("/dev/video999999", "", "", "", error, options));
         CHECK(error.find("2 to 120") != std::string::npos);
     }
-    CHECK(libertas::capture::list_video_formats("/etc/passwd").empty());
+    CHECK(munkicast::capture::list_video_formats("/etc/passwd").empty());
 }
 
 LTEST_CASE(device_formats_and_both_buffering_modes_produce_real_frames) {
-    const char* device = std::getenv("LIBERTAS_TEST_VIDEO");
+    const char* device = std::getenv("MUNKICAST_TEST_VIDEO");
     if (!device) return;
-    const auto formats = libertas::capture::list_video_formats(device);
+    const auto formats = munkicast::capture::list_video_formats(device);
     REQUIRE(!formats.empty());
     for (const auto& format : formats) {
         for (bool buffering : {true, false}) {
-            libertas::capture::VideoOptions options;
+            munkicast::capture::VideoOptions options;
             options.format = format.code;
             options.buffering = buffering;
             options.auto_reset = true;
             // Elgato offers these formats at 1080p30; higher modes can exceed USB bandwidth.
             options.timeout_frames = 120;
             std::string error;
-            auto capture = libertas::capture::VideoCapture::open(device, "1920x1080", "30", "Default", error, options);
+            auto capture = munkicast::capture::VideoCapture::open(device, "1920x1080", "30", "Default", error, options);
             REQUIRE_MSG(capture != nullptr, "{} {}: {}", format.code, buffering, error);
             CHECK_EQ(capture->negotiated_fps(), 30.0);
             std::mutex mu;
@@ -125,16 +125,16 @@ LTEST_CASE(device_formats_and_both_buffering_modes_produce_real_frames) {
 }
 
 LTEST_CASE(elgato_streams_1440p60_and_held_frames_are_immutable) {
-    const char* device = std::getenv("LIBERTAS_TEST_VIDEO");
+    const char* device = std::getenv("MUNKICAST_TEST_VIDEO");
     if (!device) return;
     std::string error;
-    auto capture = libertas::capture::VideoCapture::open(device, "2560x1440", "60", "Default", error);
+    auto capture = munkicast::capture::VideoCapture::open(device, "2560x1440", "60", "Default", error);
     REQUIRE_MSG(capture != nullptr, "{}", error);
     CHECK_EQ(capture->negotiated_fps(), 60.0);
     std::mutex mu;
     std::condition_variable changed;
     int count = 0;
-    std::shared_ptr<const libertas::capture::VideoFrame> held;
+    std::shared_ptr<const munkicast::capture::VideoFrame> held;
     std::vector<std::uint8_t> original;
     std::chrono::steady_clock::time_point first, last;
     capture->start([&](auto frame) {
@@ -167,8 +167,8 @@ LTEST_CASE(elgato_streams_1440p60_and_held_frames_are_immutable) {
 
 LTEST_CASE(buffered_video_smooths_ordered_bursts_without_waiting) {
     using namespace std::chrono_literals;
-    using libertas::capture::VideoBuffer;
-    using libertas::capture::VideoFrame;
+    using munkicast::capture::VideoBuffer;
+    using munkicast::capture::VideoFrame;
     VideoBuffer buffer(10ms);
     const auto start = VideoBuffer::Clock::time_point{} + 1s;
     constexpr int jitter[] = {0, 8, 2, 12, 4};
@@ -194,8 +194,8 @@ LTEST_CASE(buffered_video_smooths_ordered_bursts_without_waiting) {
 
 LTEST_CASE(buffered_video_bounds_leases_and_recovers_from_disconnect_reset_and_wrap) {
     using namespace std::chrono_literals;
-    using libertas::capture::VideoBuffer;
-    using libertas::capture::VideoFrame;
+    using munkicast::capture::VideoBuffer;
+    using munkicast::capture::VideoFrame;
     VideoBuffer buffer(10ms);
     auto now = VideoBuffer::Clock::time_point{} + 1s;
     std::vector<std::weak_ptr<const VideoFrame>> leases;
@@ -235,8 +235,8 @@ LTEST_CASE(buffered_video_bounds_leases_and_recovers_from_disconnect_reset_and_w
 
 LTEST_CASE(buffered_video_uses_actual_camera_clock_without_periodic_refills) {
     using namespace std::chrono_literals;
-    using libertas::capture::VideoBuffer;
-    using libertas::capture::VideoFrame;
+    using munkicast::capture::VideoBuffer;
+    using munkicast::capture::VideoFrame;
     constexpr auto output_period = 16666666ns;
     constexpr auto camera_period = 16311900ns; // Measured Guermok rate despite nominal 60 fps.
     VideoBuffer buffer(output_period);
@@ -265,8 +265,8 @@ LTEST_CASE(buffered_video_uses_actual_camera_clock_without_periodic_refills) {
 
 LTEST_CASE(buffered_video_does_not_alternate_holds_and_skips_at_timestamp_boundaries) {
     using namespace std::chrono_literals;
-    using libertas::capture::VideoBuffer;
-    using libertas::capture::VideoFrame;
+    using munkicast::capture::VideoBuffer;
+    using munkicast::capture::VideoFrame;
     // Positive jitter on an even driver frame also exercises 120 -> 60 fps decimation.
     constexpr int jitter[] = {0, 30, 20, 15, -30, 5};
     const auto start = VideoBuffer::Clock::time_point{} + 10s;
@@ -298,8 +298,8 @@ LTEST_CASE(buffered_video_does_not_alternate_holds_and_skips_at_timestamp_bounda
 
 LTEST_CASE(buffered_video_hysteresis_still_resamples_real_clock_drift) {
     using namespace std::chrono_literals;
-    using libertas::capture::VideoBuffer;
-    using libertas::capture::VideoFrame;
+    using munkicast::capture::VideoBuffer;
+    using munkicast::capture::VideoFrame;
     constexpr auto output_period = 16666666ns;
     constexpr int jitter[] = {0, 30, -20, 15, -30, 5};
     const auto start = VideoBuffer::Clock::time_point{} + 10s;
@@ -347,8 +347,8 @@ LTEST_CASE(buffered_video_hysteresis_still_resamples_real_clock_drift) {
 
 LTEST_CASE(buffered_video_rejects_invalid_driver_timestamps_without_flushing_good_frames) {
     using namespace std::chrono_literals;
-    using libertas::capture::VideoBuffer;
-    using libertas::capture::VideoFrame;
+    using munkicast::capture::VideoBuffer;
+    using munkicast::capture::VideoFrame;
     VideoBuffer buffer(10ms);
     const auto start = VideoBuffer::Clock::time_point{} + 10s;
     int delivered = 0;

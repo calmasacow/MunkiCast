@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Libertas-Studio contributors
+# SPDX-FileCopyrightText: MunkiCast contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # The Vulkan device: allocation, dmabuf export and import, and readback to host memory.
@@ -21,12 +21,12 @@ add_library(lrhi STATIC
     src/composite.cpp
 )
 include(CompileShader)
-libertas_compile_shader(lrhi shaders/composite.comp)
-libertas_compile_shader(lrhi shaders/preview.comp)
-libertas_compile_shader(lrhi shaders/filter.comp)
-libertas_compile_shader(lrhi shaders/yuv.comp)
-libertas_compile_shader(lrhi shaders/nv12.comp)
-add_library(libertas::lrhi ALIAS lrhi)
+munkicast_compile_shader(lrhi shaders/composite.comp)
+munkicast_compile_shader(lrhi shaders/preview.comp)
+munkicast_compile_shader(lrhi shaders/filter.comp)
+munkicast_compile_shader(lrhi shaders/yuv.comp)
+munkicast_compile_shader(lrhi shaders/nv12.comp)
+add_library(munkicast::lrhi ALIAS lrhi)
 
 target_include_directories(lrhi
     PUBLIC include
@@ -35,6 +35,6 @@ target_include_directories(lrhi
     PRIVATE src
 )
 target_link_libraries(lrhi
-    PUBLIC libertas::flags libertas::lcapture libertas::lcomp
-    PRIVATE libertas::lcore Vulkan::Vulkan PkgConfig::LIBDRM
+    PUBLIC munkicast::flags munkicast::lcapture munkicast::lcomp
+    PRIVATE munkicast::lcore Vulkan::Vulkan PkgConfig::LIBDRM
 )

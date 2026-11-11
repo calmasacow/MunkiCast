@@ -24,7 +24,7 @@ Import and export use the desktop file-chooser portal. Native imports copy a cho
 OBS imports ask for canvas dimensions and rational FPS because these belong to OBS profiles.
 Both conversions show a durable report. OBS export writes standard scene collection JSON with
 shared sources, scenes and groups, and reports approximations or omitted features. OBS profiles,
-outputs, credentials, hotkeys and Libertas-specific routing are not scene collection JSON.
+outputs, credentials, hotkeys and MunkiCast-specific routing are not scene collection JSON.
 Native export retains the full model. Neither export accesses the external credential store.
 
 ## Validation

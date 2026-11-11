@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // The Phase-0 go/no-go gate: capture -> colour convert -> encode -> mux, with synced audio,
@@ -35,7 +35,7 @@ void usage() {
     std::printf(R"(encode-spike - the Phase-0 gate: capture -> convert -> encode -> mux
 
 usage:
-  --out FILE           output file (default /tmp/libertas-gate.mp4)
+  --out FILE           output file (default /tmp/munkicast-gate.mp4)
   --output NAME        which output to capture (default: the first)
   --frames N           capture and encode N frames (default 300)
   --fps N              declared output rate (default 60)
@@ -69,7 +69,7 @@ void report(const char* label, std::vector<double> v) {
 int main(int argc, char** argv) {
     lc::init_from_env();
 
-    std::string out_path = "/tmp/libertas-gate.mp4";
+    std::string out_path = "/tmp/munkicast-gate.mp4";
     std::string output_name;
     std::string drm_node;
     std::string tier;
@@ -86,7 +86,7 @@ int main(int argc, char** argv) {
     // 2.7x the PCIe traffic, for work a shader does for free. --convert cpu keeps the old path
     // so the two stay comparable.
     bool gpu_convert = true;
-    libertas::spike::ColorCfg color{};
+    munkicast::spike::ColorCfg color{};
 
     const std::vector<std::string_view> args(argv + 1, argv + argc);
     for (std::size_t i = 0; i < args.size(); ++i) {
@@ -154,32 +154,32 @@ int main(int argc, char** argv) {
     std::string err;
 
     // --- capture (ADR-0011: ext-image-copy-capture-v1, no portal, no picker) ---
-    libertas::capture::WlCapPtr cap = libertas::capture::wlcap_open(err);
+    munkicast::capture::WlCapPtr cap = munkicast::capture::wlcap_open(err);
     if (!cap) {
         lc::error("ext-image-copy-capture unavailable: {}", err);
         return 2;
     }
-    libertas::capture::WlCapCaps caps;
-    if (!libertas::capture::wlcap_begin_session(*cap, output_name, false, caps, err)) {
+    munkicast::capture::WlCapCaps caps;
+    if (!munkicast::capture::wlcap_begin_session(*cap, output_name, false, caps, err)) {
         lc::error("capture session failed: {}", err);
         return 2;
     }
 
-    libertas::rhi::VkCtxPtr vk = libertas::rhi::vk_init(drm_node, err);
+    munkicast::rhi::VkCtxPtr vk = munkicast::rhi::vk_init(drm_node, err);
     if (!vk) {
         lc::error("vulkan init failed: {}", err);
         return 2;
     }
-    lc::info("vulkan device: {}", libertas::rhi::vk_device_name(*vk));
+    lc::info("vulkan device: {}", munkicast::rhi::vk_device_name(*vk));
     lc::info("capture: {}x{} from {}", caps.width, caps.height,
              output_name.empty() ? "the first output" : output_name.c_str());
 
     // Allocate the ring from the intersection of what the compositor offers and what our device
     // can use. Because we allocate, this intersection IS the negotiation (ADR-0011).
-    std::vector<libertas::rhi::VkExportedImage> ring;
+    std::vector<munkicast::rhi::VkExportedImage> ring;
     std::uint32_t chosen_format = 0;
     for (const auto& f : caps.formats) {
-        const std::vector<std::uint64_t> ours = libertas::rhi::vk_supported_modifiers(*vk, f.drm_format);
+        const std::vector<std::uint64_t> ours = munkicast::rhi::vk_supported_modifiers(*vk, f.drm_format);
         std::vector<std::uint64_t> common;
         for (std::uint64_t m : f.modifiers)
             if (std::find(ours.begin(), ours.end(), m) != ours.end())
@@ -190,9 +190,9 @@ int main(int argc, char** argv) {
         ring.assign(slots, {});
         bool ok = true;
         for (std::uint32_t s = 0; s < slots; ++s) {
-            if (!libertas::rhi::vk_create_exportable(*vk, caps.width, caps.height, f.drm_format,
+            if (!munkicast::rhi::vk_create_exportable(*vk, caps.width, caps.height, f.drm_format,
                                                        common, false, ring[s], err) ||
-                !libertas::capture::wlcap_add_slot(*cap, ring[s], f.drm_format, err)) {
+                !munkicast::capture::wlcap_add_slot(*cap, ring[s], f.drm_format, err)) {
                 ok = false;
                 break;
             }
@@ -202,7 +202,7 @@ int main(int argc, char** argv) {
             break;
         }
         for (auto& r : ring)
-            libertas::rhi::vk_destroy_exportable(*vk, r);
+            munkicast::rhi::vk_destroy_exportable(*vk, r);
         ring.clear();
     }
     if (chosen_format == 0) {
@@ -211,11 +211,11 @@ int main(int argc, char** argv) {
     }
 
     // --- audio ---
-    libertas::spike::AudioPtr audio;
+    munkicast::spike::AudioPtr audio;
     if (want_audio) {
-        libertas::spike::AudioConfig acfg;
+        munkicast::spike::AudioConfig acfg;
         acfg.capture_sink = capture_sink;
-        audio = libertas::spike::audio_open(acfg, err);
+        audio = munkicast::spike::audio_open(acfg, err);
         if (!audio) {
             lc::error("audio capture failed: {}", err);
             return 2;
@@ -223,7 +223,7 @@ int main(int argc, char** argv) {
     }
 
     // --- encoder ---
-    libertas::encode::RuntimeConfig ecfg;
+    munkicast::encode::RuntimeConfig ecfg;
     ecfg.path = out_path;
     ecfg.width = caps.width;
     ecfg.height = caps.height;
@@ -231,7 +231,7 @@ int main(int argc, char** argv) {
     ecfg.bitrate = bitrate_kbps * 1000;
     ecfg.force_tier = tier;
     ecfg.audio_channels = want_audio ? 2 : 0;
-    libertas::encode::EncoderPtr enc = libertas::encode::encoder_open(ecfg, err);
+    munkicast::encode::EncoderPtr enc = munkicast::encode::encoder_open(ecfg, err);
     if (!enc) {
         lc::error("encoder open failed: {}", err);
         return 2;
@@ -252,7 +252,7 @@ int main(int argc, char** argv) {
     struct Latest {
         std::mutex mu;
         std::vector<std::uint8_t> pixels;
-        libertas::spike::Nv12Frame nv12;
+        munkicast::spike::Nv12Frame nv12;
         std::uint64_t presented_ns = 0;
         std::uint64_t seq = 0;
         bool stop = false;
@@ -271,7 +271,7 @@ int main(int argc, char** argv) {
     // rather than just its total (ADR-0019's unexplained 61 ms).
     struct Worst {
         double total = 0.0;
-        libertas::spike::ConvertTiming t{};
+        munkicast::spike::ConvertTiming t{};
         std::uint64_t frame = 0;
     } worst;
     std::uint32_t over_5ms = 0;
@@ -280,8 +280,8 @@ int main(int argc, char** argv) {
 
     std::thread capture_thread([&] {
         std::vector<std::uint8_t> local;
-        libertas::spike::Nv12Frame local_nv12;
-        libertas::spike::ConvertTiming ct{};
+        munkicast::spike::Nv12Frame local_nv12;
+        munkicast::spike::ConvertTiming ct{};
         for (std::uint64_t i = 0;; ++i) {
             {
                 std::lock_guard<std::mutex> lk(latest.mu);
@@ -303,7 +303,7 @@ int main(int argc, char** argv) {
             // does, and the difference is the part nobody thought to time.
             const auto iteration_begin = std::chrono::steady_clock::now();
             auto t = iteration_begin;
-            if (!libertas::capture::wlcap_capture_slot(*cap, slot, caps.width, caps.height,
+            if (!munkicast::capture::wlcap_capture_slot(*cap, slot, caps.width, caps.height,
                                                      &presented_ns, e)) {
                 std::lock_guard<std::mutex> lk(latest.mu);
                 latest.err = e;
@@ -316,13 +316,13 @@ int main(int argc, char** argv) {
             if (gpu_convert) {
                 // Convert on the GPU and read back NV12: 1.5 bytes/pixel instead of 4, and no
                 // CPU colour conversion at all (ADR-0019).
-                if (!libertas::spike::vk_convert_nv12(*vk, ring[slot], true, color, local_nv12,
+                if (!munkicast::spike::vk_convert_nv12(*vk, ring[slot], true, color, local_nv12,
                                                       e, &ct)) {
                     std::lock_guard<std::mutex> lk(latest.mu);
                     latest.err = e;
                     return;
                 }
-            } else if (!libertas::rhi::vk_readback_exported(*vk, ring[slot], true, local, e)) {
+            } else if (!munkicast::rhi::vk_readback_exported(*vk, ring[slot], true, local, e)) {
                 std::lock_guard<std::mutex> lk(latest.mu);
                 latest.err = e;
                 return;
@@ -382,7 +382,7 @@ int main(int argc, char** argv) {
 
     // Wait for the first real frame; without one there is nothing to duplicate from.
     std::vector<std::uint8_t> pixels;
-    libertas::spike::Nv12Frame nv12;
+    munkicast::spike::Nv12Frame nv12;
     std::uint64_t last_seq = 0;
     {
         const auto deadline =
@@ -407,7 +407,7 @@ int main(int argc, char** argv) {
             }
             if (idle_timeout_ms != 0 && std::chrono::steady_clock::now() > deadline) {
                 lc::error("gave up with 0 frames captured: {}",
-                          libertas::capture::wlcap_idle_reason(idle_timeout_ms));
+                          munkicast::capture::wlcap_idle_reason(idle_timeout_ms));
                 { std::lock_guard<std::mutex> lk(latest.mu); latest.stop = true; }
                 capture_thread.detach();
                 enc.reset();
@@ -426,7 +426,7 @@ int main(int argc, char** argv) {
     if (audio) {
         std::vector<float> junk;
         std::uint32_t jn = 0;
-        libertas::spike::audio_drain(*audio, junk, jn);
+        munkicast::spike::audio_drain(*audio, junk, jn);
     }
 
     std::uint64_t audio_frames_fed = 0;
@@ -485,7 +485,7 @@ int main(int argc, char** argv) {
             ++dry_spells;
             lc::warn("captures have dried up after {} frame(s): {}. Encoding carries on, "
                      "duplicating the last frame",
-                     last_seq, libertas::capture::wlcap_idle_reason(idle_timeout_ms));
+                     last_seq, munkicast::capture::wlcap_idle_reason(idle_timeout_ms));
         }
 
         // The pts is the ENCODER's clock, not the compositor's. The output timeline is ours and
@@ -495,11 +495,11 @@ int main(int argc, char** argv) {
 
         const bool sent =
             gpu_convert
-                ? libertas::encode::encoder_video_nv12(
+                ? munkicast::encode::encoder_video_nv12(
                       *enc, nv12.data.data(), static_cast<int>(nv12.y_stride),
                       nv12.data.data() + nv12.uv_offset, static_cast<int>(nv12.uv_stride), pts_ns,
                       err)
-                : libertas::encode::encoder_video(*enc, pixels.data(),
+                : munkicast::encode::encoder_video(*enc, pixels.data(),
                                                  static_cast<std::size_t>(caps.width) * 4, pts_ns,
                                                  err);
         if (!sent) {
@@ -510,9 +510,9 @@ int main(int argc, char** argv) {
         if (audio) {
             std::vector<float> samples;
             std::uint32_t n = 0;
-            libertas::spike::audio_drain(*audio, samples, n);
+            munkicast::spike::audio_drain(*audio, samples, n);
             if (n > 0) {
-                if (!libertas::encode::encoder_audio(*enc, samples.data(), n, pts_ns, err)) {
+                if (!munkicast::encode::encoder_audio(*enc, samples.data(), n, pts_ns, err)) {
                     lc::error("audio encode failed: {}", err);
                     break;
                 }
@@ -535,26 +535,26 @@ int main(int argc, char** argv) {
     if (audio) {
         std::vector<float> samples;
         std::uint32_t n = 0;
-        libertas::spike::audio_drain(*audio, samples, n);
-        if (n > 0 && libertas::encode::encoder_audio(*enc, samples.data(), n, 0, err))
+        munkicast::spike::audio_drain(*audio, samples, n);
+        if (n > 0 && munkicast::encode::encoder_audio(*enc, samples.data(), n, 0, err))
             audio_frames_fed += n;
     }
 
-    if (!libertas::encode::encoder_finish(*enc, err)) {
+    if (!munkicast::encode::encoder_finish(*enc, err)) {
         lc::error("finish failed: {}", err);
         return 3;
     }
     const double wall_s =
         std::chrono::duration<double>(std::chrono::steady_clock::now() - run_begin).count();
 
-    const auto& st = libertas::encode::encoder_stats(*enc);
+    const auto& st = munkicast::encode::encoder_stats(*enc);
     std::printf("\n=== Phase-0 gate: %s ===\n", out_path.c_str());
     std::printf("  video         : %s, %u frames, %.2f MiB\n", st.video_encoder.c_str(),
                 static_cast<unsigned>(st.video_frames),
                 static_cast<double>(st.video_bytes) / (1024.0 * 1024.0));
     if (audio) {
         std::printf("  audio         : %s (%s), %u packets, %.2f MiB, %llu sample-frames fed\n",
-                    st.audio_encoder.c_str(), libertas::spike::audio_format_str(*audio).c_str(),
+                    st.audio_encoder.c_str(), munkicast::spike::audio_format_str(*audio).c_str(),
                     static_cast<unsigned>(st.audio_frames),
                     static_cast<double>(st.audio_bytes) / (1024.0 * 1024.0),
                     static_cast<unsigned long long>(audio_frames_fed));
@@ -579,8 +579,8 @@ int main(int argc, char** argv) {
         std::printf("  captures delivered by the compositor: %zu (+1 excluded: first frame "
                     "pays one-time setup, %.3f ms)\n",
                     capture_ms.size(), first_frame_ms);
-        std::printf("  %s\n", gpu_convert ? libertas::spike::vk_convert_note(*vk).c_str()
-                                          : libertas::rhi::vk_readback_note(*vk).c_str());
+        std::printf("  %s\n", gpu_convert ? munkicast::spike::vk_convert_note(*vk).c_str()
+                                          : munkicast::rhi::vk_readback_note(*vk).c_str());
         report("capture", capture_ms);
         report("readback", readback_ms);
         report("convert+readback", gpu_convert_ms);

@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: Libertas-Studio contributors
+SPDX-FileCopyrightText: MunkiCast contributors
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 # ADR 0014 — Capture cards: pick the format for the output rate, not the peak rate
@@ -179,7 +179,7 @@ Consequences for the implementation:
    frame rate.
 2. **Range, matrix and transfer are user-settable configuration, not detection.** This is forced by
    Finding 2b, not merely preferred: the device's metadata is self-contradictory *and* actively
-   false, so there is nothing to detect from. Libertas applies the range conversion itself, in its
+   false, so there is nothing to detect from. MunkiCast applies the range conversion itself, in its
    own shader, from an explicit setting — with a sensible default and a visible override, the way
    OBS's V4L2 source exposes Color Range and Color Space.
 3. Observed luma extrema are a useful *cross-check* on that setting, and the source should warn

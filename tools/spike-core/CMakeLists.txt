@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Libertas-Studio contributors
+# SPDX-FileCopyrightText: MunkiCast contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # Capture and Vulkan-import code shared by the Phase-0 spikes.
@@ -23,17 +23,17 @@ add_library(spike-core STATIC
 # BGRA->NV12 runs on the GPU so the readback carries 1.5 bytes/pixel and the CPU never sees a
 # colour conversion (ADR-0019).
 include(CompileShader)
-libertas_compile_shader(spike-core shaders/bgra_to_nv12.comp)
+munkicast_compile_shader(spike-core shaders/bgra_to_nv12.comp)
 
 # ext-image-copy-capture-v1 is the primary Linux capture backend (ADR-0011); the portal path
 # stays as the universal fallback.
 include(WaylandProtocol)
 # ext-image-capture-source references ext_foreign_toplevel_handle_v1 for window sources, so that
 # protocol must be generated too - and it is what window capture by identity will be built on.
-libertas_wayland_protocol(spike-core staging/ext-foreign-toplevel-list/ext-foreign-toplevel-list-v1.xml)
-libertas_wayland_protocol(spike-core staging/ext-image-capture-source/ext-image-capture-source-v1.xml)
-libertas_wayland_protocol(spike-core staging/ext-image-copy-capture/ext-image-copy-capture-v1.xml)
-libertas_wayland_protocol(spike-core stable/linux-dmabuf/linux-dmabuf-v1.xml)
+munkicast_wayland_protocol(spike-core staging/ext-foreign-toplevel-list/ext-foreign-toplevel-list-v1.xml)
+munkicast_wayland_protocol(spike-core staging/ext-image-capture-source/ext-image-capture-source-v1.xml)
+munkicast_wayland_protocol(spike-core staging/ext-image-copy-capture/ext-image-copy-capture-v1.xml)
+munkicast_wayland_protocol(spike-core stable/linux-dmabuf/linux-dmabuf-v1.xml)
 
 target_include_directories(spike-core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # The convert pass builds a compute pipeline on lrhi's VkCtx, so it needs that library's internal
@@ -43,10 +43,10 @@ target_include_directories(spike-core PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_include_directories(spike-core PRIVATE ${CMAKE_SOURCE_DIR}/libs/lrhi/src)
 
 target_link_libraries(spike-core PUBLIC
-    libertas::flags
-    libertas::lcore
-    libertas::lcapture
-    libertas::lrhi
+    munkicast::flags
+    munkicast::lcore
+    munkicast::lcapture
+    munkicast::lrhi
     PkgConfig::GIO_UNIX
     PkgConfig::PIPEWIRE
     PkgConfig::LIBDRM
@@ -54,4 +54,4 @@ target_link_libraries(spike-core PUBLIC
     Vulkan::Vulkan
 )
 
-add_library(libertas::spike-core ALIAS spike-core)
+add_library(munkicast::spike-core ALIAS spike-core)

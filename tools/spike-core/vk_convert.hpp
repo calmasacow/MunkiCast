@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
@@ -8,11 +8,11 @@
 #include <string>
 #include <vector>
 
-namespace libertas::spike {
+namespace munkicast::spike {
 
 // The convert pass builds on lrhi's device (ADR-0019 measured it there, as vk_import).
-using libertas::rhi::VkCtx;
-using libertas::rhi::VkExportedImage;
+using munkicast::rhi::VkCtx;
+using munkicast::rhi::VkExportedImage;
 
 /// How to interpret and encode colour. ADR-0014: these are *configuration*, never detection -
 /// the capture device will happily claim a range it does not deliver, so the only honest source
@@ -57,4 +57,4 @@ bool vk_convert_nv12(VkCtx& ctx, const VkExportedImage& img, bool written_by_for
 /// A short description of the convert pipeline's state, for logging.
 std::string vk_convert_note(VkCtx& ctx);
 
-} // namespace libertas::spike
+} // namespace munkicast::spike

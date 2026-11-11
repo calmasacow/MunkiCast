@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Phase-0 capture spike. Staged deliberately so each stage is verifiable on its own:
@@ -92,7 +92,7 @@ void on_fatal_signal(int sig) {
     // `timeout` sends SIGTERM and destructors do not run, so without this every timed-out run
     // leaked a live capture session on the compositor.
     if (!g_session_handle.empty())
-        libertas::spike::close_screencast_session(g_session_handle);
+        munkicast::spike::close_screencast_session(g_session_handle);
     std::_Exit(128 + sig);
 }
 
@@ -102,7 +102,7 @@ struct SessionCloser {
     const std::string* handle = nullptr;
     ~SessionCloser() {
         if (handle != nullptr && !handle->empty())
-            libertas::spike::close_screencast_session(*handle);
+            munkicast::spike::close_screencast_session(*handle);
     }
 };
 
@@ -123,7 +123,7 @@ std::string token_cache_path() {
     } else {
         return {};
     }
-    dir += "/libertas";
+    dir += "/munkicast";
     ::mkdir(dir.c_str(), 0700);
     return dir + "/capture-spike.token";
 }
@@ -167,9 +167,9 @@ void forget_cached_token() {
 
 /// A capture session that has been proven to have a live, format-advertising node behind it.
 struct Acquired {
-    libertas::spike::PortalSession session;
-    libertas::spike::PwSessionPtr pw;
-    libertas::spike::NodeFormats formats; ///< what the node advertised at validation time
+    munkicast::spike::PortalSession session;
+    munkicast::spike::PwSessionPtr pw;
+    munkicast::spike::NodeFormats formats; ///< what the node advertised at validation time
     bool restored = false; ///< true if a restore token was used and accepted
 };
 
@@ -183,12 +183,12 @@ struct Acquired {
 /// is also what keeps the fallback ladder cheap - and possibly what keeps it workable, since a
 /// failed attempt appears to leave the node with no formats to retry against.
 std::vector<std::uint64_t> order_candidates(const std::vector<std::uint64_t>& ours,
-                                            const libertas::spike::NodeFormats& src) {
+                                            const munkicast::spike::NodeFormats& src) {
     if (src.offered.empty())
         return ours; // a source with no modifier property at all: shm path, nothing to intersect
     std::vector<std::uint64_t> out;
     const auto take = [&](std::uint64_t m) {
-        if (m == libertas::spike::kModifierInvalid)
+        if (m == munkicast::spike::kModifierInvalid)
             return; // wildcard: appended last, never preferred
         if (std::find(ours.begin(), ours.end(), m) == ours.end())
             return;
@@ -214,7 +214,7 @@ std::vector<std::uint64_t> order_candidates(const std::vector<std::uint64_t>& ou
 ///      closed - and retried as a fresh picker session, rather than surfaced as a capture error.
 ///   3. A *fresh* session that fails validation is a real fault and is reported as one. Retrying
 ///      it would just reprompt the user forever.
-bool acquire_capture_session(libertas::spike::PortalRequest req, Acquired& out,
+bool acquire_capture_session(munkicast::spike::PortalRequest req, Acquired& out,
                              const std::function<bool(Acquired&, std::string&)>& verify,
                              bool probe_node, bool persist_token, std::string& error) {
     for (int attempt = 0; attempt < 2; ++attempt) {
@@ -224,13 +224,13 @@ bool acquire_capture_session(libertas::spike::PortalRequest req, Acquired& out,
         else
             lc::info("portal: requesting a fresh session (a picker will appear)");
 
-        libertas::spike::PortalSession session;
-        if (!libertas::spike::negotiate_screencast(req, session, error))
+        munkicast::spike::PortalSession session;
+        if (!munkicast::spike::negotiate_screencast(req, session, error))
             return false; // includes user cancellation; never retry over the user
 
         if (session.streams.empty()) {
             error = "portal returned a session with no streams";
-            libertas::spike::close_screencast_session(session.session_handle);
+            munkicast::spike::close_screencast_session(session.session_handle);
             return false;
         }
 
@@ -245,34 +245,34 @@ bool acquire_capture_session(libertas::spike::PortalRequest req, Acquired& out,
         // From here on the session must be closed on every failure path.
         const std::uint32_t node_id = session.streams.front().node_id;
         std::string serr;
-        libertas::spike::PwSessionPtr pw =
-            libertas::spike::pw_session_open(session.pipewire_fd, serr);
+        munkicast::spike::PwSessionPtr pw =
+            munkicast::spike::pw_session_open(session.pipewire_fd, serr);
         session.pipewire_fd = -1; // ownership moved into the PipeWire session
         if (!pw) {
             error = std::format("pw_session_open failed: {}", serr);
-            libertas::spike::close_screencast_session(session.session_handle);
+            munkicast::spike::close_screencast_session(session.session_handle);
             return false;
         }
 
         // --no-probe exists to test whether the readiness probe is itself the problem. It binds
         // the node over the registry and enumerates its params, and the only stage-2 run that
         // ever delivered frames was the one written before the probe existed.
-        libertas::spike::NodeFormats formats;
-        const libertas::spike::NodeReadiness r =
-            probe_node ? libertas::spike::pw_probe_node(*pw, node_id, &formats)
-                       : libertas::spike::NodeReadiness::Ready;
+        munkicast::spike::NodeFormats formats;
+        const munkicast::spike::NodeReadiness r =
+            probe_node ? munkicast::spike::pw_probe_node(*pw, node_id, &formats)
+                       : munkicast::spike::NodeReadiness::Ready;
         std::string why;
-        if (r == libertas::spike::NodeReadiness::Ready && probe_node) {
+        if (r == munkicast::spike::NodeReadiness::Ready && probe_node) {
             lc::info("node {} offers {} modifier(s) before we connect:", node_id,
                      formats.offered.size());
             for (std::uint64_t m : formats.offered)
-                lc::info("  offered: {}{}", libertas::spike::modifier_str(m),
+                lc::info("  offered: {}{}", munkicast::spike::modifier_str(m),
                          std::find(formats.preferred.begin(), formats.preferred.end(), m) !=
                                  formats.preferred.end()
                              ? "   <- published as a fixed value (its current layout)"
                              : "");
         }
-        if (r == libertas::spike::NodeReadiness::Ready) {
+        if (r == munkicast::spike::NodeReadiness::Ready) {
             // Persist the token HERE, on validation, not after the whole run succeeds. The token
             // records that the user authorised this source; whether our pipeline then works is a
             // separate question. Saving it only on full success meant every debugging run cost
@@ -294,12 +294,12 @@ bool acquire_capture_session(libertas::spike::PortalRequest req, Acquired& out,
             session = std::move(out.session);
             pw = std::move(out.pw);
         } else {
-            why = libertas::spike::node_readiness_str(r);
+            why = munkicast::spike::node_readiness_str(r);
             lc::warn("session rejected: node {} is unusable ({})", node_id, why);
         }
 
         pw.reset();
-        libertas::spike::close_screencast_session(session.session_handle);
+        munkicast::spike::close_screencast_session(session.session_handle);
 
         if (!restoring) {
             error = std::format("a freshly picked source is unusable: node {}: {}", node_id, why);
@@ -310,7 +310,7 @@ bool acquire_capture_session(libertas::spike::PortalRequest req, Acquired& out,
         // exist, or exists with no formats. A failure *in use* is far more likely to be a bug of
         // ours, and throwing the token away for that means every debugging run costs the user
         // another picker click, which is exactly backwards.
-        if (r != libertas::spike::NodeReadiness::Ready) {
+        if (r != munkicast::spike::NodeReadiness::Ready) {
             lc::warn("discarding the restore token: the node it names is unusable");
             forget_cached_token();
         } else {
@@ -328,10 +328,10 @@ bool acquire_capture_session(libertas::spike::PortalRequest req, Acquired& out,
 /// Two things this answers that nothing else can: whether a capture card is actually receiving a
 /// signal (it streams black frames at full rate when it is not), and what rate the source is
 /// really sending - which need not be what either machine was configured for.
-int run_v4l2(const libertas::spike::V4l2Config& cfg) {
-    libertas::spike::V4l2Result r;
+int run_v4l2(const munkicast::spike::V4l2Config& cfg) {
+    munkicast::spike::V4l2Result r;
     std::string err;
-    if (!libertas::spike::v4l2_capture(cfg, r, err)) {
+    if (!munkicast::spike::v4l2_capture(cfg, r, err)) {
         lc::error("v4l2 capture failed: {}", err);
         return 3;
     }
@@ -340,12 +340,12 @@ int run_v4l2(const libertas::spike::V4l2Config& cfg) {
 
     std::printf("\n=== %s ===\n", cfg.device.c_str());
     std::printf("  negotiated    : %ux%u %s\n", r.width, r.height,
-                libertas::spike::v4l2_fourcc_str(r.fourcc).c_str());
+                munkicast::spike::v4l2_fourcc_str(r.fourcc).c_str());
     std::printf("  colour        : %s / %s / %s / quantization %s\n",
-                libertas::spike::v4l2_colorspace_str(r.colorspace).c_str(),
-                libertas::spike::v4l2_ycbcr_enc_str(r.ycbcr_enc).c_str(),
-                libertas::spike::v4l2_xfer_func_str(r.xfer_func).c_str(),
-                libertas::spike::v4l2_quantization_str(r.quantization).c_str());
+                munkicast::spike::v4l2_colorspace_str(r.colorspace).c_str(),
+                munkicast::spike::v4l2_ycbcr_enc_str(r.ycbcr_enc).c_str(),
+                munkicast::spike::v4l2_xfer_func_str(r.xfer_func).c_str(),
+                munkicast::spike::v4l2_quantization_str(r.quantization).c_str());
     std::printf("  frames        : %u\n", r.captured);
     std::printf("  dmabuf export : %s\n", r.dmabuf_exported ? "yes (zero-copy possible)"
                                                              : "no (mmap copy required)");
@@ -444,7 +444,7 @@ int run_v4l2(const libertas::spike::V4l2Config& cfg) {
 /// so the transfer buffer is LINEAR - and the downscale happens here, on the compositing GPU,
 /// because moving full-resolution pixels across the bus to shrink them on the far side spends the
 /// bandwidth that is the actual scarce resource.
-bool run_cross_gpu(libertas::rhi::VkCtx& src_ctx, const libertas::rhi::VkExportedImage& captured,
+bool run_cross_gpu(munkicast::rhi::VkCtx& src_ctx, const munkicast::rhi::VkExportedImage& captured,
                    std::uint32_t drm_format, const std::string& second_node, std::uint32_t scale_w,
                    std::uint32_t scale_h) {
     std::string err;
@@ -454,53 +454,53 @@ bool run_cross_gpu(libertas::rhi::VkCtx& src_ctx, const libertas::rhi::VkExporte
     std::printf("\n=== cross-GPU transfer: %ux%u -> %ux%u, then import on %s ===\n",
                 captured.width, captured.height, w, h, second_node.c_str());
 
-    libertas::rhi::VkCtxPtr dst_ctx = libertas::rhi::vk_init(second_node, err);
+    munkicast::rhi::VkCtxPtr dst_ctx = munkicast::rhi::vk_init(second_node, err);
     if (!dst_ctx) {
         lc::error("second device init failed: {}", err);
         return false;
     }
-    lc::info("second device: {}", libertas::rhi::vk_device_name(*dst_ctx));
+    lc::info("second device: {}", munkicast::rhi::vk_device_name(*dst_ctx));
 
     const std::vector<std::uint64_t> dst_mods =
-        libertas::rhi::vk_supported_modifiers(*dst_ctx, drm_format);
+        munkicast::rhi::vk_supported_modifiers(*dst_ctx, drm_format);
     const bool dst_takes_linear =
-        std::find(dst_mods.begin(), dst_mods.end(), libertas::spike::kModifierLinear) !=
+        std::find(dst_mods.begin(), dst_mods.end(), munkicast::spike::kModifierLinear) !=
         dst_mods.end();
     std::printf("  second device can import %zu modifier(s) for %s; LINEAR: %s\n", dst_mods.size(),
-                libertas::spike::fourcc_str(drm_format).c_str(), dst_takes_linear ? "yes" : "NO");
+                munkicast::spike::fourcc_str(drm_format).c_str(), dst_takes_linear ? "yes" : "NO");
     if (!dst_takes_linear) {
         lc::error("the second device cannot import LINEAR, so there is no common layout");
         return false;
     }
 
     // Allocate the transfer buffer on the SOURCE device, LINEAR, so both vendors can address it.
-    libertas::rhi::VkExportedImage transfer;
+    munkicast::rhi::VkExportedImage transfer;
     // host_memory = true: see vk_create_exportable's contract. A VRAM-backed dmabuf imports
     // cleanly on the second card and then fails at submit, which is a miserable thing to debug.
-    if (!libertas::rhi::vk_create_exportable(src_ctx, w, h, drm_format,
-                                               {libertas::spike::kModifierLinear}, true, transfer,
+    if (!munkicast::rhi::vk_create_exportable(src_ctx, w, h, drm_format,
+                                               {munkicast::spike::kModifierLinear}, true, transfer,
                                                err)) {
         lc::error("could not allocate a LINEAR transfer image on the source device: {}", err);
         return false;
     }
     lc::info("transfer buffer: {}x{} modifier {} stride {}", transfer.width, transfer.height,
-             libertas::spike::modifier_str(transfer.modifier), transfer.strides[0]);
+             munkicast::spike::modifier_str(transfer.modifier), transfer.strides[0]);
 
-    if (!libertas::rhi::vk_blit_exported(src_ctx, captured, true, transfer, err)) {
+    if (!munkicast::rhi::vk_blit_exported(src_ctx, captured, true, transfer, err)) {
         lc::error("blit/scale on the source device failed: {}", err);
-        libertas::rhi::vk_destroy_exportable(src_ctx, transfer);
+        munkicast::rhi::vk_destroy_exportable(src_ctx, transfer);
         return false;
     }
 
     // Import on the second device through the ordinary import path - the same code the portal
     // backend uses, so this exercises it too.
-    const libertas::spike::CapturedFrame frame =
-        libertas::rhi::vk_exported_as_frame(transfer, drm_format);
+    const munkicast::spike::CapturedFrame frame =
+        munkicast::rhi::vk_exported_as_frame(transfer, drm_format);
     std::vector<std::uint8_t> pixels;
-    const bool ok = libertas::rhi::vk_import_and_readback(*dst_ctx, frame, pixels, err);
+    const bool ok = munkicast::rhi::vk_import_and_readback(*dst_ctx, frame, pixels, err);
     if (!ok) {
         lc::error("import on the second device failed: {}", err);
-        libertas::rhi::vk_destroy_exportable(src_ctx, transfer);
+        munkicast::rhi::vk_destroy_exportable(src_ctx, transfer);
         return false;
     }
 
@@ -526,7 +526,7 @@ bool run_cross_gpu(libertas::rhi::VkCtx& src_ctx, const libertas::rhi::VkExporte
         std::printf("  wrote         : /tmp/capture-spike-crossgpu.ppm\n");
     }
 
-    libertas::rhi::vk_destroy_exportable(src_ctx, transfer);
+    munkicast::rhi::vk_destroy_exportable(src_ctx, transfer);
     const bool pass = nonzero > 0;
     std::printf("  CROSS-GPU: %s\n", pass ? "PASS" : "FAIL - imported but every pixel is black");
     return pass;
@@ -541,19 +541,19 @@ int run_wayland_backend(const std::string& output_name, bool with_cursor, bool w
                         const std::string& second_node, std::uint32_t scale_w,
                         std::uint32_t scale_h, std::uint32_t slots, std::uint32_t idle_timeout_ms) {
     std::string err;
-    libertas::capture::WlCapPtr cap = libertas::capture::wlcap_open(err);
+    munkicast::capture::WlCapPtr cap = munkicast::capture::wlcap_open(err);
     if (!cap) {
         lc::error("ext-image-copy-capture unavailable: {}", err);
         return 2;
     }
 
     std::printf("\n=== outputs (no picker needed) ===\n");
-    for (const auto& o : libertas::capture::wlcap_outputs(*cap))
+    for (const auto& o : munkicast::capture::wlcap_outputs(*cap))
         std::printf("  %-10s %5dx%-5d @ %.3f Hz  %s\n", o.name.c_str(), o.width, o.height,
                     o.refresh_mhz / 1000.0, o.description.c_str());
 
-    libertas::capture::WlCapCaps caps;
-    if (!libertas::capture::wlcap_begin_session(*cap, output_name, want_cursor_set && with_cursor,
+    munkicast::capture::WlCapCaps caps;
+    if (!munkicast::capture::wlcap_begin_session(*cap, output_name, want_cursor_set && with_cursor,
                                               caps, err)) {
         lc::error("session failed: {}", err);
         return 3;
@@ -562,26 +562,26 @@ int run_wayland_backend(const std::string& output_name, bool with_cursor, bool w
     std::printf("\n=== what the COMPOSITOR itself offers ===\n");
     std::printf("  buffer size   : %ux%u\n", caps.width, caps.height);
     std::printf("  dmabuf device : %s\n",
-                libertas::capture::wlcap_device_str(caps.dmabuf_device).c_str());
+                munkicast::capture::wlcap_device_str(caps.dmabuf_device).c_str());
     for (const auto& f : caps.formats) {
         std::printf("  format %s (%zu modifiers)\n",
-                    libertas::spike::fourcc_str(f.drm_format).c_str(), f.modifiers.size());
+                    munkicast::spike::fourcc_str(f.drm_format).c_str(), f.modifiers.size());
         for (std::uint64_t m : f.modifiers)
-            std::printf("      %s\n", libertas::spike::modifier_str(m).c_str());
+            std::printf("      %s\n", munkicast::spike::modifier_str(m).c_str());
     }
 
-    libertas::rhi::VkCtxPtr vk = libertas::rhi::vk_init(prefer_drm_node, err);
+    munkicast::rhi::VkCtxPtr vk = munkicast::rhi::vk_init(prefer_drm_node, err);
     if (!vk) {
         lc::error("vulkan init failed: {}", err);
         return 4;
     }
-    lc::info("vulkan device: {}", libertas::rhi::vk_device_name(*vk));
+    lc::info("vulkan device: {}", munkicast::rhi::vk_device_name(*vk));
 
     // Pick the first offered format our device can also use, and intersect the modifier sets.
     // Because *we* allocate, this intersection is the whole negotiation - there is no second round
     // and no way for the compositor to accept a modifier it cannot then write to.
     for (const auto& f : caps.formats) {
-        const std::vector<std::uint64_t> ours = libertas::rhi::vk_supported_modifiers(
+        const std::vector<std::uint64_t> ours = munkicast::rhi::vk_supported_modifiers(
             *vk, f.drm_format);
         std::vector<std::uint64_t> common;
         for (std::uint64_t m : f.modifiers)
@@ -589,26 +589,26 @@ int run_wayland_backend(const std::string& output_name, bool with_cursor, bool w
                 common.push_back(m);
 
         std::printf("\n=== %s: %zu common modifier(s) ===\n",
-                    libertas::spike::fourcc_str(f.drm_format).c_str(), common.size());
+                    munkicast::spike::fourcc_str(f.drm_format).c_str(), common.size());
         for (std::uint64_t m : common)
-            std::printf("  %s\n", libertas::spike::modifier_str(m).c_str());
+            std::printf("  %s\n", munkicast::spike::modifier_str(m).c_str());
         if (common.empty())
             continue;
 
         // A ring of buffers, not one. With a single destination the compositor is serialized
         // against us - it cannot draw frame N+1 while we hold its only target - so a one-buffer
         // measurement both understates the rate and invents a latency tail.
-        std::vector<libertas::rhi::VkExportedImage> ring(slots);
+        std::vector<munkicast::rhi::VkExportedImage> ring(slots);
         bool alloc_ok = true;
         for (std::uint32_t si = 0; si < slots; ++si) {
-            if (!libertas::rhi::vk_create_exportable(*vk, caps.width, caps.height, f.drm_format,
+            if (!munkicast::rhi::vk_create_exportable(*vk, caps.width, caps.height, f.drm_format,
                                                        common, false, ring[si], err)) {
                 lc::warn("could not allocate exportable image {} for {}: {}", si,
-                         libertas::spike::fourcc_str(f.drm_format), err);
+                         munkicast::spike::fourcc_str(f.drm_format), err);
                 alloc_ok = false;
                 break;
             }
-            if (!libertas::capture::wlcap_add_slot(*cap, ring[si], f.drm_format, err)) {
+            if (!munkicast::capture::wlcap_add_slot(*cap, ring[si], f.drm_format, err)) {
                 lc::warn("could not register buffer slot {}: {}", si, err);
                 alloc_ok = false;
                 break;
@@ -616,14 +616,14 @@ int run_wayland_backend(const std::string& output_name, bool with_cursor, bool w
         }
         if (!alloc_ok) {
             for (auto& r : ring)
-                libertas::rhi::vk_destroy_exportable(*vk, r);
+                munkicast::rhi::vk_destroy_exportable(*vk, r);
             continue;
         }
-        libertas::rhi::VkExportedImage& img = ring.front();
+        munkicast::rhi::VkExportedImage& img = ring.front();
         lc::info("allocated {} slot(s) of {}x{} {} modifier {} planes {} stride {}, fd {}", slots,
                  img.width,
-                 img.height, libertas::spike::fourcc_str(f.drm_format),
-                 libertas::spike::modifier_str(img.modifier), img.n_planes, img.strides[0],
+                 img.height, munkicast::spike::fourcc_str(f.drm_format),
+                 munkicast::spike::modifier_str(img.modifier), img.n_planes, img.strides[0],
                  img.dmabuf_fd);
 
         std::uint32_t captured = 0;
@@ -637,7 +637,7 @@ int run_wayland_backend(const std::string& output_name, bool with_cursor, bool w
         for (std::uint32_t i = 0; i < frames; ++i) {
             std::uint64_t presented = 0;
             bool idle = false;
-            if (!libertas::capture::wlcap_capture_slot(*cap, i % slots, caps.width, caps.height,
+            if (!munkicast::capture::wlcap_capture_slot(*cap, i % slots, caps.width, caps.height,
                                                      &presented, err, idle_timeout_ms, &idle)) {
                 if (idle) {
                     // Not a capture fault, so it must not fall into the paths below: a failure
@@ -648,7 +648,7 @@ int run_wayland_backend(const std::string& output_name, bool with_cursor, bool w
                               "ever",
                               captured, frames, err);
                     for (auto& r : ring)
-                        libertas::rhi::vk_destroy_exportable(*vk, r);
+                        munkicast::rhi::vk_destroy_exportable(*vk, r);
                     return 7;
                 }
                 lc::error("capture failed on frame {}: {}", i, err);
@@ -668,15 +668,15 @@ int run_wayland_backend(const std::string& output_name, bool with_cursor, bool w
                 .count();
         if (captured == 0) {
             for (auto& r : ring)
-                libertas::rhi::vk_destroy_exportable(*vk, r);
+                munkicast::rhi::vk_destroy_exportable(*vk, r);
             continue;
         }
 
-        libertas::rhi::VkExportedImage& last = ring[(captured - 1) % slots];
-        if (!libertas::rhi::vk_readback_exported(*vk, last, true, pixels, err)) {
+        munkicast::rhi::VkExportedImage& last = ring[(captured - 1) % slots];
+        if (!munkicast::rhi::vk_readback_exported(*vk, last, true, pixels, err)) {
             lc::error("readback failed: {}", err);
             for (auto& r : ring)
-                libertas::rhi::vk_destroy_exportable(*vk, r);
+                munkicast::rhi::vk_destroy_exportable(*vk, r);
             return 5;
         }
 
@@ -724,7 +724,7 @@ int run_wayland_backend(const std::string& output_name, bool with_cursor, bool w
             std::printf("  over 60fps budget (%.2f ms): %zu / %zu frames\n", budget, over,
                         sorted.size());
         }
-        std::printf("  modifier      : %s\n", libertas::spike::modifier_str(img.modifier).c_str());
+        std::printf("  modifier      : %s\n", munkicast::spike::modifier_str(img.modifier).c_str());
         std::printf("  readback      : %zu bytes (%ux%u)\n", pixels.size(), last.width, last.height);
         std::printf("  non-black px  : %u / %u (%.1f%%)\n", nonzero, total,
                     total > 0 ? 100.0 * nonzero / total : 0.0);
@@ -747,7 +747,7 @@ int run_wayland_backend(const std::string& output_name, bool with_cursor, bool w
         }
 
         for (auto& r : ring)
-            libertas::rhi::vk_destroy_exportable(*vk, r);
+            munkicast::rhi::vk_destroy_exportable(*vk, r);
         const bool pass = nonzero > 0 && cross_ok;
         std::printf("\n  VERDICT: %s\n\n",
                     pass ? "PASS - compositor rendered into our Vulkan image, real pixel content"
@@ -785,16 +785,16 @@ int main(int argc, char** argv) {
     // redraws ten times over - so on a busy output this never fires, and on a still one the run
     // explains itself before anyone reaches for kill.
     std::uint32_t idle_timeout_ms = 10'000;
-    libertas::spike::V4l2Config v4l2cfg;
+    munkicast::spike::V4l2Config v4l2cfg;
     bool use_v4l2 = false;
     std::uint32_t scale_w = 0;
     std::uint32_t scale_h = 0;
     bool explicit_token = false;
     std::string prefer_drm_node;
-    libertas::spike::PortalRequest req;
+    munkicast::spike::PortalRequest req;
     // Monitors only unless --window is given: mixing monitor and window sources made earlier
     // measurements non-comparable.
-    req.source_types = static_cast<std::uint32_t>(libertas::spike::SourceType::Monitor);
+    req.source_types = static_cast<std::uint32_t>(munkicast::spike::SourceType::Monitor);
 
     const std::vector<std::string_view> args(argv + 1, argv + argc);
     for (std::size_t i = 0; i < args.size(); ++i) {
@@ -805,9 +805,9 @@ int main(int argc, char** argv) {
         } else if (a == "--stage" && i + 1 < args.size()) {
             stage = std::atoi(std::string(args[++i]).c_str());
         } else if (a == "--window") {
-            req.source_types = static_cast<std::uint32_t>(libertas::spike::SourceType::Window);
+            req.source_types = static_cast<std::uint32_t>(munkicast::spike::SourceType::Window);
         } else if (a == "--no-cursor") {
-            req.cursor_mode = libertas::spike::CursorMode::Hidden;
+            req.cursor_mode = munkicast::spike::CursorMode::Hidden;
             cursor_set = true;
         } else if (a == "--modifiers" && i + 1 < args.size()) {
             // Comma-separated, hex (0x..) or decimal. Lets us probe what a compositor accepts
@@ -858,7 +858,7 @@ int main(int argc, char** argv) {
                     static_cast<std::uint32_t>(std::strtoul(v.c_str() + x + 1, nullptr, 10));
             }
         } else if (a == "--v4l2-format" && i + 1 < args.size()) {
-            v4l2cfg.fourcc = libertas::spike::v4l2_fourcc_parse(std::string(args[++i]));
+            v4l2cfg.fourcc = munkicast::spike::v4l2_fourcc_parse(std::string(args[++i]));
         } else if (a == "--v4l2-fps" && i + 1 < args.size()) {
             v4l2cfg.fps_num =
                 static_cast<std::uint32_t>(std::strtoul(std::string(args[++i]).c_str(), nullptr, 10));
@@ -922,7 +922,7 @@ int main(int argc, char** argv) {
     // The Wayland backend is a different path end to end, so it returns rather than falling
     // through into the portal flow (ADR-0011).
     if (use_wayland)
-        return run_wayland_backend(wl_output, req.cursor_mode == libertas::spike::CursorMode::Embedded,
+        return run_wayland_backend(wl_output, req.cursor_mode == munkicast::spike::CursorMode::Embedded,
                                    cursor_set, prefer_drm_node, wl_frames, second_node, scale_w, scale_h,
                                    wl_slots, idle_timeout_ms);
 
@@ -930,22 +930,22 @@ int main(int argc, char** argv) {
     // Bring Vulkan up first so negotiation can advertise the modifiers this device can really
     // import, and - just as important - so a Vulkan failure happens *before* the user is asked to
     // click a picker rather than after.
-    libertas::rhi::VkCtxPtr vk;
+    munkicast::rhi::VkCtxPtr vk;
     std::vector<std::uint64_t> vk_mods;
     if (stage >= 3 || sweep) {
         std::string verr;
-        vk = libertas::rhi::vk_init(prefer_drm_node, verr);
+        vk = munkicast::rhi::vk_init(prefer_drm_node, verr);
         if (!vk) {
             lc::error("vulkan init failed: {}", verr);
             return 4;
         }
-        lc::info("vulkan device: {}", libertas::rhi::vk_device_name(*vk));
+        lc::info("vulkan device: {}", munkicast::rhi::vk_device_name(*vk));
         // ARGB8888 is what a BGRA SPA format maps to.
-        vk_mods = libertas::rhi::vk_supported_modifiers(*vk, 0x34325241 /* DRM_FORMAT_ARGB8888 */);
+        vk_mods = munkicast::rhi::vk_supported_modifiers(*vk, 0x34325241 /* DRM_FORMAT_ARGB8888 */);
         std::printf("\n=== modifiers this device can import for ARGB8888 (%zu) ===\n",
                     vk_mods.size());
         for (std::uint64_t m : vk_mods)
-            std::printf("  %s\n", libertas::spike::modifier_str(m).c_str());
+            std::printf("  %s\n", munkicast::spike::modifier_str(m).c_str());
         std::printf("\n");
     }
 
@@ -959,7 +959,7 @@ int main(int argc, char** argv) {
         req.restore_token.clear();
     }
 
-    libertas::spike::StreamConfig sc;
+    munkicast::spike::StreamConfig sc;
     sc.max_frames = 30;
     // Stage 2 advertises a broad list to learn what the compositor actually offers. Stage 3
     // replaces this with the set Vulkan reports as importable for the chosen format.
@@ -971,7 +971,7 @@ int main(int argc, char** argv) {
         else if (!vk_mods.empty())
             importable = vk_mods; // the device's real capability
         else
-            importable = {libertas::spike::kModifierInvalid, libertas::spike::kModifierLinear};
+            importable = {munkicast::spike::kModifierInvalid, munkicast::spike::kModifierLinear};
     }
 
     struct Stats {
@@ -989,14 +989,14 @@ int main(int argc, char** argv) {
     };
     Stats stats;
 
-    sc.on_frame = [&stats](const libertas::spike::CapturedFrame& f) {
+    sc.on_frame = [&stats](const munkicast::spike::CapturedFrame& f) {
         if (f.is_dmabuf) ++stats.dmabuf; else ++stats.shm;
         if (!stats.printed_detail) {
             stats.printed_detail = true;
             std::printf("\n=== first frame ===\n");
             std::printf("  %ux%u  drm_format=%s  modifier=%s\n", f.width, f.height,
-                        libertas::spike::fourcc_str(f.drm_format).c_str(),
-                        libertas::spike::modifier_str(f.modifier).c_str());
+                        munkicast::spike::fourcc_str(f.drm_format).c_str(),
+                        munkicast::spike::modifier_str(f.modifier).c_str());
             std::printf("  buffer type   : %s\n", f.is_dmabuf ? "DmaBuf" : "shm (MemPtr/MemFd)");
             std::printf("  planes        : %zu\n", f.planes.size());
             for (std::size_t i = 0; i < f.planes.size(); ++i) {
@@ -1011,8 +1011,8 @@ int main(int argc, char** argv) {
     // Chain Vulkan import onto the frame callback when stage 3 is active.
     if (stage >= 3 && vk) {
         auto base = sc.on_frame;
-        libertas::rhi::VkCtx* vkp = vk.get();
-        sc.on_frame = [&stats, base, vkp](const libertas::spike::CapturedFrame& f) {
+        munkicast::rhi::VkCtx* vkp = vk.get();
+        sc.on_frame = [&stats, base, vkp](const munkicast::spike::CapturedFrame& f) {
             if (base)
                 base(f);
             if (!f.is_dmabuf)
@@ -1022,7 +1022,7 @@ int main(int argc, char** argv) {
                 return;
             std::vector<std::uint8_t> pixels;
             std::string ierr;
-            if (!libertas::rhi::vk_import_and_readback(*vkp, f, pixels, ierr)) {
+            if (!munkicast::rhi::vk_import_and_readback(*vkp, f, pixels, ierr)) {
                 ++stats.import_failed;
                 if (stats.first_import_error.empty())
                     stats.first_import_error = ierr;
@@ -1044,7 +1044,7 @@ int main(int argc, char** argv) {
 
     // The real capture attempt, used as the final validation step of acquisition: a session that
     // cannot deliver frames is not a session, whatever its node said when asked.
-    libertas::spike::NegotiatedFormat fmt;
+    munkicast::spike::NegotiatedFormat fmt;
     const auto stream_once = [&](Acquired& a, std::string& serr) {
         stats = Stats{};
         sc.node_id = a.session.streams.front().node_id;
@@ -1064,10 +1064,10 @@ int main(int argc, char** argv) {
             if (sc.modifiers.empty() && !a.formats.offered.empty()) {
                 std::string off;
                 for (std::uint64_t m : a.formats.offered)
-                    off += (off.empty() ? "" : " ") + libertas::spike::modifier_str(m);
+                    off += (off.empty() ? "" : " ") + munkicast::spike::modifier_str(m);
                 std::string ours;
                 for (std::uint64_t m : importable)
-                    ours += (ours.empty() ? "" : " ") + libertas::spike::modifier_str(m);
+                    ours += (ours.empty() ? "" : " ") + munkicast::spike::modifier_str(m);
                 serr = std::format("no common DRM format modifier: source offers [{}], this "
                                    "device can import [{}]", off, ours);
                 lc::error("{}", serr);
@@ -1077,7 +1077,7 @@ int main(int argc, char** argv) {
                      sc.modifiers.size(),
                      a.formats.preferred.empty()
                          ? std::string("nothing in particular")
-                         : libertas::spike::modifier_str(a.formats.preferred.front()));
+                         : munkicast::spike::modifier_str(a.formats.preferred.front()));
         }
 
         // ADR-0007's fallback ladder, as an actual loop rather than a promise.
@@ -1099,10 +1099,10 @@ int main(int argc, char** argv) {
             // 8s is a no-progress watchdog, not a total budget: it is re-armed on every frame, so
             // a negotiation failure is still reported in seconds while stage 3's per-frame GPU
             // readback gets as long as it needs.
-            if (libertas::spike::pw_try_variant(*a.pw, sc, fmt, serr, 8000)) {
+            if (munkicast::spike::pw_try_variant(*a.pw, sc, fmt, serr, 8000)) {
                 if (rung > 0)
                     lc::warn("succeeded on fallback rung {} with modifier {}", rung,
-                             fmt.have_modifier ? libertas::spike::modifier_str(fmt.modifier)
+                             fmt.have_modifier ? munkicast::spike::modifier_str(fmt.modifier)
                                                : std::string("none (shm)"));
                 return true;
             }
@@ -1114,7 +1114,7 @@ int main(int argc, char** argv) {
                 if (it != candidates.end()) {
                     lc::warn("modifier {} negotiated but could not deliver frames ({}); "
                              "dropping it and retrying",
-                             libertas::spike::modifier_str(fmt.modifier), serr);
+                             munkicast::spike::modifier_str(fmt.modifier), serr);
                     candidates.erase(it);
                     dropped = !candidates.empty();
                 }
@@ -1140,8 +1140,8 @@ int main(int argc, char** argv) {
         // theirs at all? - needs a whole extra session to answer.
         std::printf("\n=== we advertised %zu modifier(s) ===\n", sc.modifiers.size());
         for (std::uint64_t m : sc.modifiers)
-            std::printf("  %s\n", libertas::spike::modifier_str(m).c_str());
-        libertas::spike::pw_dump_formats(*a.pw, sc.node_id);
+            std::printf("  %s\n", munkicast::spike::modifier_str(m).c_str());
+        munkicast::spike::pw_dump_formats(*a.pw, sc.node_id);
         return false;
     };
 
@@ -1157,7 +1157,7 @@ int main(int argc, char** argv) {
         lc::error("portal negotiation failed: {}", error);
         return 2;
     }
-    libertas::spike::PortalSession& session = acq.session;
+    munkicast::spike::PortalSession& session = acq.session;
 
     const SessionCloser closer{&session.session_handle};
     g_session_handle = session.session_handle;
@@ -1193,7 +1193,7 @@ int main(int argc, char** argv) {
     }
 
     if (dump_formats) {
-        libertas::spike::pw_dump_formats(*acq.pw, session.streams.front().node_id);
+        munkicast::spike::pw_dump_formats(*acq.pw, session.streams.front().node_id);
         return 0;
     }
 
@@ -1205,17 +1205,17 @@ int main(int argc, char** argv) {
         // Known-good first: a failed negotiation may poison the session for later streams on the
         // same core, so ordering is part of the experiment.
         std::vector<Variant> variants{
-            {"INVALID + LINEAR (known good)", {libertas::spike::kModifierInvalid,
-                                               libertas::spike::kModifierLinear}},
+            {"INVALID + LINEAR (known good)", {munkicast::spike::kModifierInvalid,
+                                               munkicast::spike::kModifierLinear}},
         };
         if (!vk_mods.empty()) {
             std::vector<std::uint64_t> with_invalid = vk_mods;
-            with_invalid.insert(with_invalid.begin(), libertas::spike::kModifierInvalid);
+            with_invalid.insert(with_invalid.begin(), munkicast::spike::kModifierInvalid);
             variants.push_back({"INVALID + Vulkan list", with_invalid});
             variants.push_back({"Vulkan-supported list", vk_mods});
         }
-        variants.push_back({"INVALID", {libertas::spike::kModifierInvalid}});
-        variants.push_back({"LINEAR", {libertas::spike::kModifierLinear}});
+        variants.push_back({"INVALID", {munkicast::spike::kModifierInvalid}});
+        variants.push_back({"LINEAR", {munkicast::spike::kModifierLinear}});
         variants.push_back({"shm only (no modifier prop)", {}});
 
         std::printf("=== sweep: %zu variants against ONE session (node %u, %s) ===\n\n",
@@ -1225,24 +1225,24 @@ int main(int argc, char** argv) {
         // One PipeWire connection for the whole sweep: pw_init/pw_deinit are not reliably
         // re-entrant and the portal fd is single-use, so dup()-ing per attempt does not work.
         // The connection was opened and its node validated during acquisition.
-        libertas::spike::PwSession* pws = acq.pw.get();
+        munkicast::spike::PwSession* pws = acq.pw.get();
 
         bool dumped_on_failure = false;
         for (const Variant& v : variants) {
-            libertas::spike::StreamConfig vc;
+            munkicast::spike::StreamConfig vc;
             vc.node_id = session.streams.front().node_id;
             vc.max_frames = 5;
             vc.modifiers = v.mods;
 
             std::uint32_t dma = 0;
             std::uint32_t shm = 0;
-            vc.on_frame = [&dma, &shm](const libertas::spike::CapturedFrame& f) {
+            vc.on_frame = [&dma, &shm](const munkicast::spike::CapturedFrame& f) {
                 if (f.is_dmabuf) ++dma; else ++shm;
             };
 
-            libertas::spike::NegotiatedFormat vf;
+            munkicast::spike::NegotiatedFormat vf;
             std::string verr2;
-            const bool ok = libertas::spike::pw_try_variant(*pws, vc, vf, verr2);
+            const bool ok = munkicast::spike::pw_try_variant(*pws, vc, vf, verr2);
 
             std::printf("  %-26s : ", v.label);
             if (!ok) {
@@ -1250,13 +1250,13 @@ int main(int argc, char** argv) {
                 if (!dumped_on_failure) {
                     dumped_on_failure = true;
                     std::fflush(stdout);
-                    libertas::spike::pw_dump_formats(*pws, vc.node_id);
+                    munkicast::spike::pw_dump_formats(*pws, vc.node_id);
                 }
             } else {
                 std::printf("OK  %ux%u %s mod=%-34s %u dmabuf %u shm\n", vf.width, vf.height,
-                            libertas::spike::fourcc_str(vf.drm_format).c_str(),
+                            munkicast::spike::fourcc_str(vf.drm_format).c_str(),
                             vf.have_modifier
-                                ? libertas::spike::modifier_str(vf.modifier).c_str()
+                                ? munkicast::spike::modifier_str(vf.modifier).c_str()
                                 : "none",
                             dma, shm);
             }
@@ -1270,8 +1270,8 @@ int main(int argc, char** argv) {
     std::printf("=== stage 2 result ===\n");
     std::printf("  frames        : %u dmabuf, %u shm\n", stats.dmabuf, stats.shm);
     std::printf("  negotiated    : %ux%u  drm=%s  modifier=%s\n", fmt.width, fmt.height,
-                libertas::spike::fourcc_str(fmt.drm_format).c_str(),
-                fmt.have_modifier ? libertas::spike::modifier_str(fmt.modifier).c_str()
+                munkicast::spike::fourcc_str(fmt.drm_format).c_str(),
+                fmt.have_modifier ? munkicast::spike::modifier_str(fmt.modifier).c_str()
                                   : "none (shm)");
     std::printf("  zero-copy path: %s\n\n",
                 stats.dmabuf > 0 ? "AVAILABLE (dmabuf frames received)"
@@ -1284,7 +1284,7 @@ int main(int argc, char** argv) {
 
     // ---------------------------------------------------------------- stage 3: Vulkan import
     std::printf("=== stage 3 result: Vulkan dmabuf import ===\n");
-    std::printf("  device        : %s\n", libertas::rhi::vk_device_name(*vk).c_str());
+    std::printf("  device        : %s\n", munkicast::rhi::vk_device_name(*vk).c_str());
     std::printf("  imported      : %u ok, %u failed\n", stats.imported, stats.import_failed);
     if (!stats.first_import_error.empty())
         std::printf("  first error   : %s\n", stats.first_import_error.c_str());

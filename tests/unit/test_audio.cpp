@@ -9,7 +9,7 @@
 #include <mutex>
 
 LTEST_CASE(audio_captures_real_stereo_pcm) {
-    const char* device = std::getenv("LIBERTAS_TEST_AUDIO");
+    const char* device = std::getenv("MUNKICAST_TEST_AUDIO");
     if (!device)
         return;
     std::mutex mu;
@@ -17,7 +17,7 @@ LTEST_CASE(audio_captures_real_stereo_pcm) {
     std::size_t samples = 0;
     bool finite = true;
     std::string error;
-    auto capture = libertas::capture::AudioCapture::open(
+    auto capture = munkicast::capture::AudioCapture::open(
         device, false,
         [&](auto data) {
             std::lock_guard lock(mu);

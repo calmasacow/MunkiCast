@@ -1,6 +1,6 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
-#include "../../apps/libertas-render/source_worker.hpp"
+#include "../../apps/munkicast-render/source_worker.hpp"
 #include "ltest.hpp"
 
 #include <algorithm>
@@ -121,7 +121,7 @@ LTEST_CASE(text_worker_recovers_after_process_exit_without_settings_changes) {
 LTEST_CASE(slideshow_worker_advances_between_real_images) {
     auto src = source("source.slideshow");
     src.settings["files"] =
-        std::string(LIBERTAS_IMAGE_FIXTURES) + "/two.png\n" + LIBERTAS_IMAGE_FIXTURES + "/red.jpg";
+        std::string(MUNKICAST_IMAGE_FIXTURES) + "/two.png\n" + MUNKICAST_IMAGE_FIXTURES + "/red.jpg";
     src.settings["intervalMs"] = std::int64_t{100};
     auto frames = capture(src, 2);
     REQUIRE(frames.size() >= 2);
@@ -130,7 +130,7 @@ LTEST_CASE(slideshow_worker_advances_between_real_images) {
 
 LTEST_CASE(media_worker_decodes_video_in_its_process) {
     auto src = source("source.media");
-    src.settings["localFile"] = std::string(LIBERTAS_IMAGE_FIXTURES) + "/motion.mkv";
+    src.settings["localFile"] = std::string(MUNKICAST_IMAGE_FIXTURES) + "/motion.mkv";
     for (bool hardware : {false, true}) {
         src.settings["hardwareDecode"] = hardware;
         auto frames = capture(src, 2);
@@ -142,7 +142,7 @@ LTEST_CASE(media_worker_decodes_video_in_its_process) {
 LTEST_CASE(media_workers_preserve_webm_and_webp_alpha) {
     for (const auto* file : {"/alpha.webm", "/alpha.webp", "/animated-alpha.webp"}) {
         auto src = source("source.media");
-        src.settings["localFile"] = std::string(LIBERTAS_IMAGE_FIXTURES) + file;
+        src.settings["localFile"] = std::string(MUNKICAST_IMAGE_FIXTURES) + file;
         const int count = std::string_view(file) == "/alpha.webp" ? 1 : 12;
         auto frames = capture(src, count);
         REQUIRE(static_cast<int>(frames.size()) >= count);
@@ -158,7 +158,7 @@ LTEST_CASE(media_workers_preserve_webm_and_webp_alpha) {
 
 LTEST_CASE(immutable_worker_frames_survive_later_frames_and_worker_shutdown) {
     auto src = source("source.media");
-    src.settings["localFile"] = std::string(LIBERTAS_IMAGE_FIXTURES) + "/alpha-60.webm";
+    src.settings["localFile"] = std::string(MUNKICAST_IMAGE_FIXTURES) + "/alpha-60.webm";
     std::mutex mu;
     std::condition_variable ready;
     std::shared_ptr<const lcomp::PreviewFrame> first;
@@ -187,7 +187,7 @@ LTEST_CASE(immutable_worker_frames_survive_later_frames_and_worker_shutdown) {
 
 LTEST_CASE(alpha_video_delivers_smooth_frames_between_player_position_updates) {
     auto src = source("source.media");
-    src.settings["localFile"] = std::string(LIBERTAS_IMAGE_FIXTURES) + "/alpha-60.webm";
+    src.settings["localFile"] = std::string(MUNKICAST_IMAGE_FIXTURES) + "/alpha-60.webm";
     std::mutex mu;
     std::condition_variable ready;
     std::vector<std::uint8_t> previous;
@@ -212,7 +212,7 @@ LTEST_CASE(alpha_video_delivers_smooth_frames_between_player_position_updates) {
 LTEST_CASE(media_worker_retains_native_alpha_pixels_for_compositor_scaling) {
     for (int height : {64, 128}) {
         auto src = source("source.media");
-        src.settings["localFile"] = std::string(LIBERTAS_IMAGE_FIXTURES) + "/alpha.webm";
+        src.settings["localFile"] = std::string(MUNKICAST_IMAGE_FIXTURES) + "/alpha.webm";
         src.settings["width"] = std::int64_t{128};
         src.settings["height"] = static_cast<std::int64_t>(height);
         auto frames = capture(src);
@@ -229,7 +229,7 @@ LTEST_CASE(media_worker_retains_native_alpha_pixels_for_compositor_scaling) {
 
 LTEST_CASE(portrait_alpha_video_decodes_without_corrupting_frame_storage) {
     auto src = source("source.media");
-    src.settings["localFile"] = std::string(LIBERTAS_IMAGE_FIXTURES) + "/alpha-portrait.webm";
+    src.settings["localFile"] = std::string(MUNKICAST_IMAGE_FIXTURES) + "/alpha-portrait.webm";
     src.settings["ignoreAudio"] = true;
     const auto frames = capture(src, 8);
     REQUIRE(frames.size() >= 8);
@@ -248,7 +248,7 @@ LTEST_CASE(portrait_alpha_video_decodes_without_corrupting_frame_storage) {
 
 LTEST_CASE(browser_worker_renders_local_html) {
     auto src = source("source.browser");
-    src.settings["url"] = std::string("file://") + LIBERTAS_IMAGE_FIXTURES + "/browser.html";
+    src.settings["url"] = std::string("file://") + MUNKICAST_IMAGE_FIXTURES + "/browser.html";
     auto frames = capture(src);
     REQUIRE(!frames.empty());
     const auto& pixels = frames[0].pixels;
@@ -262,7 +262,7 @@ LTEST_CASE(browser_worker_renders_local_html) {
 LTEST_CASE(browser_worker_obeys_background_transparency_and_preserves_content_alpha) {
     for (bool transparent : {true, false}) {
         auto src = source("source.browser");
-        src.settings["url"] = std::string("file://") + LIBERTAS_IMAGE_FIXTURES + "/browser-alpha.html";
+        src.settings["url"] = std::string("file://") + MUNKICAST_IMAGE_FIXTURES + "/browser-alpha.html";
         src.settings["ignoreAudio"] = true;
         src.settings["transparentBackground"] = transparent;
         auto frames = capture(src);
@@ -300,7 +300,7 @@ LTEST_CASE(unavailable_blackmagic_worker_exits_without_inventing_frames) {
 
 LTEST_CASE(alpha_webm_preserves_audio_alongside_transparency) {
     auto src = source("source.media");
-    src.settings["localFile"] = std::string(LIBERTAS_IMAGE_FIXTURES) + "/alpha-tone.webm";
+    src.settings["localFile"] = std::string(MUNKICAST_IMAGE_FIXTURES) + "/alpha-tone.webm";
     std::mutex mu;
     std::condition_variable ready;
     bool tone = false, translucent = false;
@@ -328,9 +328,9 @@ LTEST_CASE(alpha_webm_preserves_audio_alongside_transparency) {
 }
 
 LTEST_CASE(browser_audio_reaches_pcm_transport) {
-    if (!std::getenv("LIBERTAS_TEST_BROWSER_AUDIO")) return;
+    if (!std::getenv("MUNKICAST_TEST_BROWSER_AUDIO")) return;
     auto src = source("source.browser");
-    src.settings["url"] = std::string("file://") + LIBERTAS_IMAGE_FIXTURES + "/browser-tone.html";
+    src.settings["url"] = std::string("file://") + MUNKICAST_IMAGE_FIXTURES + "/browser-tone.html";
     std::mutex mu;
     std::condition_variable ready;
     bool tone = false;
@@ -348,7 +348,7 @@ LTEST_CASE(browser_audio_reaches_pcm_transport) {
 
 LTEST_CASE(browser_ignore_audio_keeps_video_without_pcm) {
     auto src = source("source.browser");
-    src.settings["url"] = std::string("file://") + LIBERTAS_IMAGE_FIXTURES + "/browser-tone.html";
+    src.settings["url"] = std::string("file://") + MUNKICAST_IMAGE_FIXTURES + "/browser-tone.html";
     src.settings["ignoreAudio"] = true;
     std::mutex mu;
     std::condition_variable ready;
@@ -573,7 +573,7 @@ LTEST_CASE(countdown_colour_rules_pick_the_first_matching_range) {
 LTEST_CASE(preloaded_media_reactivates_without_restarting_worker) {
     for (const char* file : {"motion.mkv", "alpha-60.webm"}) {
         auto src = source("source.media");
-        src.settings["localFile"] = std::string(LIBERTAS_IMAGE_FIXTURES) + "/" + file;
+        src.settings["localFile"] = std::string(MUNKICAST_IMAGE_FIXTURES) + "/" + file;
         src.settings["loop"] = true;
         std::mutex mu;
         std::condition_variable ready;
@@ -604,13 +604,13 @@ LTEST_CASE(preloaded_media_reactivates_without_restarting_worker) {
 
 LTEST_CASE(visible_media_bypasses_busy_inactive_preload_queue) {
     auto invalid = source("source.media");
-    invalid.settings["localFile"] = std::string("/nonexistent/libertas-preload.mp4");
+    invalid.settings["localFile"] = std::string("/nonexistent/munkicast-preload.mp4");
     SourceWorker first(invalid, [](auto) {}, {}, false);
     invalid.id = ldoc::Id::generate();
     SourceWorker second(invalid, [](auto) {}, {}, false);
     std::this_thread::sleep_for(std::chrono::milliseconds(100));
     auto src = source("source.media");
-    src.settings["localFile"] = std::string(LIBERTAS_IMAGE_FIXTURES) + "/motion.mkv";
+    src.settings["localFile"] = std::string(MUNKICAST_IMAGE_FIXTURES) + "/motion.mkv";
     std::mutex mu;
     std::condition_variable ready;
     bool received = false;
@@ -628,7 +628,7 @@ LTEST_CASE(visible_media_bypasses_busy_inactive_preload_queue) {
 }
 
 LTEST_CASE(measure_media_first_frame) {
-    const auto* path = std::getenv("LIBERTAS_BENCH_MEDIA");
+    const auto* path = std::getenv("MUNKICAST_BENCH_MEDIA");
     if (!path) return;
     auto src = source("source.media");
     src.settings["localFile"] = std::string(path);

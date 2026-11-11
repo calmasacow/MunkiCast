@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: Libertas-Studio contributors
+SPDX-FileCopyrightText: MunkiCast contributors
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 # Development history through 2026-10-24
@@ -161,8 +161,8 @@ were 13.2-13.8 ms; mask upload caching delivered the largest final reduction.
 
 Reproduce without touching the operator's collection: copy it to a temporary
 folder, close the production app to release devices, then run
-`LIBERTAS_RENDER_BACKEND=gpu LIBERTAS_BENCH_PROJECT=/tmp/copy LIBERTAS_BENCH_SCENE=FS.W.CAM build-make/tests/unit/test_preview`.
-`LIBERTAS_BENCHMARK=1` additionally logs per-canvas cumulative render stats and GPU
+`MUNKICAST_RENDER_BACKEND=gpu MUNKICAST_BENCH_PROJECT=/tmp/copy MUNKICAST_BENCH_SCENE=FS.W.CAM build-make/tests/unit/test_preview`.
+`MUNKICAST_BENCHMARK=1` additionally logs per-canvas cumulative render stats and GPU
 preparation/fence-wait samples. Full warning-free build and all 30 tests pass,
 including real monitoring, GPU/CPU equivalence, mask replacement, alpha animation,
 alpha audio, nested preview playback and the non-neutral eight-filter stress case.
@@ -209,7 +209,7 @@ buffer/downscale options are not implemented. Imports report unsupported target
 modes and buffering. The compositor still rejects the separate `ReferenceData`
 node concept. Countdown gained a native dock on 2026-10-22 (see above), also with
 explicit compatibility limits. Reference repos include
-`/home/calmasacow/Development/obs-source-clone` and `/tmp/libertas-countdown-reference`.
+`/home/calmasacow/Development/obs-source-clone` and `/tmp/munkicast-countdown-reference`.
 
 Nested-scene failure was subsequently identified as frozen playback in
 `FS.W.CAM`; see the live-refresh fix above. Saved Marathon collection remains
@@ -453,7 +453,7 @@ program mix. Failed opens retry at a bounded rate.
 
 The UI check clicks System default and None in a project containing only colors,
 checks save/undo/redo and rejects unknown identities. An opt-in real-renderer audio
-check (`LIBERTAS_TEST_MONITOR=1`) sends a media tone through two private null sinks,
+check (`MUNKICAST_TEST_MONITOR=1`) sends a media tone through two private null sinks,
 verifies output switching and None, and rejects a missing output. It never routes
 its test tone to the operator's speakers. Validation: warning-free `-Werror` build
 and all 29 tests passed with GPU and monitoring checks enabled.
@@ -586,7 +586,7 @@ OBS import asks for canvas dimensions and rational FPS; conversion reports remai
 on disk. OBS export maps shared sources, scenes, nested groups and supported placements, with
 explicit reports for unsupported effects, opacity, routing, device identities and profile settings.
 Unsupported imported OBS plugin records can be restored for OBS to load. OBS profiles and
-Libertas outputs are separate; credentials are never read. Editable sessions reject newer schemas.
+MunkiCast outputs are separate; credentials are never read. Editable sessions reject newer schemas.
 
 Validation: warning-free -Werror build and 29/29 tests with GPU checks enabled. Real menu/dialog
 checks cover rename, duplicate, new, both import/export formats, cancellation, native companion
@@ -692,7 +692,7 @@ medium CPU preset, Main profile, Film tune, and custom buffer disabled (6000 ret
 Audio defaults to AAC 160 kbps, track 1, VOD track 0. Built-in presets downscale larger
 canvases to the matching 1080 resolution without upscaling smaller canvases.
 Encoding/output integration remains separate work; these controls configure intended output.
-The warning-free `-Werror` build and all 29 tests pass with `LIBERTAS_TEST_GPU=1`.
+The warning-free `-Werror` build and all 29 tests pass with `MUNKICAST_TEST_GPU=1`.
 Real UI checks cover shared destinations, preset controls and persistence, option validation,
 new-session defaults, 4K downscaling, and canvas choices refreshed after adding a canvas.
 
@@ -706,14 +706,14 @@ are excluded at the operator's request; use Linux equivalents where available.
 
 ### OBS importer and source coverage
 
-ADR-0048 adds `libertas import-obs collection.json new-directory width height fps-num fps-den`.
+ADR-0048 adds `munkicast import-obs collection.json new-directory width height fps-num fps-den`.
 The destination must not exist. Original JSON and a durable conversion report accompany the native
 project. UUID references, source sharing, scene order, visibility/locks, quarter turns, flips, crops,
 bounds and audio buses are converted. OBS groups become nested scenes with saved tight dimensions.
 Name-only main-scene selection respects OBS's main-canvas UUID, so an Aitum scene with the same
 name cannot replace program. Extra-canvas scenes are imported on the supplied canvas with warnings.
 
-The local `Untitled.json` converted into `~/Shows/OBS-Imported-20261019.libertas`, using the OBS
+The local `Untitled.json` converted into `~/Shows/OBS-Imported-20261019.munkicast`, using the OBS
 profile's 2560x1440 at 60/1 fps. It contains two scenes and three sources; reopening and the project
 inspector report no problems. Original OBS files and the existing demo projects remain intact.
 Tests create/reopen real projects, render imported colors/images/groups, check cropped/flipped and
@@ -743,7 +743,7 @@ as NV12 and preserving NV12 as a fallback. The real Elgato negotiated YU12 and s
 59.39 fps with immutable leased frames; live renderer cycle samples over ten seconds fell
 from 25.6 billion to 10.9 billion. These include capture and rendering and are not latency.
 
-The repeatable `LIBERTAS_TEST_GPU=1 LIBERTAS_BENCHMARK=1` GPU test measures 1440p host upload,
+The repeatable `MUNKICAST_TEST_GPU=1 MUNKICAST_BENCHMARK=1` GPU test measures 1440p host upload,
 4K composite and 640-edge preview readback: 7.32 ms/frame while the live show is also running.
 A guarded 32-bit shader division experiment measured 7.18 ms, insufficient evidence to keep
 extra branching; exact existing shader arithmetic remains. Larger gains need profiling the
@@ -751,7 +751,7 @@ host upload path separately from the GPU-only screen path.
 
 ### Native visual sources
 
-ADR-0045 adds the isolated `libertas-source` worker. Text uses Qt font shaping and rasterization;
+ADR-0045 adds the isolated `munkicast-source` worker. Text uses Qt font shaping and rasterization;
 slideshows decode an ordered list of images; media and playlists use Qt's FFmpeg backend;
 browser pages use sandboxed Qt WebEngine. The worker publishes straight RGBA through the existing
 preview transport, and both compositors consume the same source snapshots. Explicit output
@@ -816,17 +816,17 @@ measured **59.39 fps over 181 frames**, including BGRA conversion, while retaini
 frame and verifying it remained immutable. Real renderer-process checks passed with both
 CPU and RTX 2070 GPU backends, including direct and nested placements. These measurements
 describe acquisition, not end-to-end latency or sustained 4K canvas throughput.
-The build is warning-free with `LIBERTAS_WERROR=ON`; all 26 CTest entries pass with
-`LIBERTAS_TEST_GPU=1`, including the headless UI check.
+The build is warning-free with `MUNKICAST_WERROR=ON`; all 26 CTest entries pass with
+`MUNKICAST_TEST_GPU=1`, including the headless UI check.
 
 This slice supports raw SDR NV12, YUYV, YUV420 and RGB/BGR24. Audio, compressed-only devices,
 HDR, automatic reconnect and USB zero-copy remain unimplemented. libswscale development
 files are now a build dependency. Hardware checks run sequentially because capture is exclusive:
 
 ```sh
-LIBERTAS_TEST_VIDEO=/dev/video2 build-make/tests/unit/test_video
-LIBERTAS_RENDER_BACKEND=cpu LIBERTAS_TEST_VIDEO=/dev/video2 build-make/tests/unit/test_preview
-LIBERTAS_RENDER_BACKEND=gpu LIBERTAS_TEST_VIDEO=/dev/video2 build-make/tests/unit/test_preview
+MUNKICAST_TEST_VIDEO=/dev/video2 build-make/tests/unit/test_video
+MUNKICAST_RENDER_BACKEND=cpu MUNKICAST_TEST_VIDEO=/dev/video2 build-make/tests/unit/test_preview
+MUNKICAST_RENDER_BACKEND=gpu MUNKICAST_TEST_VIDEO=/dev/video2 build-make/tests/unit/test_preview
 ```
 
 ## GPU render path update, 2026-10-18
@@ -846,14 +846,14 @@ the CPU handoff. `AGENTS.md` was already untracked before the GPU work.
   retains its last image on that Ack. This also fixes the old freshness skip: timer ticks used
   to resend the document and mark it changed every time.
 - Offscreen runs use CPU. Normal runs try Vulkan, log failure, and fall back to CPU. Set
-  `LIBERTAS_RENDER_BACKEND=cpu` or `gpu` to force a backend; `gpu` fails instead of silently
-  falling back. `LIBERTAS_RENDER_DEVICE=226:128` selects by DRM device identity (`226:129` is
+  `MUNKICAST_RENDER_BACKEND=cpu` or `gpu` to force a backend; `gpu` fails instead of silently
+  falling back. `MUNKICAST_RENDER_DEVICE=226:128` selects by DRM device identity (`226:129` is
   Intel here). Cross-device capture is explicitly refused until validated.
 
 ### Evidence and checks
 
 The original suite passed 24/24 before changes. The expanded suite passes 25/25 when hardware
-checks are enabled with `LIBERTAS_TEST_GPU=1`; without that variable the GPU test is skipped.
+checks are enabled with `MUNKICAST_TEST_GPU=1`; without that variable the GPU test is skipped.
 The real process check also runs with a required GPU. Hardware parity checks pass on both RTX
 2070 and Intel UHD 630, including rotations, flips, opacity, nested scenes and reduced preview.
 CPU retains its sRGB8 intermediate rounding; GPU retains half-float linear intermediates. The
@@ -870,10 +870,10 @@ identical snapshots. An unavailable DRM device also passes the CPU fallback proc
 
 ```sh
 cmake --build build-make -j 8
-LIBERTAS_TEST_GPU=1 ctest --test-dir build-make --output-on-failure
-LIBERTAS_RENDER_BACKEND=gpu LIBERTAS_TEST_CAPTURE=HDMI-A-2 build-make/tests/unit/test_preview
-LIBERTAS_TEST_GPU=1 LIBERTAS_TEST_CAPTURE=HDMI-A-2 build-make/tests/unit/test_gpu_composite
-LIBERTAS_TEST_GPU=1 LIBERTAS_RENDER_DEVICE=226:129 build-make/tests/unit/test_gpu_composite
+MUNKICAST_TEST_GPU=1 ctest --test-dir build-make --output-on-failure
+MUNKICAST_RENDER_BACKEND=gpu MUNKICAST_TEST_CAPTURE=HDMI-A-2 build-make/tests/unit/test_preview
+MUNKICAST_TEST_GPU=1 MUNKICAST_TEST_CAPTURE=HDMI-A-2 build-make/tests/unit/test_gpu_composite
+MUNKICAST_TEST_GPU=1 MUNKICAST_RENDER_DEVICE=226:129 build-make/tests/unit/test_gpu_composite
 ```
 
 ### What follows this slice
@@ -927,7 +927,7 @@ All committed. Listed because the commit is large and this is the shape of it.
 **Four operator-reported fixes:**
 
 1. **The transform menu works on any source with a rectangle.** `placed_map` in
-   `apps/libertas-ui/document.cpp` was listing drawable types by name, so only a colour or an
+   `apps/munkicast-ui/document.cpp` was listing drawable types by name, so only a colour or an
    image could be selected on the canvas. It now asks whether the node has a natural size. A
    screen's natural size is its monitor's resolution, read from the compositor and cached for
    half a second (`screens_now()`).
@@ -938,7 +938,7 @@ All committed. Listed because the commit is large and this is the shape of it.
    than canvas units so the feel does not change with zoom. Works with the aspect locked: the
    other axis is recomputed from the ratio rather than distorting.
 4. **A screen dropdown.** `source.screen`'s `output` field is now a `choice` filled at runtime
-   from `libertas::capture::list_screens()`. The UI asks the compositor directly — listing
+   from `munkicast::capture::list_screens()`. The UI asks the compositor directly — listing
    outputs is a registry read, not a capture, so it needs no GPU and no session.
 
 **Two bugs found by the self-check while making those**, both mine, both fixed: Alt was
@@ -976,7 +976,7 @@ reproduction of the same blit ran in 1.16 ms. Six hypotheses had been advanced a
 before a profiler was available. The profile settled it immediately:
 
 ```
-93.75%  libertas-render  [.] lcomp::blit(...)
+93.75%  munkicast-render  [.] lcomp::blit(...)
 ```
 
 and annotating that symbol:
@@ -1029,7 +1029,7 @@ blit is supposed to look like. There is no second `idiv`-shaped mistake hiding b
 53% CPU for 5.3 ms of work per composite is the composite running at the canvas's 60 fps while
 the captured screen only produces 30. The freshness skip added this session should cover that
 and does not appear to be firing as often as it should — **that is the next thing to look at,
-and it is cheap**: `Screens::anything_new()` in `apps/libertas-render/main.cpp` and the
+and it is cheap**: `Screens::anything_new()` in `apps/munkicast-render/main.cpp` and the
 `document_changed` flag in `libs/lcomp/src/preview.cpp`.
 
 ### Method note
@@ -1038,8 +1038,8 @@ The six earlier hypotheses (memory copying, `std::pow`, image decode, cold GPU m
 optimisation flags, the wrong `blit`) were all reasonable and all wrong. A profiler answered in
 one run what reasoning had not in several hours. Two practical notes for next time:
 
-- `pgrep -f libertas-render` matches the shell wrappers as well as the process. Use
-  `pgrep -f 'build-make/apps/libertas-render'`, and check the pid is stable before recording.
+- `pgrep -f munkicast-render` matches the shell wrappers as well as the process. Use
+  `pgrep -f 'build-make/apps/munkicast-render'`, and check the pid is stable before recording.
 - `timeout 15 perf record ...` SIGKILLs perf before it writes its data, giving "no samples".
   Use `perf record ... -- sleep 10`, which lets perf terminate normally.
 
@@ -1095,7 +1095,7 @@ machine without a GPU.*
 
 ### Where to start reading
 
-- `docs/adr/0005` — six process roles. `libertas-render` owns the GPU. This is the ADR that
+- `docs/adr/0005` — six process roles. `munkicast-render` owns the GPU. This is the ADR that
   settles where the device lives, and it has said so since the start.
 - `docs/adr/0006` — the composite-to-encode handoff: scene-linear RGBA16F on a `VkDevice`.
 - `docs/adr/0040` — why the preview is a separate process, and its last consequence, which is
@@ -1109,7 +1109,7 @@ machine without a GPU.*
   readback to host memory, and a BGRA→NV12 compute pass hooked in from the encode spike.
 - `libs/lcapture` captures a named screen into a ring of client-allocated dmabufs, on its own
   thread, blocking until the compositor delivers. Verified: 3840x2160 AR24 on an RTX 2070.
-- `libertas-render` already opens the device, lazily, on the first screen source.
+- `munkicast-render` already opens the device, lazily, on the first screen source.
 - `libs/lcomp` walks the scene and composites on the CPU, which is the fallback and the thing
   the headless self-check drives.
 

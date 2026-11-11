@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Libertas-Studio contributors
+# SPDX-FileCopyrightText: MunkiCast contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # Generates client-side glue for a Wayland protocol XML with wayland-scanner.
@@ -11,11 +11,11 @@ find_program(WAYLAND_SCANNER_EXECUTABLE NAMES wayland-scanner REQUIRED)
 find_package(PkgConfig REQUIRED)
 pkg_get_variable(WAYLAND_PROTOCOLS_DIR wayland-protocols pkgdatadir)
 
-# libertas_wayland_protocol(<target> <relative/path/to.xml>)
+# munkicast_wayland_protocol(<target> <relative/path/to.xml>)
 #
 # `path` is relative to the wayland-protocols data dir. Adds the generated .c and client header to
 # `target` and puts the header on its include path.
-function(libertas_wayland_protocol target path)
+function(munkicast_wayland_protocol target path)
     get_filename_component(basename "${path}" NAME_WE)
     set(xml "${WAYLAND_PROTOCOLS_DIR}/${path}")
     if(NOT EXISTS "${xml}")

@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: Libertas-Studio contributors
+SPDX-FileCopyrightText: MunkiCast contributors
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 # ADR 0015 — The UI owns its layout; no client-side window geometry, ever
@@ -23,7 +23,7 @@ The actual, repeated, show-threatening failures are these, in the operator's own
 > go off screen completely"
 
 Every one of those is a **window-management and layout-state failure**, not a media failure. That
-is the problem Libertas exists to solve. Phase 0's measurements are necessary groundwork, but they
+is the problem MunkiCast exists to solve. Phase 0's measurements are necessary groundwork, but they
 are not where the product's value is won.
 
 ## Why this is structural on Wayland, and cannot be fixed in OBS
@@ -55,7 +55,7 @@ Wayland has no equivalent to offer it.
 
 ## Decision
 
-**Libertas's layout state is internal to one surface, owned and serialised by Libertas.**
+**MunkiCast's layout state is internal to one surface, owned and serialised by MunkiCast.**
 
 1. **One top-level window holds the entire workspace.** Panels — scenes, sources, audio mixer,
    canvas, dock-style tools — are regions laid out *inside* that surface by our own layout engine.
@@ -65,7 +65,7 @@ Wayland has no equivalent to offer it.
    no OS-level window for the compositor to misplace.
 3. **Detached panels are permitted, but their placement belongs to the compositor.** When a panel
    is torn off — genuinely useful on a multi-monitor rig — it becomes a toplevel that we tag via
-   `xdg_toplevel_tag_manager_v1` with a stable identifier (`libertas:panel:audio-mixer`). The
+   `xdg_toplevel_tag_manager_v1` with a stable identifier (`munkicast:panel:audio-mixer`). The
    compositor places it, and the user writes a Hyprland window rule if they want it pinned. We
    record *which* panels are detached and what they contain; we never record where they are.
 4. **No absolute geometry is ever written to disk.** Saved layout is a tree of relative

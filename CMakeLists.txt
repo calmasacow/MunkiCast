@@ -1,12 +1,12 @@
-# SPDX-FileCopyrightText: Libertas-Studio contributors
+# SPDX-FileCopyrightText: MunkiCast contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 cmake_minimum_required(VERSION 3.28...4.4)
 
-project(LibertasStudio
+project(MunkiCast
     VERSION 0.0.1
     DESCRIPTION "Live streaming and recording studio"
-    HOMEPAGE_URL "https://github.com/calmasacow/Libertas-Studio"
+    HOMEPAGE_URL "https://github.com/calmasacow/MunkiCast"
     LANGUAGES C CXX
 )
 
@@ -28,49 +28,49 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_BINARY_DIR)
     message(FATAL_ERROR "In-source builds are not supported. Use a build/ directory.")
 endif()
 
-option(LIBERTAS_WERROR     "Treat warnings as errors"            OFF)
-option(LIBERTAS_SANITIZE   "Enable ASan+UBSan"                   OFF)
-option(LIBERTAS_TSAN       "Enable ThreadSanitizer"              OFF)
-option(LIBERTAS_BUILD_TOOLS "Build spikes and dev tools"         ON)
-option(LIBERTAS_BUILD_TESTS "Build tests"                        ON)
-set(LIBERTAS_DEPS "auto" CACHE STRING "Dependency strategy: system|vcpkg|auto")
-option(LIBERTAS_USE_SYSTEM_FFMPEG "Use system FFmpeg instead of the pinned local build" OFF)
+option(MUNKICAST_WERROR     "Treat warnings as errors"            OFF)
+option(MUNKICAST_SANITIZE   "Enable ASan+UBSan"                   OFF)
+option(MUNKICAST_TSAN       "Enable ThreadSanitizer"              OFF)
+option(MUNKICAST_BUILD_TOOLS "Build spikes and dev tools"         ON)
+option(MUNKICAST_BUILD_TESTS "Build tests"                        ON)
+set(MUNKICAST_DEPS "auto" CACHE STRING "Dependency strategy: system|vcpkg|auto")
+option(MUNKICAST_USE_SYSTEM_FFMPEG "Use system FFmpeg instead of the pinned local build" OFF)
 
 # FindPkgConfig caches results across environment changes. Switching engines must re-probe.
-if(NOT "${LIBERTAS_CONFIGURED_SYSTEM_FFMPEG}" STREQUAL "${LIBERTAS_USE_SYSTEM_FFMPEG}")
+if(NOT "${MUNKICAST_CONFIGURED_SYSTEM_FFMPEG}" STREQUAL "${MUNKICAST_USE_SYSTEM_FFMPEG}")
     get_cmake_property(pkg_cache_variables CACHE_VARIABLES)
     foreach(variable IN LISTS pkg_cache_variables)
         if(variable MATCHES "^(__pkg_config_checked_|pkgcfg_lib_)")
             unset(${variable} CACHE)
         endif()
     endforeach()
-    set(LIBERTAS_CONFIGURED_SYSTEM_FFMPEG "${LIBERTAS_USE_SYSTEM_FFMPEG}"
+    set(MUNKICAST_CONFIGURED_SYSTEM_FFMPEG "${MUNKICAST_USE_SYSTEM_FFMPEG}"
         CACHE INTERNAL "Last configured FFmpeg selection")
 endif()
 
-if(NOT LIBERTAS_USE_SYSTEM_FFMPEG)
-    set(LIBERTAS_FFMPEG_PREFIX "${CMAKE_SOURCE_DIR}/build/ffmpeg-9.1/prefix")
-    if(NOT EXISTS "${LIBERTAS_FFMPEG_PREFIX}/lib/pkgconfig/libavcodec.pc" OR
-       NOT EXISTS "${LIBERTAS_FFMPEG_PREFIX}/bin/ffmpeg")
+if(NOT MUNKICAST_USE_SYSTEM_FFMPEG)
+    set(MUNKICAST_FFMPEG_PREFIX "${CMAKE_SOURCE_DIR}/build/ffmpeg-9.1/prefix")
+    if(NOT EXISTS "${MUNKICAST_FFMPEG_PREFIX}/lib/pkgconfig/libavcodec.pc" OR
+       NOT EXISTS "${MUNKICAST_FFMPEG_PREFIX}/bin/ffmpeg")
         message(FATAL_ERROR
             "Local FFmpeg 9.1 is missing. See docs/ffmpeg-9.1.md for setup, or configure "
-            "with -DLIBERTAS_USE_SYSTEM_FFMPEG=ON to use system FFmpeg.")
+            "with -DMUNKICAST_USE_SYSTEM_FFMPEG=ON to use system FFmpeg.")
     endif()
     set(ENV{PKG_CONFIG_PATH}
-        "${LIBERTAS_FFMPEG_PREFIX}/lib/pkgconfig:$ENV{PKG_CONFIG_PATH}")
-    list(APPEND CMAKE_BUILD_RPATH "${LIBERTAS_FFMPEG_PREFIX}/lib")
+        "${MUNKICAST_FFMPEG_PREFIX}/lib/pkgconfig:$ENV{PKG_CONFIG_PATH}")
+    list(APPEND CMAKE_BUILD_RPATH "${MUNKICAST_FFMPEG_PREFIX}/lib")
 endif()
 
-include(LibertasFlags)
+include(MunkiCastFlags)
 
 if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
     message(FATAL_ERROR
         "Only Linux is supported at this stage. macOS and Windows arrive in Phase 3 (see the plan).")
 endif()
 
-if(LIBERTAS_BUILD_TESTS)
+if(MUNKICAST_BUILD_TESTS)
     enable_testing()
-    if(NOT LIBERTAS_USE_SYSTEM_FFMPEG)
+    if(NOT MUNKICAST_USE_SYSTEM_FFMPEG)
         add_test(NAME ffmpeg_selection COMMAND "${CMAKE_COMMAND}"
             -DSOURCE_DIR=${CMAKE_SOURCE_DIR}
             -DCHECK_DIR=${CMAKE_BINARY_DIR}/ffmpeg-selection-check
@@ -91,29 +91,29 @@ add_subdirectory(libs/ldoc)
 add_subdirectory(libs/lsession)
 add_subdirectory(libs/ltheme)
 add_subdirectory(libs/lcomp)
-add_subdirectory(apps/libertas-vst)
+add_subdirectory(apps/munkicast-vst)
 add_subdirectory(libs/limport)
 add_subdirectory(libs/lcapture)
 add_subdirectory(libs/lrhi)
 add_subdirectory(libs/lencode)
-add_subdirectory(apps/libertas)
-add_subdirectory(apps/libertas-source)
-add_subdirectory(apps/libertas-render)
-add_subdirectory(apps/libertas-ui)
+add_subdirectory(apps/munkicast)
+add_subdirectory(apps/munkicast-source)
+add_subdirectory(apps/munkicast-render)
+add_subdirectory(apps/munkicast-ui)
 
-if(LIBERTAS_BUILD_TOOLS)
+if(MUNKICAST_BUILD_TOOLS)
     add_subdirectory(tools/spike-core)
     add_subdirectory(tools/capture-spike)
     add_subdirectory(tools/encode-spike)
 endif()
 
-if(LIBERTAS_BUILD_TESTS)
+if(MUNKICAST_BUILD_TESTS)
     add_subdirectory(tests/unit)
 endif()
 
 message(STATUS "")
-message(STATUS "Libertas-Studio ${PROJECT_VERSION}")
+message(STATUS "MunkiCast ${PROJECT_VERSION}")
 message(STATUS "  build type : ${CMAKE_BUILD_TYPE}")
 message(STATUS "  compiler   : ${CMAKE_CXX_COMPILER_ID} ${CMAKE_CXX_COMPILER_VERSION}")
-message(STATUS "  sanitizers : asan/ubsan=${LIBERTAS_SANITIZE} tsan=${LIBERTAS_TSAN}")
+message(STATUS "  sanitizers : asan/ubsan=${MUNKICAST_SANITIZE} tsan=${MUNKICAST_TSAN}")
 message(STATUS "")

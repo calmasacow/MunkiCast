@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // PipeWire audio capture for the Phase-0 gate.
@@ -18,7 +18,7 @@
 #include <pipewire/pipewire.h>
 #include <spa/param/audio/format-utils.h>
 
-namespace libertas::spike {
+namespace munkicast::spike {
 
 struct AudioCapture {
     AudioConfig cfg;
@@ -112,7 +112,7 @@ AudioPtr audio_open(const AudioConfig& cfg, std::string& error) {
     auto cap = AudioPtr(new AudioCapture());
     cap->cfg = cfg;
 
-    cap->loop = pw_thread_loop_new("libertas-audio", nullptr);
+    cap->loop = pw_thread_loop_new("munkicast-audio", nullptr);
     if (cap->loop == nullptr) {
         error = "pw_thread_loop_new failed";
         return nullptr;
@@ -127,7 +127,7 @@ AudioPtr audio_open(const AudioConfig& cfg, std::string& error) {
         pw_properties_set(props, PW_KEY_TARGET_OBJECT, cfg.target.c_str());
 
     pw_thread_loop_lock(cap->loop);
-    cap->stream = pw_stream_new_simple(pw_thread_loop_get_loop(cap->loop), "libertas-capture",
+    cap->stream = pw_stream_new_simple(pw_thread_loop_get_loop(cap->loop), "munkicast-capture",
                                        props, &kEvents, cap.get());
     if (cap->stream == nullptr) {
         pw_thread_loop_unlock(cap->loop);
@@ -198,4 +198,4 @@ void audio_close(AudioCapture* cap) {
     delete cap;
 }
 
-} // namespace libertas::spike
+} // namespace munkicast::spike

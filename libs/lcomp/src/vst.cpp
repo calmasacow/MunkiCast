@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "vst_protocol.hpp"
 
@@ -97,11 +97,11 @@ struct VstWorker::Impl {
         ::posix_spawn_file_actions_adddup2(&actions, sockets[1], 3);
         if (sockets[1] != 3)
             ::posix_spawn_file_actions_addclose(&actions, sockets[1]);
-        std::array<char*, 4> argv{const_cast<char*>(LIBERTAS_VST_EXE),
+        std::array<char*, 4> argv{const_cast<char*>(MUNKICAST_VST_EXE),
                                   const_cast<char*>(path.c_str()),
                                   const_cast<char*>(program.c_str()), nullptr};
         const int status =
-            ::posix_spawn(&child, LIBERTAS_VST_EXE, &actions, nullptr, argv.data(), environ);
+            ::posix_spawn(&child, MUNKICAST_VST_EXE, &actions, nullptr, argv.data(), environ);
         ::posix_spawn_file_actions_destroy(&actions);
         ::close(sockets[1]);
         fd = sockets[0];

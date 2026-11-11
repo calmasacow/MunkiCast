@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: Libertas-Studio contributors
+SPDX-FileCopyrightText: MunkiCast contributors
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 # ADR 0011 — Two Linux capture backends; portal ScreenCast is the fallback, not the primary
@@ -132,7 +132,7 @@ Cause 2.
 
 ## Consequences
 
-- `libertas probe` must report which backends are available and which it would choose, since
+- `munkicast probe` must report which backends are available and which it would choose, since
   "capture does not work" is now a question with several possible answers.
 - The capture worker gains a backend abstraction at the *frame source* level — narrow, because both
   backends terminate in the same place: a dmabuf with a modifier, plus an acquire/release fence.

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
@@ -37,7 +37,7 @@ struct Color {
 /// a default colour, so a typo in a theme file is distinguishable from black.
 [[nodiscard]] std::optional<Color> parse_color(std::string_view s);
 
-/// The roles the Libertas UI actually draws with. Adding one here is a deliberate act: every role
+/// The roles the MunkiCast UI actually draws with. Adding one here is a deliberate act: every role
 /// has to be derivable from any theme we might follow, including a sparse or hostile one.
 enum class Role : std::uint8_t {
     Window,            ///< behind everything, visible only in gaps

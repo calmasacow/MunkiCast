@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: Libertas-Studio contributors
+SPDX-FileCopyrightText: MunkiCast contributors
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 # Recording cadence
@@ -51,10 +51,10 @@ and a working encoder. The check reads without saving and records to a new print
 temporary directory. Live GPU/capture hardware is required.
 
 ```sh
-cmake --build build-make --target libertas-ui test_video test_preview test_encode -j8
+cmake --build build-make --target munkicast-ui test_video test_preview test_encode -j8
 ctest --test-dir build-make -R '^(test_preview|test_video|test_encode)$' --output-on-failure
-python3 tools/check-recording-cadence.py /path/to/show.libertas --scene FS.W.CAM --source Elgato.4K.X.VC --seconds 20
-python3 tools/check-recording-cadence.py /path/to/show.libertas --scene FS.W.CAM --source Elgato.4K.X.VC --projector --seconds 20
+python3 tools/check-recording-cadence.py /path/to/show.munkicast --scene FS.W.CAM --source Elgato.4K.X.VC --seconds 20
+python3 tools/check-recording-cadence.py /path/to/show.munkicast --scene FS.W.CAM --source Elgato.4K.X.VC --projector --seconds 20
 ```
 
 The live check asserts no stale selected samples for the chosen source, zero missed
@@ -99,8 +99,8 @@ Three isolated 20-second `FS.W.CAM` runs used temporary copies of the same show:
 | Disabled, control | Closed | 1,200 | 295 | 25 | 1 |
 
 All reported zero encoding lag. Logs/recordings are respectively
-`/tmp/libertas-cadence-ujhd8rna`, `/tmp/libertas-cadence-9si94cp8` and
-`/tmp/libertas-cadence-tf6wvat5`; temporary files are not permanent test fixtures.
+`/tmp/munkicast-cadence-ujhd8rna`, `/tmp/munkicast-cadence-9si94cp8` and
+`/tmp/munkicast-cadence-tf6wvat5`; temporary files are not permanent test fixtures.
 The projector was ready/error-free and reported 1,195 submitted / 1,165 presented
 pictures. Its run enabled existing GPU benchmark instrumentation.
 
@@ -120,7 +120,7 @@ Elgato check below enabled **Use buffering** in the running document.
 
 ### Direct camera verification, 2026-11-09
 
-The Libertas UI and renderer were closed. `v4l2-ctl` captured 900 buffers per format
+The MunkiCast UI and renderer were closed. `v4l2-ctl` captured 900 buffers per format
 directly from the Guermok at 1920 × 1080, configured for 60 fps. Arrival time was
 reconstructed from each monotonic driver timestamp plus `delta now`, independently
 of the application. No driver sequence gaps occurred. Results after 120 startup
@@ -136,7 +136,7 @@ YUYV was hashed without transcoding; MJPEG was decoded to raw YUYV before hashin
 After excluding the first 120 frames (startup includes black/test bars), 245/479
 YUYV frame transitions and 240/479 MJPEG transitions were byte-identical. Changed
 pictures predominantly last two USB frames. Thus roughly 30 unique pictures/sec
-already arrive from the camera/capture path **without Libertas running**. Buffering
+already arrive from the camera/capture path **without MunkiCast running**. Buffering
 or a transport-format switch cannot create the missing unique pictures.
 
 The 61.29 Hz YUYV clock also exposed an application bug: advancing its presentation
@@ -164,7 +164,7 @@ both devices, both normal canvases and the original show workload:
 | MJPEG | 1,202 | 0 | 0 | 0 | 0 |
 
 The MJPEG run passed the unchanged strict all-source cadence check. Logs/recordings
-are `/tmp/libertas-cadence-v9tg3a88` and `/tmp/libertas-cadence-fu0o4zel`. This
+are `/tmp/munkicast-cadence-v9tg3a88` and `/tmp/munkicast-cadence-fu0o4zel`. This
 verifies one short mixed-scene workload, not a long-show performance guarantee.
 **MJPEG plus buffering passed this individual run**; the later recheck below did
 not reproduce that clean result, so it is not a reliable completed workaround. The YUYV
@@ -178,7 +178,7 @@ it does **not** mean the picture changed. Both camera formats still carry roughl
 changed automatically.
 
 Diagnostics, frame hashes and summary JSON are in
-`/tmp/libertas-camera-verify-20261109` (temporary, not permanent fixtures). Commands
+`/tmp/munkicast-camera-verify-20261109` (temporary, not permanent fixtures). Commands
 for repeating direct timing/content checks while the app is closed:
 
 ```sh
@@ -198,7 +198,7 @@ upstream limit, not which of those two devices is responsible.
 ### Recheck after the reported camera frame-rate change
 
 The operator reported changing the camera from 29.9 fps. Fresh direct captures,
-with Libertas closed, each collected 900 frames and excluded the first 120:
+with MunkiCast closed, each collected 900 frames and excluded the first 120:
 
 | Format | Measured delivered buffers/sec | Unique picture changes/sec | Identical transitions / measured transitions |
 | --- | ---: | ---: | ---: |
@@ -214,14 +214,14 @@ physical camera setting was changed or whether capture-card conversion is involv
 Verify actual HDMI output rate, camera live/movie mode and shutter/exposure settings.
 
 Frame hashes, logs and JSON summaries:
-`/tmp/libertas-camera-recheck-ADJyV3Pd`. Saved Libertas camera settings remain
+`/tmp/munkicast-camera-recheck-ADJyV3Pd`. Saved MunkiCast camera settings remain
 1080p60 / Auto / buffering disabled; no saved source settings were edited.
 
 A subsequent 20-second full `FS.W.CAM` check using the same temporary
 MJPEG + buffering show encoded 1,200 frames with 14 reused camera samples, one
 missed output slot and zero encoding lag. Game input had no reused samples and
 one skip corresponding to the missed output slot. The strict check failed;
-`/tmp/libertas-cadence-3mek5dkn` retains the log/recording. The earlier clean MJPEG
+`/tmp/munkicast-cadence-3mek5dkn` retains the log/recording. The earlier clean MJPEG
 run is not a reliable general workaround. Both upstream picture rate and remaining
 application capture/render timing need acceptance; neither is certified fixed.
 
@@ -247,7 +247,7 @@ on USB 2. Additional direct raw-frame tests, excluding 120 startup frames:
 Unique picture rate stays near 30 when reducing bandwidth or changing output frame
 rate; it does not simply halve every requested rate. That rules against a simple
 requested-rate-halving interpretation and does not establish a generic Linux cap.
-Diagnostics: `/tmp/libertas-camera-linux-modes-20261109`; original 1080p60 YUYV
+Diagnostics: `/tmp/munkicast-camera-linux-modes-20261109`; original 1080p60 YUYV
 device mode restored, saved projects untouched.
 
 [UltraSemi's MS2130 specification](https://www.ultrasemi.com/en/ic/macrosilicon/ms2130.html)
@@ -289,7 +289,7 @@ Next physical checks, in order:
    a 30 fps result keeps the card, its firmware and negotiation under investigation.
 
 These physical checks replace the earlier Windows-only failure hypothesis. Separate
-Libertas capture-sampling repeats and render deadline misses remain open regardless
+MunkiCast capture-sampling repeats and render deadline misses remain open regardless
 of the upstream camera picture rate.
 
 ### Elgato fast-motion repeats, 2026-11-09
@@ -318,7 +318,7 @@ or exclude failures under other workloads.
 
 ```sh
 cmake --build build-make --target test_encode -j8
-LIBERTAS_TEST_NVENC=1 ctest --test-dir build-make -R '^test_encode$' --output-on-failure
+MUNKICAST_TEST_NVENC=1 ctest --test-dir build-make -R '^test_encode$' --output-on-failure
 ```
 
 The opt-in encoder suite passed all 15 cases, including the moving-frame check,
@@ -339,9 +339,9 @@ zero encoding lag, about 60 capture callbacks/sec and about 5 ms Main render tim
 However, the current input was a Windows desktop showing Resolve reviewing the
 older recording. It is **not fresh-gameplay acceptance** and cannot establish a
 fix. The app and capture devices were not restarted. Temporary measurements,
-recording and screenshots are in `/tmp/libertas-elgato-buffered-live-k0md1i9d`;
+recording and screenshots are in `/tmp/munkicast-elgato-buffered-live-k0md1i9d`;
 original-clip analyses and encoder logs are in
-`/tmp/libertas-elgato-live-20261109`.
+`/tmp/munkicast-elgato-live-20261109`.
 
 The operator supplied the follow-up recording below, satisfying the request for
 new gameplay footage. That check supersedes the earlier pending acceptance step.
@@ -379,14 +379,14 @@ provide a confirmed application cause. Missing slots cannot explain the repeated
 stored pictures around 13:07. Zero encoding-lag counters cannot certify freshness.
 
 Analyses, exact PTS gaps and the verified whip-pan frame comparisons are in
-`/tmp/libertas-elgato-new-20261109`. Static scenes also produce low pixel differences;
+`/tmp/munkicast-elgato-new-20261109`. Static scenes also produce low pixel differences;
 the whole-file candidate count is deliberately not presented as a duplicate count.
 The earlier isolated NVENC test passed, but it excludes capture and GPU rendering.
 The recording alone cannot distinguish those stages or prove an encoder defect.
 
 #### Diagnostic setup for the follow-up recording
 
-The existing `LIBERTAS_TRACE_OUTPUT` diagnostic now also logs `CAPTURE_INPUT`:
+The existing `MUNKICAST_TRACE_OUTPUT` diagnostic now also logs `CAPTURE_INPUT`:
 source ID, driver sequence, original capture timestamp, callback arrival timestamp
 and a hash of **all captured pixel bytes**, before the presentation queue. Existing
 `CAPTURE_SAMPLE` lines now include source ID and scheduled output time, allowing
@@ -404,7 +404,7 @@ recording below. The previous no-relaunch instruction applied to enabling
 buffering; new diagnostics required a new renderer process.
 
 ```sh
-LIBERTAS_TRACE_OUTPUT=1 ./build-make/apps/libertas-ui/libertas-ui 2>>/tmp/libertas-capture-trace.log
+MUNKICAST_TRACE_OUTPUT=1 ./build-make/apps/munkicast-ui/munkicast-ui 2>>/tmp/munkicast-capture-trace.log
 ```
 
 The trace appends so earlier diagnostic data is preserved. For future diagnostics,
@@ -438,7 +438,7 @@ second. Another nine selected-frame holds occur at 13:58. Across the full clip,
 the application reused 27 selected frames and skipped 51 capture callbacks after
 its first recording sample.
 
-**The burst is a Libertas buffer-selection bug.** For example, when driver frame
+**The burst is a MunkiCast buffer-selection bug.** For example, when driver frame
 80082 was reused at 13:57.017, frame 80083 had arrived 40.351 ms before the scheduled
 output tick, with different pixel bytes. Frame 80084 was also already available.
 Across 13:55–14:01, capture timestamps advanced by 16.612–16.712 ms with no driver
@@ -468,7 +468,7 @@ against the actual 25-minute workload; it is **not a newly recorded end-to-end
 acceptance test**. Raw capture also contains identical pixel hashes, including
 still scenes; removing application holds does not promise every input picture is
 unique. Temporary replay source/events/results, frame comparisons and reports:
-`/tmp/libertas-tracecheck-20261109`.
+`/tmp/munkicast-tracecheck-20261109`.
 
 The new deterministic timestamp-jitter regression failed on the original code at
 tick 1 and passes with the correction. A second test simulates 25 minutes each
@@ -484,7 +484,7 @@ Close the traced application after stopping outputs, then launch normally to use
 the correction and disable the expensive capture-picture diagnostic:
 
 ```sh
-./build-make/apps/libertas-ui/libertas-ui
+./build-make/apps/munkicast-ui/munkicast-ui
 ```
 
 Keep Elgato buffering enabled. Validate fresh fast pans around a visible input
@@ -507,7 +507,7 @@ waits or claim this selection correction eliminates deadline misses.
 
 ### Live validation after the selection fix, 2026-11-09
 
-The operator supplied `/tmp/libertas-capture-trace.log` and
+The operator supplied `/tmp/munkicast-capture-trace.log` and
 `Main-Output-20261109-180217-026-01M71C6ET29S8DVMY1V409ZB23.mkv`. This is
 4:34.261 of 1440p60 gameplay followed by end-of-run/menu screens. The appended
 trace contains earlier sessions too; this analysis uses the final recording
@@ -571,8 +571,8 @@ burst, then use a controlled comparison to establish causality before a fix.
 The operator application was already closed when inspected; it was not killed
 or restarted. No further application code changes were justified by this
 validation. Reports, selected/input timestamps, cropped-picture analysis and
-replay events are in `/tmp/libertas-validation-1802-20261109`. Normal use should
-leave `LIBERTAS_TRACE_OUTPUT` unset; full-picture hashing/logging is diagnostic
+replay events are in `/tmp/munkicast-validation-1802-20261109`. Normal use should
+leave `MUNKICAST_TRACE_OUTPUT` unset; full-picture hashing/logging is diagnostic
 work and must not be treated as a zero-overhead performance measurement.
 
 ### Long streaming/recording follow-up, 2026-11-10
@@ -618,7 +618,7 @@ failure-only evidence no longer requires expensive input-picture hashing.
 A 45-second live baseline before this change produced 2,705 frames and zero
 missed slots; that short, non-streaming run is not evidence that the intermittent
 long-stream fault was absent. Packet reports and local diagnostic recordings are
-under `/tmp/libertas-validation-2339-20261110`.
+under `/tmp/munkicast-validation-2339-20261110`.
 
 #### Current 120 fps input and continued profiling
 
@@ -634,8 +634,8 @@ and 25-minute faster/slower clock simulations at both 60-to-60 and 120-to-60 pas
 This confirms another selection fault, without attributing the original file's
 844 timestamp gaps to capture sampling.
 
-`LIBERTAS_TRACE_SAMPLING=1` logs only selected driver sequences and times; it does
-not hash captured pixels. `LIBERTAS_BENCHMARK=1` additionally enables the existing
+`MUNKICAST_TRACE_SAMPLING=1` logs only selected driver sequences and times; it does
+not hash captured pixels. `MUNKICAST_BENCHMARK=1` additionally enables the existing
 GPU timestamps and per-encoded-frame conversion/codec/other timings. Both remain
 diagnostic settings. A 90-second live check with these settings had zero missed
 output slots, including a controlled, network-free scan of four providers' local
@@ -688,7 +688,7 @@ still reported approximately 120 Elgato buffers/sec, while repeated native MCP
 queries observed only about one preview generation increment/sec. Render duration
 is time spent composing a frame; it does not measure actual picture-delivery rate.
 
-The running UI and renderer inherited `LIBERTAS_TRACE_OUTPUT=1`. This hashes every
+The running UI and renderer inherited `MUNKICAST_TRACE_OUTPUT=1`. This hashes every
 captured pixel buffer and logs every arrival/selection: Elgato alone supplies about
 664 MB/sec of bytes to hash at 1440p120, with the camera also running. The trace had
 grown to approximately 559 MiB. It is unsuitable for normal performance acceptance.
@@ -697,8 +697,8 @@ After confirming recording/streaming/replay were stopped and the project clean,
 the application closed normally and the exact `build-make` executable restarted:
 
 ```sh
-env -u LIBERTAS_TRACE_OUTPUT -u LIBERTAS_TRACE_SAMPLING -u LIBERTAS_BENCHMARK \
-  ./build-make/apps/libertas-ui/libertas-ui
+env -u MUNKICAST_TRACE_OUTPUT -u MUNKICAST_TRACE_SAMPLING -u MUNKICAST_BENCHMARK \
+  ./build-make/apps/munkicast-ui/munkicast-ui
 ```
 
 Repeated generation-counter samples now measure approximately 60 preview updates/sec.
@@ -710,17 +710,17 @@ The live counter read 1,804 before encoder flushing; finalized packet counts inc
 the delayed frames. Both runs report zero encoding lag. After stopping, preview
 delivery remains approximately 60 fps and rendering returns to around 2 ms.
 
-The local file is `/tmp/libertas-validation-2339-20261110/normal-regression-check-live.mkv`;
+The local file is `/tmp/munkicast-validation-2339-20261110/normal-regression-check-live.mkv`;
 the destination check is
-`/home/calmasacow/Volumes/media-store/RecordingTest/Libertas-QA-normal-smb-regression-20261110.mkv`.
+`/home/calmasacow/Volumes/media-store/RecordingTest/MunkiCast-QA-normal-smb-regression-20261110.mkv`.
 The application remains open without diagnostic flags; failure-only deadline logging
-is retained in `/tmp/libertas-normal-preview.log`. No rendering optimization was
+is retained in `/tmp/munkicast-normal-preview.log`. No rendering optimization was
 reverted on the strength of this comparison. Restarting also resets process state,
 so these results do not prove hashing alone caused the freeze, eliminate the
 previous periodic fault, or establish that all captured pictures are distinct.
 
-The isolated cadence checker now enables only `LIBERTAS_TRACE_SAMPLING` and removes
-an inherited `LIBERTAS_TRACE_OUTPUT`; its assertions never use input pixel hashes.
+The isolated cadence checker now enables only `MUNKICAST_TRACE_SAMPLING` and removes
+an inherited `MUNKICAST_TRACE_OUTPUT`; its assertions never use input pixel hashes.
 If delivery collapses again without tracing, capture per-canvas frame/generation
 deltas and output state before restarting, then isolate preview scheduling/transport
 from actual composition duration. Remaining long periodic/streaming acceptance above

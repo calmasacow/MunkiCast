@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ltest.hpp"
 
@@ -65,7 +65,7 @@ J collection() {
 struct Scratch {
     QTemporaryDir temp;
     fs::path input = fs::path(temp.path().toStdString()) / "obs.json";
-    fs::path output = fs::path(temp.path().toStdString()) / "Imported.libertas";
+    fs::path output = fs::path(temp.path().toStdString()) / "Imported.munkicast";
 
     void write(const J& root) { std::ofstream(input) << root; }
 
@@ -114,7 +114,7 @@ LTEST_CASE(source_clone_import_export_preserves_input_identity_and_options) {
         if (source.id == input->id) source.name = "Show";
     std::reverse(reordered.sources.begin(), reordered.sources.end());
     REQUIRE(limport::export_obs(reordered, scratch.output, output));
-    const auto again = limport::import_obs(output, output + ".libertas", {4, 4, {60, 1}});
+    const auto again = limport::import_obs(output, output + ".munkicast", {4, 4, {60, 1}});
     REQUIRE_MSG(again.has_value(), "{}", again.error());
     native = find_clone(again->project);
     REQUIRE(native);
@@ -158,7 +158,7 @@ LTEST_CASE(file_backed_stinger_imports_timing_and_roundtrips_to_obs) {
     Scratch scratch;
     auto root = collection();
     auto transition = source("Stinger", "obs_stinger_transition", "stinger");
-    transition["settings"]["path"] = std::string(LIBERTAS_IMAGE_FIXTURES) + "/alpha-tone.webm";
+    transition["settings"]["path"] = std::string(MUNKICAST_IMAGE_FIXTURES) + "/alpha-tone.webm";
     transition["settings"]["transition_point"] = 400;
     root["transitions"].append(transition);
     root["current_transition"] = "Stinger";
@@ -174,7 +174,7 @@ LTEST_CASE(file_backed_stinger_imports_timing_and_roundtrips_to_obs) {
     CHECK_EQ(converted->project.decks.front().transition, "transition.stinger:" + imported->id.to_string());
     const auto output = fs::path(scratch.temp.path().toStdString()) / "stinger.json";
     REQUIRE(limport::export_obs(converted->project, scratch.output, output));
-    const auto again = limport::import_obs(output, output.string() + ".libertas", {4, 4, {60, 1}});
+    const auto again = limport::import_obs(output, output.string() + ".munkicast", {4, 4, {60, 1}});
     REQUIRE(again);
     const auto saved = find(again->project);
     REQUIRE(saved != again->project.sources.end());
@@ -203,7 +203,7 @@ LTEST_CASE(media_hardware_decoding_policy_survives_obs_roundtrip) {
         const auto output = fs::path(scratch.temp.path().toStdString()) / "export.json";
         REQUIRE(limport::export_obs(converted->project, scratch.output, output));
         const auto again =
-            limport::import_obs(output, output.string() + ".libertas", {4, 4, {60, 1}});
+            limport::import_obs(output, output.string() + ".munkicast", {4, 4, {60, 1}});
         REQUIRE(again);
         const auto reimported = find_media(again->project);
         REQUIRE(reimported != again->project.sources.end());
@@ -239,7 +239,7 @@ LTEST_CASE(imported_color_filter_draws_and_exports_with_name_order_and_disabled_
     CHECK(pixel(image, 0, 0)[1] > 40);
     const auto output = fs::path(scratch.temp.path().toStdString()) / "export.json";
     REQUIRE(limport::export_obs(p, scratch.output, output));
-    const auto again = limport::import_obs(output, output.string() + ".libertas", {4, 4, {60, 1}});
+    const auto again = limport::import_obs(output, output.string() + ".munkicast", {4, 4, {60, 1}});
     REQUIRE(again);
     REQUIRE(again->project.sources.front().effects.size() == 2);
     CHECK_EQ(again->project.sources.front().effects[0].name, std::string("Brighten"));
@@ -260,7 +260,7 @@ LTEST_CASE(imported_scale_mask_and_scroll_preserve_settings_and_render_after_rou
     J mask;
     mask["id"] = "mask_filter";
     mask["versioned_id"] = "mask_filter_v2";
-    mask["settings"]["image_path"] = std::string(LIBERTAS_IMAGE_FIXTURES) + "/two.png";
+    mask["settings"]["image_path"] = std::string(MUNKICAST_IMAGE_FIXTURES) + "/two.png";
     mask["settings"]["color"] = Json::UInt(0xff804020);
     mask["settings"]["stretch"] = false;
     root["sources"][0]["filters"].append(mask);
@@ -285,7 +285,7 @@ LTEST_CASE(imported_scale_mask_and_scroll_preserve_settings_and_render_after_rou
     REQUIRE(before.gaps.empty());
     const auto output = fs::path(scratch.temp.path().toStdString()) / "export.json";
     REQUIRE(limport::export_obs(imported->project, scratch.output, output));
-    auto again = limport::import_obs(output, output.string() + ".libertas", {4, 4, {60, 1}});
+    auto again = limport::import_obs(output, output.string() + ".munkicast", {4, 4, {60, 1}});
     REQUIRE(again);
     const auto after = lcomp::composite_canvas(again->project, again->project.canvases[0].id);
     CHECK(after.gaps.empty());
@@ -308,7 +308,7 @@ LTEST_CASE(invalid_lut_reports_a_gap_and_correcting_the_path_restores_rendering)
     const auto before = lcomp::composite_canvas(project, project.canvases[0].id);
     CHECK(!before.gaps.empty());
     project.sources[0].effects[0].params["path"] =
-        std::string(LIBERTAS_IMAGE_FIXTURES) + "/identity.cube";
+        std::string(MUNKICAST_IMAGE_FIXTURES) + "/identity.cube";
     const auto after = lcomp::composite_canvas(project, project.canvases[0].id);
     CHECK(after.gaps.empty());
     CHECK(pixel(after, 0, 0)[0] > 250);
@@ -335,7 +335,7 @@ LTEST_CASE(all_obs_blend_modes_survive_import_render_export_and_reimport) {
         const auto exported = limport::export_obs(project, scratch.output, output);
         REQUIRE_MSG(exported, "{}", exported.error());
         const auto reimported =
-            limport::import_obs(output, output.string() + ".libertas", {4, 4, {60, 1}});
+            limport::import_obs(output, output.string() + ".munkicast", {4, 4, {60, 1}});
         REQUIRE_MSG(reimported, "{}", reimported.error());
         CHECK_EQ(reimported->project.scenes[0].roots[0].blend.mode, modes[i]);
         const auto after =
@@ -348,7 +348,7 @@ LTEST_CASE(import_crops_actual_image_pixels_and_preserves_flipped_bounds) {
     Scratch scratch;
     auto root = collection();
     auto image = source("image", "image_source", "image");
-    image["settings"]["file"] = std::string(LIBERTAS_IMAGE_FIXTURES) + "/two.png";
+    image["settings"]["file"] = std::string(MUNKICAST_IMAGE_FIXTURES) + "/two.png";
     root["sources"].append(image);
     auto i = item("image", "image");
     i["crop_left"] = 1;
@@ -710,7 +710,7 @@ LTEST_CASE(import_cli_creates_a_project_with_explicit_canvas_rate) {
     const auto child = fork();
     REQUIRE(child >= 0);
     if (child == 0) {
-        execl(LIBERTAS_CLI, LIBERTAS_CLI, "import-obs", scratch.input.c_str(),
+        execl(MUNKICAST_CLI, MUNKICAST_CLI, "import-obs", scratch.input.c_str(),
               scratch.output.c_str(), "4", "4", "60", "1", static_cast<char*>(nullptr));
         _exit(127);
     }
@@ -739,7 +739,7 @@ LTEST_CASE(export_roundtrip_preserves_pixels_stack_crop_pivot_flips_and_rotation
     REQUIRE_MSG(exported, "{}", exported.error());
     CHECK(fs::exists(output.string() + ".report.md"));
     CHECK(!limport::export_obs(project, scratch.output, output));
-    const auto imported = limport::import_obs(output, output.string() + ".libertas", {4, 4, {60000, 1001}});
+    const auto imported = limport::import_obs(output, output.string() + ".munkicast", {4, 4, {60000, 1001}});
     REQUIRE_MSG(imported, "{}", imported.error());
     const auto after = lcomp::composite_canvas(imported->project, imported->project.canvases.front().id);
     CHECK_EQ(before.pixels, after.pixels);
@@ -761,7 +761,7 @@ LTEST_CASE(export_disambiguates_names_and_reports_unsupported_features_without_o
     REQUIRE(exported);
     CHECK(exported->find("transparent placeholder") != std::string::npos);
     CHECK(exported->find("opacity") != std::string::npos);
-    const auto imported = limport::import_obs(output, output.string() + ".libertas", {4, 4, {60, 1}});
+    const auto imported = limport::import_obs(output, output.string() + ".munkicast", {4, 4, {60, 1}});
     REQUIRE_MSG(imported, "{}", imported.error());
     CHECK_EQ(imported->project.scenes.size(), project.scenes.size());
     CHECK_EQ(imported->project.sources.size(), project.sources.size());

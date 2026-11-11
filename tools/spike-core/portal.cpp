@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // org.freedesktop.portal.ScreenCast handshake.
@@ -20,7 +20,7 @@
 #include <gio/gio.h>
 #include <gio/gunixfdlist.h>
 
-namespace libertas::spike {
+namespace munkicast::spike {
 namespace {
 
 constexpr const char* kBus = "org.freedesktop.portal.Desktop";
@@ -30,7 +30,7 @@ constexpr const char* kRequestIface = "org.freedesktop.portal.Request";
 
 std::string random_token() {
     static std::mt19937_64 rng{std::random_device{}()};
-    return std::format("libertas_{:016x}", rng());
+    return std::format("munkicast_{:016x}", rng());
 }
 
 /// The portal derives the Request object path from our unique bus name and token, so we can
@@ -360,4 +360,4 @@ bool negotiate_screencast(const PortalRequest& req, PortalSession& out, std::str
     return true;
 }
 
-} // namespace libertas::spike
+} // namespace munkicast::spike

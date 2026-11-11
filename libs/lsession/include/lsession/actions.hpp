@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
@@ -32,7 +32,7 @@
 namespace lsession {
 
 enum class Scope : std::uint8_t {
-    /// Fires only while Libertas has focus.
+    /// Fires only while MunkiCast has focus.
     Application,
     /// Fires whatever is focused, including a fullscreen game.
     Global,

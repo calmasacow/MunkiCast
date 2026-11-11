@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
-# SPDX-FileCopyrightText: Libertas-Studio contributors
+# SPDX-FileCopyrightText: MunkiCast contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 set -euo pipefail
 
 root="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/.." && pwd)"
 prefix="$root/build/ffmpeg-9.1/prefix"
-app="$root/build/linux/apps/libertas-ui/libertas-ui"
+app="$root/build/linux/apps/munkicast-ui/munkicast-ui"
 if [[ ! -x "$prefix/bin/ffmpeg" || ! -x "$app" ]]; then
     echo "Missing local FFmpeg 9.1 or application build; see docs/ffmpeg-9.1.md" >&2
     exit 1

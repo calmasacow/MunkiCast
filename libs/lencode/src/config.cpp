@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // The join between what the document says and what the muxer needs. See runtime_config in
@@ -8,7 +8,7 @@
 
 #include <utility>
 
-namespace libertas::encode {
+namespace munkicast::encode {
 
 RuntimeConfig runtime_config(const ldoc::Encode& encode, const ldoc::AudioEncode& audio,
                              const ldoc::Canvas& canvas, std::string path) {
@@ -117,4 +117,4 @@ RuntimeConfig runtime_config(const ldoc::Encode& encode, const ldoc::AudioEncode
     return cfg;
 }
 
-} // namespace libertas::encode
+} // namespace munkicast::encode

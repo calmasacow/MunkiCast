@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "lcapture/video.hpp"
 #include "video_signal.hpp"
@@ -24,7 +24,7 @@ extern "C" {
 #include <libswscale/swscale.h>
 }
 
-namespace libertas::capture {
+namespace munkicast::capture {
 namespace {
 int call(int fd, unsigned long request, void* arg) {
     int result;
@@ -552,4 +552,4 @@ std::unique_ptr<VideoCapture> VideoCapture::open(const std::string& path,
         param.parm.capture.timeperframe.denominator, param.parm.capture.timeperframe.numerator, path);
     return std::unique_ptr<VideoCapture>(new VideoCapture(std::move(state)));
 }
-} // namespace libertas::capture
+} // namespace munkicast::capture

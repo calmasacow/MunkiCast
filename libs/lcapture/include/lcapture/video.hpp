@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
@@ -9,7 +9,7 @@
 #include <string>
 #include <vector>
 
-namespace libertas::capture {
+namespace munkicast::capture {
 struct VideoDevice {
     std::string path, name;
     int width = 0, height = 0;
@@ -56,4 +56,4 @@ class VideoCapture {
     explicit VideoCapture(std::unique_ptr<State> state);
     std::unique_ptr<State> state_;
 };
-} // namespace libertas::capture
+} // namespace munkicast::capture

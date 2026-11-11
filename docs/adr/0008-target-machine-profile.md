@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: Libertas-Studio contributors
+SPDX-FileCopyrightText: MunkiCast contributors
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 # ADR 0008 — The reference target is `argus`, not the development box
@@ -64,7 +64,7 @@ Flatpak runtime, not of the host**, and would not survive a native build.
    encoder API enum.
 2. **Turing is the capability floor.** No AV1 encode on NVIDIA (`AV1 supported: false`), no 10-bit
    texture path (`P010 texture support not available` in their OBS log). H.264 and HEVC only.
-3. `libertas probe` must report, per render node, the libva driver bound **and** whether a *working
+3. `munkicast probe` must report, per render node, the libva driver bound **and** whether a *working
    encode entrypoint* exists — not merely whether an encoder name is present in `ffmpeg -encoders`,
    which is true even when the runtime cannot create a session.
 4. **All capability claims are per-machine and must be probed at runtime, never compiled in.** Two
@@ -77,7 +77,7 @@ Flatpak runtime, not of the host**, and would not survive a native build.
   last-resort tier is weaker than it looks, and sysmem-roundtrip fallbacks cost relatively more.
 - Measurements taken on the dev box are not evidence about the target. Re-run anything that matters.
 
-## Verified Vulkan capability on `argus` (via `libertas probe`, built and run there)
+## Verified Vulkan capability on `argus` (via `munkicast probe`, built and run there)
 
 ```
 [0] NVIDIA GeForce RTX 2070      discrete   api 1.4.341   drm 226:1 / 226:128

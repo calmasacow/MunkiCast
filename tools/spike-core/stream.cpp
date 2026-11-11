@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // PipeWire consumer for a portal ScreenCast node, with explicit DRM format-modifier negotiation.
@@ -26,7 +26,7 @@
 
 #include <ctime>
 
-namespace libertas::spike {
+namespace munkicast::spike {
 
 
 
@@ -738,9 +738,9 @@ bool pw_try_variant(PwSession& session, const StreamConfig& cfg, NegotiatedForma
 
     pw_properties* props =
         pw_properties_new(PW_KEY_MEDIA_TYPE, "Video", PW_KEY_MEDIA_CATEGORY, "Capture",
-                          PW_KEY_MEDIA_ROLE, "Screen", PW_KEY_APP_NAME, "libertas-capture-spike",
+                          PW_KEY_MEDIA_ROLE, "Screen", PW_KEY_APP_NAME, "munkicast-capture-spike",
                           nullptr);
-    a.stream = pw_stream_new(session.core, "libertas-capture", props);
+    a.stream = pw_stream_new(session.core, "munkicast-capture", props);
     if (a.stream == nullptr) {
         error = "pw_stream_new failed";
         return false;
@@ -793,4 +793,4 @@ bool pw_try_variant(PwSession& session, const StreamConfig& cfg, NegotiatedForma
     return true;
 }
 
-} // namespace libertas::spike
+} // namespace munkicast::spike

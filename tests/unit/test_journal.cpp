@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // The command journal: work done since the last save survives the process dying.
@@ -26,7 +26,7 @@ namespace {
 class ScratchDir {
 public:
     explicit ScratchDir(std::string_view tag) {
-        path_ = fs::temp_directory_path() / std::format("libertas-jnl-{}-{}", ::getpid(), tag);
+        path_ = fs::temp_directory_path() / std::format("munkicast-jnl-{}-{}", ::getpid(), tag);
         std::error_code ec;
         fs::remove_all(path_, ec);
         fs::create_directories(path_, ec);
@@ -38,7 +38,7 @@ public:
     ScratchDir(const ScratchDir&) = delete;
     ScratchDir& operator=(const ScratchDir&) = delete;
 
-    [[nodiscard]] fs::path project() const { return path_ / "Show.libertas"; }
+    [[nodiscard]] fs::path project() const { return path_ / "Show.munkicast"; }
     [[nodiscard]] fs::path file(std::string_view name) const { return path_ / name; }
 
 private:

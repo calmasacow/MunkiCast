@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ltest.hpp"
 
@@ -90,7 +90,7 @@ LTEST_CASE(vst_runs_in_a_helper_with_parameter_controls_and_crash_isolation) {
     ldoc::Effect effect;
     effect.id = ldoc::Id::generate();
     effect.type = "filter.vst";
-    effect.params["path"] = std::string(LIBERTAS_VST_FIXTURE);
+    effect.params["path"] = std::string(MUNKICAST_VST_FIXTURE);
     lcomp::VstWorker worker(effect);
     for (int i = 0; i < 100 && !worker.info().error.empty(); ++i)
         std::this_thread::sleep_for(std::chrono::milliseconds(10));

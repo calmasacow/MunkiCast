@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: Libertas-Studio contributors
+SPDX-FileCopyrightText: MunkiCast contributors
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 # Todo
@@ -41,7 +41,7 @@ See [current status](current_goal.md) for what is usable now.
   historical results still showed occasional missed frame budgets.
 - [ ] Finish mixed camera/game recording acceptance with a visible input frame counter.
   Direct Guermok verification found about 30 unique pictures/sec in both YUYV and
-  MJPEG before Libertas; actual delivery is 61.29/60.01 buffers/sec respectively.
+  MJPEG before MunkiCast; actual delivery is 61.29/60.01 buffers/sec respectively.
   Driver timestamp intervals now prevent nominal-clock buffer resets. Physical
   camera HDMI/frame-rate/shutter and capture-card conversion verification remains,
   plus lip sync and long-show load. The reported physical frame-rate change still
@@ -104,7 +104,7 @@ See [current status](current_goal.md) for what is usable now.
 
 ## Disabled menus: implement or remove
 
-These are explicit `Pending` entries in `apps/libertas-ui/qml/MainMenu.qml`, not
+These are explicit `Pending` entries in `apps/munkicast-ui/qml/MainMenu.qml`, not
 controls temporarily disabled by selection or output state. Each group needs a
 working action, UI acceptance check, and documentation, or removal from the menu.
 
@@ -232,7 +232,7 @@ working action, UI acceptance check, and documentation, or removal from the menu
   change; physical camera/card verification and application timing acceptance remain open.
 - [x] Collection GUI import/export/management, menu bar, browser docks and caching UI.
 - [x] Studio Mode, quick/manual transitions, stingers, countdown bindings and source clones.
-- [x] Libertas/OBS WebSocket modes, Companion toggle/timecode presets, independent native MCP.
+- [x] MunkiCast/OBS WebSocket modes, Companion toggle/timecode presets, independent native MCP.
 - [x] Collection-switch panel rebinding, per-canvas Sources state, retained QML refresh
   dependencies, hidden-view refresh reduction and coalesced encoder graph updates.
 
@@ -241,9 +241,9 @@ working action, UI acceptance check, and documentation, or removal from the menu
 The 2026-10-29 panel regression initially reproduced blank scene/source rows on
 collection switches while the prior `shell_self_check` passed. After the fixes:
 
-- `cmake --build build-make -j8` and the final `libertas-ui` target rebuild passed.
+- `cmake --build build-make -j8` and the final `munkicast-ui` target rebuild passed.
 - 32 ordinary tests passed; the GPU test skipped by default, then passed explicitly
-  with `LIBERTAS_TEST_GPU=1` (2.46 seconds).
+  with `MUNKICAST_TEST_GPU=1` (2.46 seconds).
 - All eight UI/integration tests passed (180.92 seconds), including the new panel
   regression, full shell, Studio Mode, reorder, replay, Companion and native MCP.
   That is **41 distinct tests passed**, with no remaining skipped test in this run.
@@ -253,9 +253,9 @@ collection switches while the prior `shell_self_check` passed. After the fixes:
   `git diff --check` and local documentation link checks passed. All 34 explicit
   disabled menu entries are accounted for in the table above.
 
-Logs for this local run are `/tmp/libertas-panel-qa-build.log`,
-`/tmp/libertas-panel-qa-unit.log`, `/tmp/libertas-panel-qa-gpu.log`,
-`/tmp/libertas-panel-qa-ui.log`, and `/tmp/libertas-panel-qa-final-panels.log`.
+Logs for this local run are `/tmp/munkicast-panel-qa-build.log`,
+`/tmp/munkicast-panel-qa-unit.log`, `/tmp/munkicast-panel-qa-gpu.log`,
+`/tmp/munkicast-panel-qa-ui.log`, and `/tmp/munkicast-panel-qa-final-panels.log`.
 Hardware capture, provider authorization, external clients and long-show acceptance
 remain the unchecked work above. No FPS improvement is claimed from the UI changes;
 they remove redundant work and fix observed stale/empty contents.

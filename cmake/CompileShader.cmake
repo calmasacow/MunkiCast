@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Libertas-Studio contributors
+# SPDX-FileCopyrightText: MunkiCast contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # Compiles GLSL to SPIR-V and embeds it as a C array, so a binary carries its own shaders and
@@ -11,10 +11,10 @@
 
 find_program(GLSLC_EXECUTABLE glslc REQUIRED)
 
-# libertas_compile_shader(<target> <shader.comp>)
+# munkicast_compile_shader(<target> <shader.comp>)
 #
 # Generates <name>_spv.h in the build tree declaring `kNameSpv`, and adds it to <target>.
-function(libertas_compile_shader TARGET SHADER)
+function(munkicast_compile_shader TARGET SHADER)
     get_filename_component(_name "${SHADER}" NAME_WE)
     set(_src "${CMAKE_CURRENT_SOURCE_DIR}/${SHADER}")
     set(_out_dir "${CMAKE_CURRENT_BINARY_DIR}/shaders")

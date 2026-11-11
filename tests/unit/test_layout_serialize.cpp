@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Layout persistence: ADR-0015 rule 4 (proportions only) and rule 5 (atomic, versioned, and it
@@ -30,7 +30,7 @@ class ScratchDir {
 public:
     ScratchDir() {
         path_ = std::filesystem::temp_directory_path() /
-                std::format("libertas-llayout-{}", ::getpid());
+                std::format("munkicast-llayout-{}", ::getpid());
         std::error_code ec;
         std::filesystem::remove_all(path_, ec);
         std::filesystem::create_directories(path_, ec);

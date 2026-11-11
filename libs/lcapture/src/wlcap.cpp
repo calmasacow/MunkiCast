@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // ext-image-copy-capture-v1 capture backend.
@@ -35,7 +35,7 @@
 #include "ext-image-copy-capture-v1-client-protocol.h"
 #include "linux-dmabuf-v1-client-protocol.h"
 
-namespace libertas::capture {
+namespace munkicast::capture {
 
 struct WlCap {
     wl_display* display = nullptr;
@@ -698,4 +698,4 @@ void wlcap_close(WlCap* cap) {
     delete cap;
 }
 
-} // namespace libertas::capture
+} // namespace munkicast::capture

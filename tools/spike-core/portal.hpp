@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-namespace libertas::spike {
+namespace munkicast::spike {
 
 /// One stream handed back by org.freedesktop.portal.ScreenCast.Start.
 struct PortalStream {
@@ -51,4 +51,4 @@ void close_screencast_session(const std::string& session_handle);
 /// Returns false and fills `error` on failure (including user cancellation).
 bool negotiate_screencast(const PortalRequest& req, PortalSession& out, std::string& error);
 
-} // namespace libertas::spike
+} // namespace munkicast::spike

@@ -9,7 +9,7 @@ This is not a stable 9.1 release. Nothing under `/usr` is replaced.
 From the repository root, after saving and closing the currently running application:
 
 ```sh
-./build/linux/apps/libertas-ui/libertas-ui
+./build/linux/apps/munkicast-ui/munkicast-ui
 ```
 
 The old `build-make` tree was archived locally as
@@ -25,10 +25,10 @@ To rebuild with system FFmpeg in a separate directory:
 ```sh
 cmake --preset linux-system-ffmpeg
 cmake --build --preset linux-system-ffmpeg -j8
-./build/linux-system-ffmpeg/apps/libertas-ui/libertas-ui
+./build/linux-system-ffmpeg/apps/munkicast-ui/munkicast-ui
 ```
 
-Manual configurations can use `-DLIBERTAS_USE_SYSTEM_FFMPEG=ON`.
+Manual configurations can use `-DMUNKICAST_USE_SYSTEM_FFMPEG=ON`.
 The Git rollback point is `rollback/pre-ffmpeg-9.1-and-browser-docks`.
 
 ## Build and checks
@@ -93,7 +93,7 @@ With those local dependencies installed:
 ```sh
 cmake --preset linux
 cmake --build --preset linux -j8
-LIBERTAS_TEST_NVENC=1 ctest --preset linux
+MUNKICAST_TEST_NVENC=1 ctest --preset linux
 ```
 
 Exact FFmpeg configure flags, source revision, environment, build logs, project snapshot,
@@ -102,7 +102,7 @@ These generated artifacts and dependency installations are intentionally untrack
 
 ## Comparison
 
-`libertas-encode-bench` reads the first encode and its canvas/audio settings from the
+`munkicast-encode-bench` reads the first encode and its canvas/audio settings from the
 same project snapshot for both builds. It passes identical generated RGBA frames and
 audio through the production `lencode` conversion, encoder and muxer. One 120-frame
 warmup precedes three 600-frame trials. Trials run without pacing; opening the encoder
@@ -110,9 +110,9 @@ and generating inputs are excluded, flushing is included. The measurements cover
 conversion and encoding throughput, not full-scene rendering or preview smoothness.
 
 ```sh
-build/linux-system-ffmpeg/tools/encode-spike/libertas-encode-bench \
+build/linux-system-ffmpeg/tools/encode-spike/munkicast-encode-bench \
   build/ffmpeg-comparison/project.json build/ffmpeg-comparison/baseline
-build/linux-ffmpeg-9.1/tools/encode-spike/libertas-encode-bench \
+build/linux-ffmpeg-9.1/tools/encode-spike/munkicast-encode-bench \
   build/ffmpeg-comparison/project.json build/ffmpeg-comparison/updated
 ```
 
@@ -151,7 +151,7 @@ Before upgrading, `test_encode` (NVENC enabled) and `test_preview` both passed.
 The new launcher also passed an offscreen `--version` smoke check.
 After upgrading, the full suite finished with **31 passed, 1 skipped, 0 failures**,
 including NVENC encoder tests, preview, media-source worker and the UI self-check.
-`test_gpu_composite` is opt-in (`LIBERTAS_TEST_GPU=1`) and was skipped.
+`test_gpu_composite` is opt-in (`MUNKICAST_TEST_GPU=1`) and was skipped.
 
 ### Default-build integration — 2026-10-26
 

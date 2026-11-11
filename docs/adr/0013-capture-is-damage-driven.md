@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: Libertas-Studio contributors
+SPDX-FileCopyrightText: MunkiCast contributors
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 # ADR 0013 — Capture is damage-driven; the encoder needs its own clock
@@ -61,7 +61,7 @@ the first thing this ADR warns against.
 an unchanged screen 60 times a second would be strictly worse. So the capture source is inherently
 variable-rate, and **the output cadence is the encoder's responsibility, not the capture worker's**:
 
-- `libertas-render` owns one monotonic clock and drives encode at the output's configured rate.
+- `munkicast-render` owns one monotonic clock and drives encode at the output's configured rate.
 - When no new frame has arrived by the deadline, the compositor pipeline re-presents the last good
   frame. For an unchanged screen the encoder sees an identical frame and emits a cheap P-frame, so
   a static scene costs almost nothing in bitrate - which is the behaviour viewers expect.

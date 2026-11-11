@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: Libertas-Studio contributors
+SPDX-FileCopyrightText: MunkiCast contributors
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 # ADR 0006 — Composite-to-encode handoff: native Vulkan video encode
@@ -22,7 +22,7 @@ FFmpeg n9.0.1 / libavcodec 63.1.101, Vulkan 1.4.357):
 | 2. FFmpeg `AV_PIX_FMT_VULKAN` hwframes -> `hwmap=derive_device=cuda` -> `h264_nvenc` | **Dead.** `Failed to map frame: -38` (`ENOSYS`). Vulkan->CUDA frame mapping is not implemented |
 | 3. `VK_KHR_video_encode_queue` via FFmpeg's native Vulkan encoders | **Works.** See below |
 
-`libertas probe` confirms `VK_KHR_video_encode_queue` is supported on the RTX 5080 (and **not** on
+`munkicast probe` confirms `VK_KHR_video_encode_queue` is supported on the RTX 5080 (and **not** on
 the Intel UHD 770).
 
 FFmpeg n9.0.1 ships `h264_vulkan`, `hevc_vulkan`, `av1_vulkan`, `ffv1_vulkan`, `prores_ks_vulkan`.
@@ -91,7 +91,7 @@ Forcing `LIBVA_DRIVER_NAME=iHD` yields "Intel iHD driver ... 26.2.4" with
 `VAProfileH264High: VAEntrypointEncSlice` present, and `h264_vaapi` then encodes correctly
 (173,494 B, 120/120 frames decode).
 
-**Consequence:** Libertas must select the VAAPI driver explicitly per device rather than trusting
-`libva`'s default, and `libertas probe` must report the driver actually bound to each render node.
+**Consequence:** MunkiCast must select the VAAPI driver explicitly per device rather than trusting
+`libva`'s default, and `munkicast probe` must report the driver actually bound to each render node.
 This is a good example of a dual-GPU environment hazard that would otherwise surface as a mysterious
 user bug report.

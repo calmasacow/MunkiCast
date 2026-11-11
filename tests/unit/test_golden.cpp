@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // A committed project, read back byte for byte.
@@ -53,7 +53,7 @@ Id fixed_id(std::uint8_t tag) {
 /// The current format, written by this build and committed. The byte-for-byte fixture.
 fs::path fixture_dir() {
     // Beside the test source, not in the build tree: it is an artefact of the repository.
-    return fs::path(LIBERTAS_TEST_FIXTURES) / "golden-project-v4";
+    return fs::path(MUNKICAST_TEST_FIXTURES) / "golden-project-v4";
 }
 
 /// The previous format, frozen. **Never regenerated**: its whole value is that it was written by
@@ -61,7 +61,7 @@ fs::path fixture_dir() {
 /// reconstruction of what version 1 is believed to have looked like. It still carries a scene
 /// with no canvas and nodes with `canvas_overrides`, which is exactly the point.
 fs::path fixture_v1_dir() {
-    return fs::path(LIBERTAS_TEST_FIXTURES) / "golden-project-v1";
+    return fs::path(MUNKICAST_TEST_FIXTURES) / "golden-project-v1";
 }
 
 /// A project with one of everything the format can hold, so the fixture exercises the whole
@@ -332,7 +332,7 @@ Project golden_project() {
 class ScratchDir {
 public:
     ScratchDir() {
-        path_ = fs::temp_directory_path() / std::format("libertas-golden-{}", ::getpid());
+        path_ = fs::temp_directory_path() / std::format("munkicast-golden-{}", ::getpid());
         std::error_code ec;
         fs::remove_all(path_, ec);
         fs::create_directories(path_, ec);
@@ -345,7 +345,7 @@ public:
     ScratchDir& operator=(const ScratchDir&) = delete;
 
     [[nodiscard]] fs::path copy_of(const fs::path& fixture) const {
-        const fs::path to = path_ / "Golden.libertas";
+        const fs::path to = path_ / "Golden.munkicast";
         std::error_code ec;
         fs::copy(fixture, to, fs::copy_options::recursive, ec);
         return to;
@@ -370,7 +370,7 @@ LTEST_CASE(the_fixture_exists_and_was_not_written_by_this_run) {
     CHECK_MSG(created.has_value(), "{}", created.has_value() ? std::string{} : created.error());
 
     // The lock and journal are runtime state, not part of the fixture.
-    fs::remove_all(fixture_dir() / ".libertas", ec);
+    fs::remove_all(fixture_dir() / ".munkicast", ec);
     REQUIRE_MSG(false,
                 "the golden fixture was missing and has been written to {} -- review it and "
                 "commit it, then run again",
@@ -444,7 +444,7 @@ LTEST_CASE(the_committed_project_still_opens) {
 
 LTEST_CASE(version_2_migration_preserves_existing_filters_and_starts_shared_stacks_empty) {
     const ScratchDir sd;
-    const auto dir = sd.copy_of(fs::path(LIBERTAS_TEST_FIXTURES) / "golden-project-v2");
+    const auto dir = sd.copy_of(fs::path(MUNKICAST_TEST_FIXTURES) / "golden-project-v2");
     auto opened = open_project(dir);
     REQUIRE(opened);
     CHECK_EQ(opened->project.schema_version, kSchemaVersion);
@@ -466,7 +466,7 @@ LTEST_CASE(version_3_audio_extras_become_audio_encodes) {
     // string keys inside each video encode. Opening them is what exercises the real v3 -> v4
     // migration rather than a reconstruction of what version 3 is believed to have been.
     const ScratchDir sd;
-    const auto dir = sd.copy_of(fs::path(LIBERTAS_TEST_FIXTURES) / "golden-project-v3");
+    const auto dir = sd.copy_of(fs::path(MUNKICAST_TEST_FIXTURES) / "golden-project-v3");
     auto opened = open_project(dir);
     REQUIRE_MSG(opened, "{}", opened ? std::string{} : opened.error());
     CHECK_EQ(opened->project.schema_version, kSchemaVersion);

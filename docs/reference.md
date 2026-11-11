@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: Libertas-Studio contributors
+SPDX-FileCopyrightText: MunkiCast contributors
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 # Reference pointers
@@ -56,7 +56,7 @@ Format facts established by exploration, so they need not be re-derived:
   top-level `resolution` covers both. No need to implement relative math for import.
 - **`settings` blobs are sparse** — defaults are never serialized
   (`obs_data_to_json(data, with_defaults=false)`). An importer needs a per-source-id default table.
-  This is precisely why Libertas serializes all defaults explicitly.
+  This is precisely why MunkiCast serializes all defaults explicitly.
 - Key-name traps: scene items use `align` / `bounds_align` / `bounds_crop` /
   `crop_left|top|right|bottom`, but the *clipboard* format in the same file uses `alignment` /
   `bounds_alignment` / `crop_to_bounds`, and the `crop_filter` plugin uses yet another spelling.

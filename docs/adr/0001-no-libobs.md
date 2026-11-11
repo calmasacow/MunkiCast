@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: Libertas-Studio contributors
+SPDX-FileCopyrightText: MunkiCast contributors
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 # ADR 0001 — No libobs; OBS is a read-only reference oracle
@@ -9,7 +9,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 ## Context
 
-Libertas-Studio is an independent alternative to OBS Studio. Two motivations, in priority order:
+MunkiCast is an independent alternative to OBS Studio. Two motivations, in priority order:
 independence from the OBS project's governance, and the fact that Linux is structurally last in line
 in OBS's engineering.
 
@@ -45,7 +45,7 @@ dual-license bookkeeping for no gain.
 
 ## Rejected alternatives
 
-**libobs behind a Libertas-owned API.** The API would be the *intersection* of what we want and what
+**libobs behind a MunkiCast-owned API.** The API would be the *intersection* of what we want and what
 libobs can express. Multi-canvas, nested groups, adjustment layers, per-layer effect stacks,
 non-separable blend modes and a named-bus audio matrix are all inexpressible in its model: groups are
 a documented compatibility hack (a group is simultaneously a source in `groups[]` and an item in its

@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Libertas-Studio contributors
+# SPDX-FileCopyrightText: MunkiCast contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 #
 # The transport between our processes (ADR-0005).
@@ -11,7 +11,7 @@ add_library(lipc STATIC
     src/channel.cpp
     src/fd.cpp
 )
-add_library(libertas::lipc ALIAS lipc)
+add_library(munkicast::lipc ALIAS lipc)
 
 target_include_directories(lipc PUBLIC include)
-target_link_libraries(lipc PUBLIC libertas::flags)
+target_link_libraries(lipc PUBLIC munkicast::flags)

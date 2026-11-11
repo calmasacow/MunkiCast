@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Vulkan dmabuf import for captured frames.
@@ -26,7 +26,7 @@
 #include <unistd.h>
 #include <vulkan/vulkan.h>
 
-namespace libertas::rhi {
+namespace munkicast::rhi {
 
 // VkCtx and ReadbackStaging live in vk_ctx_internal.hpp so vk_convert.cpp can see them too.
 
@@ -76,7 +76,7 @@ VkCtxPtr vk_init(const std::string& prefer_drm_node, std::string& error) {
 
     VkApplicationInfo app{};
     app.sType = VK_STRUCTURE_TYPE_APPLICATION_INFO;
-    app.pApplicationName = "libertas-capture-spike";
+    app.pApplicationName = "munkicast-capture-spike";
     app.apiVersion = VK_API_VERSION_1_3;
 
     static constexpr std::array<const char*, 2> kInstExts{
@@ -996,4 +996,4 @@ CapturedFrame vk_exported_as_frame(const VkExportedImage& img, std::uint32_t drm
     return f;
 }
 
-} // namespace libertas::rhi
+} // namespace munkicast::rhi

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-namespace libertas::capture {
+namespace munkicast::capture {
 
 /// A dmabuf-backed image, described by the fields a Wayland `zwp_linux_buffer_params_v1` needs.
 ///
@@ -64,4 +64,4 @@ inline constexpr std::uint64_t kModifierInvalid = 0x00ffffffffffffffULL;
 /// messages, and a format code that is wrong is exactly when the bytes are not characters.
 std::string fourcc_str(std::uint32_t fourcc);
 
-} // namespace libertas::capture
+} // namespace munkicast::capture

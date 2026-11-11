@@ -1,14 +1,14 @@
 {
-  "name": "libertas-studio-mcp",
+  "name": "munkicast-mcp",
   "version": "2.0.0",
   "type": "module",
-  "description": "Optional stdio transport for the independent native Libertas Studio MCP server",
+  "description": "Optional stdio transport for the independent native MunkiCast MCP server",
   "license": "GPL-3.0-or-later",
   "engines": {
     "node": ">=22.18"
   },
   "bin": {
-    "libertas-studio-mcp": "main.js"
+    "munkicast-mcp": "main.js"
   },
   "files": [
     "main.js",

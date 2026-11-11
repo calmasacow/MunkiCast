@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-# SPDX-FileCopyrightText: Libertas-Studio contributors
+# SPDX-FileCopyrightText: MunkiCast contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
-"""Run by libertas-ui --check --check-replay; uses only Python's standard library."""
+"""Run by munkicast-ui --check --check-replay; uses only Python's standard library."""
 import base64
 import hashlib
 import json
@@ -81,13 +81,13 @@ class Client:
                 return message["d"]["responseData"]
 
 
-if os.environ.get("LIBERTAS_TEST_OBS"):
+if os.environ.get("MUNKICAST_TEST_OBS"):
     client = Client()
-    assert client.identify(os.environ["LIBERTAS_WEBSOCKET_PASSWORD"])["op"] == 2
+    assert client.identify(os.environ["MUNKICAST_WEBSOCKET_PASSWORD"])["op"] == 2
     version = client.request("GetVersion")
     assert version["obsVersion"] == "32.0.0"
-    assert "LibertasGetState" not in version["availableRequests"]
-    client.request("LibertasGetState", code=204)
+    assert "MunkiCastGetState" not in version["availableRequests"]
+    client.request("MunkiCastGetState", code=204)
     for request in ["GetStudioModeEnabled", "GetProfileList", "GetSceneCollectionList",
                     "GetInputList", "GetOutputList", "GetMonitorList", "GetStats",
                     "GetVideoSettings", "GetRecordStatus", "GetRecordDirectory",
@@ -96,7 +96,7 @@ if os.environ.get("LIBERTAS_TEST_OBS"):
                     "GetVirtualCamStatus"]:
         client.request(request)
     assert client.request("GetPersistentData", {"realm": "OBS_WEBSOCKET_DATA_REALM_GLOBAL", "slotName": "protocol-check"})["slotValue"] == {"nested": [1, True, None]}
-    native = client.request("CallVendorRequest", {"vendorName": "libertas-studio", "requestType": "LibertasGetState", "requestData": {}})
+    native = client.request("CallVendorRequest", {"vendorName": "munkicast", "requestType": "MunkiCastGetState", "requestData": {}})
     assert isinstance(native["responseData"]["streaming"], bool)
     assert "browser_source" in client.request("GetInputKindList")["inputKinds"]
     defaults = client.request("GetInputDefaultSettings", {"inputKind": "ffmpeg_source"})["defaultInputSettings"]
@@ -119,27 +119,27 @@ bad = Client()
 assert bad.identify("wrong-password").get("closed")
 bad.socket.close()
 client = Client()
-assert client.identify(os.environ["LIBERTAS_WEBSOCKET_PASSWORD"])["op"] == 2
+assert client.identify(os.environ["MUNKICAST_WEBSOCKET_PASSWORD"])["op"] == 2
 version = client.request("GetVersion")
 assert "SaveReplayBuffer" in version["availableRequests"]
 assert isinstance(version["supportedImageFormats"], list) and version["platform"]
 # Native discovery, complete document access, typed invocation, and command validation.
-capabilities = client.request("LibertasGetCapabilities")
-assert capabilities["mode"] == "libertas"
+capabilities = client.request("MunkiCastGetCapabilities")
+assert capabilities["mode"] == "munkicast"
 assert len(version["availableRequests"]) >= 100
-assert client.request("LibertasGetProject")["project"]["sceneDocuments"]
-assert len(client.request("LibertasGetCommandTemplates")["templates"]) > 40
+assert client.request("MunkiCastGetProject")["project"]["sceneDocuments"]
+assert len(client.request("MunkiCastGetCommandTemplates")["templates"]) > 40
 assert client.request("GetHotkeyList")["hotkeys"]
-methods = client.request("LibertasGetMethods")["methods"]
+methods = client.request("MunkiCastGetMethods")["methods"]
 assert any(m["method"] == "undo()" for m in methods)
-original_name = client.request("LibertasGetState")["projectName"]
-client.request("LibertasExecuteCommand", {"command": {"cmd": "project.set-name", "name": "Remote test"}})
-assert client.request("LibertasGetState")["projectName"] == "Remote test"
-client.request("LibertasInvoke", {"method": "undo()", "arguments": []})
-assert client.request("LibertasGetState")["projectName"] == original_name
-client.request("LibertasExecuteCommand", {"command": {"cmd": "invalid.command"}}, 402)
-client.request("LibertasInvoke", {"method": "deleteLater()", "arguments": []}, 600)
-client.request("LibertasInvoke", {"method": "addScene(QString)", "arguments": [42]}, 401)
+original_name = client.request("MunkiCastGetState")["projectName"]
+client.request("MunkiCastExecuteCommand", {"command": {"cmd": "project.set-name", "name": "Remote test"}})
+assert client.request("MunkiCastGetState")["projectName"] == "Remote test"
+client.request("MunkiCastInvoke", {"method": "undo()", "arguments": []})
+assert client.request("MunkiCastGetState")["projectName"] == original_name
+client.request("MunkiCastExecuteCommand", {"command": {"cmd": "invalid.command"}}, 402)
+client.request("MunkiCastInvoke", {"method": "deleteLater()", "arguments": []}, 600)
+client.request("MunkiCastInvoke", {"method": "addScene(QString)", "arguments": [42]}, 401)
 client.request("StartVirtualCam", code=204)
 client.request("StartAnythingRecord", code=204)
 assert not client.request("GetRecordStatus")["outputActive"]
@@ -152,7 +152,7 @@ for realm in ["OBS_WEBSOCKET_DATA_REALM_GLOBAL", "OBS_WEBSOCKET_DATA_REALM_PROFI
     client.request("SetPersistentData", {**slot, "slotValue": {"nested": [1, True, None]}})
     assert client.request("GetPersistentData", slot)["slotValue"] == {"nested": [1, True, None]}
     if realm.endswith("PROFILE"):
-        client.request("LibertasInvoke", {"method": "undo()", "arguments": []})
+        client.request("MunkiCastInvoke", {"method": "undo()", "arguments": []})
         assert client.request("GetPersistentData", slot)["slotValue"] is None
 
 # OBS scenes, placements, source settings, audio, filters, ordering, and transitions.
@@ -243,8 +243,8 @@ assert recording.is_file() and recording.stat().st_size > 0
 record_probe = json.loads(subprocess.check_output(["ffprobe", "-v", "error", "-show_streams", "-of", "json", str(recording)]))
 assert any(s["codec_type"] == "video" for s in record_probe["streams"])
 assert not client.request("GetRecordStatus")["outputActive"]
-deck_id = client.request("LibertasGetState")["mainDeck"]["id"]
-assert client.request("LibertasInvoke", {"method": "saveStinger(QString,QString,QString,int,int,QString)",
+deck_id = client.request("MunkiCastGetState")["mainDeck"]["id"]
+assert client.request("MunkiCastInvoke", {"method": "saveStinger(QString,QString,QString,int,int,QString)",
     "arguments": [deck_id, "Remote stinger", str(recording), 100, 400, ""]})["result"]
 client.request("SetCurrentSceneTransitionSettings", {"transitionSettings": {"transition_point": 120, "duration": 450}})
 assert client.request("GetCurrentSceneTransition")["transitionSettings"]["transition_point"] == 120
@@ -253,10 +253,10 @@ client.request("SetCurrentSceneTransition", {"transitionName": "Cut"})
 stinger = next(i for i in client.request("GetInputList")["inputs"] if i["inputName"] == "Remote stinger")
 client.request("RemoveInput", {"inputUuid": stinger["inputUuid"]})
 # Key sequences dispatch existing bindings without injecting operating-system key events.
-client.request("LibertasExecuteCommand", {"command": {"cmd": "project.set-name", "name": "Hotkey check"}})
+client.request("MunkiCastExecuteCommand", {"command": {"cmd": "project.set-name", "name": "Hotkey check"}})
 client.request("TriggerHotkeyByKeySequence", {"keyId": "OBS_KEY_Z", "keyModifiers": {"control": True}})
-assert client.request("LibertasGetState")["projectName"] == original_name
-screenshot = client.request("LibertasGetScreenshot", {"imageWidth": 128})
+assert client.request("MunkiCastGetState")["projectName"] == original_name
+screenshot = client.request("MunkiCastGetScreenshot", {"imageWidth": 128})
 assert base64.b64decode(screenshot["imageData"]).startswith(b"\x89PNG\r\n\x1a\n")
 assert screenshot["width"] == 128
 

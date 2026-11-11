@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: Libertas-Studio contributors
+SPDX-FileCopyrightText: MunkiCast contributors
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 # ADR 0005 — Multi-process isolation, and the honest scope of the stability promise
@@ -15,13 +15,13 @@ bad plugin or driver fault kills an in-progress stream.
 
 ## Decision
 
-Six process roles. `libertas-session` is a tiny supervisor that owns the document and contains **no
-third-party code**; `libertas-render` owns the GPU, mixing, encoders and outputs; risky work
-(FFmpeg demuxing untrusted files, browser engines, device SDKs) lives in pooled `libertas-worker`
+Six process roles. `munkicast-session` is a tiny supervisor that owns the document and contains **no
+third-party code**; `munkicast-render` owns the GPU, mixing, encoders and outputs; risky work
+(FFmpeg demuxing untrusted files, browser engines, device SDKs) lives in pooled `munkicast-worker`
 processes; the Qt/QML UI has **zero authority** and may be killed and relaunched.
 
 Every document mutation is a serializable, validated, journaled, undoable `Command` sent to
-`libertas-session`. UI, hotkeys, Stream Deck, the websocket API and scripting are all merely command
+`munkicast-session`. UI, hotkeys, Stream Deck, the websocket API and scripting are all merely command
 producers — that is what makes "the UI has no authority" true rather than aspirational.
 
 ### The promise, scoped honestly
@@ -29,7 +29,7 @@ producers — that is what makes "the UI has no authority" true rather than aspi
 The claim is **"a contained CPU fault in a worker never drops the stream"** — *not* "nothing can drop
 the stream." Process isolation does **not** contain:
 
-- **GPU device loss.** `VK_ERROR_DEVICE_LOST` takes the whole device, which `libertas-render` shares
+- **GPU device loss.** `VK_ERROR_DEVICE_LOST` takes the whole device, which `munkicast-render` shares
   across every source. Requires an explicit recovery path: tear down and rebuild device and
   resources, resume outputs, log as a first-class event rather than a crash.
 - **Stalled fences / a wedged worker still holding slots.** All waits are deadline-bounded; on expiry

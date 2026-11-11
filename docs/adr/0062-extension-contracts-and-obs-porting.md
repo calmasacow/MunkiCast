@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: Libertas-Studio contributors
+SPDX-FileCopyrightText: MunkiCast contributors
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 # ADR 0062 - Extension contracts and OBS source porting
@@ -10,7 +10,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 ## Goal and boundary
 
-Make Libertas extensible across sources, filters, transitions, audio, encoders,
+Make MunkiCast extensible across sources, filters, transitions, audio, encoders,
 outputs, services, automation and interface tools. Make OBS plugin **source ports**
 practical through small documented host bindings, without loading OBS binaries,
 linking libobs, copying its implementation, or recreating its runtime. Independently
@@ -24,19 +24,19 @@ supports promising trivial ports for most plugins.
 
 ## Evidence and existing foundation
 
-Inspected Libertas at `4cfea11` and local OBS at
+Inspected MunkiCast at `4cfea11` and local OBS at
 `f1c0a116441bdb7a1de7896f810009ea487b8508`:
 
 - `libs/lipc/include/lipc/channel.hpp`: bounded SOCK_SEQPACKET messages and file
   descriptor transfer; useful transport, not a public extension protocol.
 - `libs/lcomp/include/lcomp/preview.hpp`: versioned preview messages and memfd
   frames; not a negotiated plugin SDK or general timestamped media contract.
-- `apps/libertas-render/source_worker.cpp`: actual child process source transport,
+- `apps/munkicast-render/source_worker.cpp`: actual child process source transport,
   timeout and cleanup. Its fixed refresh delay and failure exit are not a finished
   plugin scheduler or restart supervisor.
 - `libs/lcomp/src/composite.cpp`: shared scene traversal; enabled effects still
   unsupported. Reference data in the model does not establish a working clone.
-- `apps/libertas-ui/document.cpp`: built-in source/property registration remains
+- `apps/munkicast-ui/document.cpp`: built-in source/property registration remains
   application code. `schema/` contains no tracked effect manifests; CMake has no
   Wasm runtime integration. Slang effects and WIT are architectural intentions.
 - OBS `libobs/obs-source.h`, `obs-encoder.h`, `obs-output.h`, `obs-service.h` and
@@ -45,7 +45,7 @@ Inspected Libertas at `4cfea11` and local OBS at
 
 Representative plugin source reads used downloaded master snapshots:
 [Source Clone](https://github.com/exeldro/obs-source-clone) (`src` implementation
-saved locally as `libertas-obs-source-clone.c`) and
+saved locally as `munkicast-obs-source-clone.c`) and
 [Countdown](https://github.com/ashmanix/obs-plugin-countdown) (`countdown-widget.cpp`,
 `timer-persistence.cpp`, README). Remote HEADs observed on this date were
 `e5ca9dd25229fdf1f1b8c6fa83762c0581c18c92` and

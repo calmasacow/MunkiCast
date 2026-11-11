@@ -30,9 +30,9 @@ reopening, persistence, removal and save failures without depending on an extern
 To test a real page separately:
 
 ```sh
-./build/linux/apps/libertas-ui/libertas-ui --check \
+./build/linux/apps/munkicast-ui/munkicast-ui --check \
   --check-browser-url 'https://example.com/' \
-  --check-shots /tmp/libertas-browser-docks
+  --check-shots /tmp/munkicast-browser-docks
 ```
 
 The standard build uses local FFmpeg 9.1 by default; `./tools/run-ffmpeg-9.1.sh` also launches it.
@@ -43,7 +43,7 @@ animates browser canvas content, checks heartbeat progress and looks for NVIDIA 
 
 ```sh
 python3 tests/check_browser_dock_vulkan.py \
-  build/linux/apps/libertas-ui/libertas-ui build/browser-vulkan-check
+  build/linux/apps/munkicast-ui/munkicast-ui build/browser-vulkan-check
 ```
 
 Use a fresh output directory. This check requires kernel journal access and a Wayland session;

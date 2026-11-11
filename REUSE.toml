@@ -1,18 +1,18 @@
 version = 1
-SPDX-PackageName = "Libertas-Studio"
-SPDX-PackageSupplier = "Libertas-Studio contributors"
-SPDX-PackageDownloadLocation = "https://github.com/calmasacow/Libertas-Studio"
+SPDX-PackageName = "MunkiCast"
+SPDX-PackageSupplier = "MunkiCast contributors"
+SPDX-PackageDownloadLocation = "https://github.com/calmasacow/MunkiCast"
 
 [[annotations]]
 path = ["tests/unit/fixtures/images/**"]
 precedence = "aggregate"
-SPDX-FileCopyrightText = "Libertas-Studio contributors"
+SPDX-FileCopyrightText = "MunkiCast contributors"
 SPDX-License-Identifier = "GPL-3.0-or-later"
 
 [[annotations]]
 path = ["**/*.json", "**/*.toml", "**/*.md", ".gitignore", ".clang-format", ".editorconfig"]
 precedence = "aggregate"
-SPDX-FileCopyrightText = "Libertas-Studio contributors"
+SPDX-FileCopyrightText = "MunkiCast contributors"
 SPDX-License-Identifier = "GPL-3.0-or-later"
 
 [[annotations]]

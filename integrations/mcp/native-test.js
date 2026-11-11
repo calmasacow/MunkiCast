@@ -1,21 +1,21 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
-// Run by libertas-ui --check --check-mcp against an isolated project and real UI.
+// Run by munkicast-ui --check --check-mcp against an isolated project and real UI.
 import assert from 'node:assert/strict'
 import { mkdir, writeFile } from 'node:fs/promises'
 import { join } from 'node:path'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { StreamableHTTPClientTransport } from '@modelcontextprotocol/sdk/client/streamableHttp.js'
 import { StdioClientTransport } from '@modelcontextprotocol/sdk/client/stdio.js'
-const url = new URL(process.env.LIBERTAS_MCP_URL)
-const token = process.env.LIBERTAS_MCP_TOKEN
+const url = new URL(process.env.MUNKICAST_MCP_URL)
+const token = process.env.MUNKICAST_MCP_TOKEN
 const headers = { Authorization: `Bearer ${token}`, 'Content-Type': 'application/json' }
 const request = { jsonrpc: '2.0', id: 1, method: 'ping' }
 assert.equal((await fetch(url, { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(request) })).status, 401)
 assert.equal((await fetch(url, { method: 'POST', headers: { ...headers, Origin: 'https://untrusted.example' }, body: JSON.stringify(request) })).status, 403)
 assert.equal((await fetch(url, { method: 'GET', headers })).status, 405)
 assert.equal((await fetch(url, { method: 'POST', headers, body: '{broken' })).status, 400)
-const client = new Client({ name: 'libertas-native-check', version: '1.0.0' })
+const client = new Client({ name: 'munkicast-native-check', version: '1.0.0' })
 await client.connect(new StreamableHTTPClientTransport(url, { requestInit: { headers: { Authorization: `Bearer ${token}` } } }))
 try {
   const { tools } = await client.listTools()
@@ -146,9 +146,9 @@ try {
   await call('ui_key', { objectId: dialog.objectId, key: 'Tab' })
   await call('ui_invoke', { objectId: dialog.objectId, method: 'close()', arguments: [] })
   // Verify stdio compatibility forwards to the same native server, with no WebSocket credentials.
-  const stdio = new Client({ name: 'libertas-stdio-check', version: '1.0.0' })
+  const stdio = new Client({ name: 'munkicast-stdio-check', version: '1.0.0' })
   try {
-    await stdio.connect(new StdioClientTransport({ command: process.execPath, args: [process.env.LIBERTAS_MCP_ENTRYPOINT || new URL('./main.js', import.meta.url).pathname], env: { ...process.env } }))
+    await stdio.connect(new StdioClientTransport({ command: process.execPath, args: [process.env.MUNKICAST_MCP_ENTRYPOINT || new URL('./main.js', import.meta.url).pathname], env: { ...process.env } }))
     assert((await stdio.listTools()).tools.some(t => t.name === 'document_addScene'))
     assert(!(await stdio.callTool({ name: 'app_project' })).isError)
   } finally { await stdio.close() }

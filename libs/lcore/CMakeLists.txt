@@ -1,4 +1,4 @@
-# SPDX-FileCopyrightText: Libertas-Studio contributors
+# SPDX-FileCopyrightText: MunkiCast contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 add_library(lcore STATIC
@@ -6,7 +6,7 @@ add_library(lcore STATIC
     src/log.cpp
     src/ulid.cpp
 )
-add_library(libertas::lcore ALIAS lcore)
+add_library(munkicast::lcore ALIAS lcore)
 
 target_include_directories(lcore PUBLIC include)
-target_link_libraries(lcore PUBLIC libertas::flags)
+target_link_libraries(lcore PUBLIC munkicast::flags)

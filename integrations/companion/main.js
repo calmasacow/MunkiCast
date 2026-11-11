@@ -1,9 +1,9 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { InstanceBase, InstanceStatus, runEntrypoint, combineRgb } from '@companion-module/base'
 import OBSWebSocket from 'obs-websocket-js/json'
 
-export class LibertasInstance extends InstanceBase {
+export class MunkiCastInstance extends InstanceBase {
   async init(config, _isFirstInit, secrets = {}) {
     this.config = config
     this.secrets = secrets
@@ -32,7 +32,7 @@ export class LibertasInstance extends InstanceBase {
       { type: 'textinput', id: 'host', label: 'Host', width: 8, default: '127.0.0.1' },
       { type: 'number', id: 'port', label: 'Port', width: 4, default: 4455, min: 1024, max: 65535 },
       { type: 'secret-text', id: 'password', label: 'WebSocket password', width: 12, default: '' },
-      { type: 'static-text', id: 'help', label: 'Setup', width: 12, value: 'In Libertas: Tools > WebSocket Server Settings. Enable server, choose Libertas Studio mode, set password, Apply.' },
+      { type: 'static-text', id: 'help', label: 'Setup', width: 12, value: 'In MunkiCast: Tools > WebSocket Server Settings. Enable server, choose MunkiCast mode, set password, Apply.' },
     ]
   }
 
@@ -69,7 +69,7 @@ export class LibertasInstance extends InstanceBase {
       this.checkFeedbacks()
       this.updateStatus(InstanceStatus.Disconnected)
     })
-    socket.on('LibertasStateChanged', () => { void this.refresh() })
+    socket.on('MunkiCastStateChanged', () => { void this.refresh() })
     socket.on('SceneListChanged', () => { void this.discover() })
     socket.on('InputCreated', () => { void this.discover() })
     socket.on('InputRemoved', () => { void this.discover() })
@@ -79,7 +79,7 @@ export class LibertasInstance extends InstanceBase {
       if (!/^[a-zA-Z0-9.:[\]-]+$/.test(host)) throw new Error('Invalid host')
       const authority = host.includes(':') && !host.startsWith('[') ? `[${host}]` : host
       await socket.connect(`ws://${authority}:${this.config.port || 4455}`, this.secrets.password || '', { rpcVersion: 1, eventSubscriptions: 2047 })
-      const capabilities = await socket.call('LibertasGetCapabilities')
+      const capabilities = await socket.call('MunkiCastGetCapabilities')
       if (generation !== this.generation) return
       this.capabilities = capabilities
       await this.discover()
@@ -114,7 +114,7 @@ export class LibertasInstance extends InstanceBase {
     const socket = this.socket, generation = this.generation
     try {
       const [state, scenes, stream, record] = await Promise.all([
-        socket.call('LibertasGetState'), socket.call('GetSceneList'),
+        socket.call('MunkiCastGetState'), socket.call('GetSceneList'),
         socket.call('GetStreamStatus'), socket.call('GetRecordStatus'),
       ])
       if (generation !== this.generation) return
@@ -132,7 +132,7 @@ export class LibertasInstance extends InstanceBase {
   }
 
   async call(type, data = {}) {
-    if (!this.socket) throw new Error('Libertas Studio is disconnected')
+    if (!this.socket) throw new Error('MunkiCast is disconnected')
     return this.socket.call(type, data)
   }
 
@@ -158,8 +158,8 @@ export class LibertasInstance extends InstanceBase {
         if (!data || Array.isArray(data) || typeof data !== 'object') throw new Error('Request data must be a JSON object')
         await this.call(o.request, data)
       }) },
-      command: { name: 'Native: Document command (undoable)', options: [jsonField('command', 'Serialized document command', '{"cmd":"project.set-name","name":"My show"}')], callback: safe(async o => this.call('LibertasExecuteCommand', { command: JSON.parse(await this.parseVariablesInString(o.command)) })) },
-      invoke: { name: 'Native: Invoke document method', options: [jsonField('method', 'Exact signature (LibertasGetMethods)', 'undo()'), jsonField('args', 'Arguments (JSON array)', '[]')], callback: safe(async o => this.call('LibertasInvoke', { method: await this.parseVariablesInString(o.method), arguments: JSON.parse(await this.parseVariablesInString(o.args)) })) },
+      command: { name: 'Native: Document command (undoable)', options: [jsonField('command', 'Serialized document command', '{"cmd":"project.set-name","name":"My show"}')], callback: safe(async o => this.call('MunkiCastExecuteCommand', { command: JSON.parse(await this.parseVariablesInString(o.command)) })) },
+      invoke: { name: 'Native: Invoke document method', options: [jsonField('method', 'Exact signature (MunkiCastGetMethods)', 'undo()'), jsonField('args', 'Arguments (JSON array)', '[]')], callback: safe(async o => this.call('MunkiCastInvoke', { method: await this.parseVariablesInString(o.method), arguments: JSON.parse(await this.parseVariablesInString(o.args)) })) },
     }
     for (const [key, family] of [['stream', 'Stream'], ['record', 'Record'], ['replay', 'ReplayBuffer']]) {
       actions[key] = { name: `${key}: Control`, options: [dropdown('operation', 'Operation', ['Toggle', 'Start', 'Stop', ...(key === 'replay' ? ['Save'] : [])].map(r => ({ id: r, label: r })))], callback: safe(o => this.call(o.operation + family)) }
@@ -192,4 +192,4 @@ export class LibertasInstance extends InstanceBase {
     this.setPresetDefinitions(presets)
   }
 }
-if (process.env.MODULE_MANIFEST) runEntrypoint(LibertasInstance, [])
+if (process.env.MODULE_MANIFEST) runEntrypoint(MunkiCastInstance, [])

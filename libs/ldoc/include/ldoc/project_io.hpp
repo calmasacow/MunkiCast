@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
@@ -13,11 +13,11 @@
 /// A project on disk.
 ///
 /// ```
-/// MyShow.libertas/
+/// MyShow.munkicast/
 ///   project.json          canvases, buses, decks, sources, outputs, settings, scene manifest
 ///   assets.json           the asset manifest
 ///   scenes/<ulid>.json    one file per scene
-///   .libertas/
+///   .munkicast/
 ///     lock                an OS-held lock, not a pidfile
 ///     staging-<gen>/      the next generation, until it is committed
 ///     quarantine/         scene files that would not parse
@@ -107,7 +107,7 @@ using SaveHook = std::function<bool(SaveStep)>;
 ///
 /// The protocol, and why each part of it is there:
 ///
-///  1. Everything is written into `.libertas/staging-<gen>/` and fsynced. Until this finishes,
+///  1. Everything is written into `.munkicast/staging-<gen>/` and fsynced. Until this finishes,
 ///     the project directory is untouched.
 ///  2. Scene files and the asset manifest are **hard-linked** into place, not moved. Staging
 ///     stays complete, so an interruption part-way through installing can still be finished from

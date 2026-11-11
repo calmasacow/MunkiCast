@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: Libertas-Studio contributors
+SPDX-FileCopyrightText: MunkiCast contributors
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 # ADR 0043 — Render health is per canvas and independent of encode
@@ -10,7 +10,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 ## Context
 
-`libertas-render` now composites preview frames without an encoder, while Broadcast Stats still
+`munkicast-render` now composites preview frames without an encoder, while Broadcast Stats still
 shows an obsolete "no render process" message. Render cost and render delay are useful before
 any output exists. A total across canvases would hide a slow canvas inside a fast one.
 

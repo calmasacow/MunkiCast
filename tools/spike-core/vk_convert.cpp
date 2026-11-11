@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // BGRA -> NV12 on the GPU, then one readback of the converted planes.
@@ -25,9 +25,9 @@
 
 #include "shaders/bgra_to_nv12_spv.h"
 
-namespace libertas::spike {
+namespace munkicast::spike {
 
-using libertas::rhi::VkCtx;
+using munkicast::rhi::VkCtx;
 
 namespace {
 
@@ -56,11 +56,11 @@ std::uint32_t find_memory_type(VkPhysicalDevice phys, std::uint32_t bits,
 } // namespace
 
 /// Everything the convert path owns. Built once, on first use, and torn down with the context.
-} // namespace libertas::spike
+} // namespace munkicast::spike
 
 // Defined in rhi because that is the namespace VkCtx::convert points into. The contents are the
 // encode spike's business (ADR-0019); lrhi only forward-declares it and never looks inside.
-namespace libertas::rhi {
+namespace munkicast::rhi {
 
 struct ConvertState {
     VkShaderModule shader = VK_NULL_HANDLE;
@@ -88,11 +88,11 @@ struct ConvertState {
     VkImage view_of = VK_NULL_HANDLE;
 };
 
-} // namespace libertas::rhi
+} // namespace munkicast::rhi
 
-namespace libertas::spike {
+namespace munkicast::spike {
 
-using libertas::rhi::ConvertState;
+using munkicast::rhi::ConvertState;
 
 void vk_convert_destroy(VkCtx& ctx) {
     ConvertState* cs = ctx.convert;
@@ -511,4 +511,4 @@ std::string vk_convert_note(VkCtx& ctx) {
                        static_cast<double>(cs->capacity) / (1024.0 * 1024.0));
 }
 
-} // namespace libertas::spike
+} // namespace munkicast::spike

@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: Libertas-Studio contributors
+SPDX-FileCopyrightText: MunkiCast contributors
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 # ADR 0016 — Panel docking follows the Adobe drop-zone model
@@ -10,7 +10,7 @@ SPDX-License-Identifier: GPL-3.0-or-later
 
 ## Context
 
-ADR-0015 established that Libertas lays out panels itself inside a single surface, because Wayland
+ADR-0015 established that MunkiCast lays out panels itself inside a single surface, because Wayland
 offers no way to restore client-side window geometry. That decision bought us a requirement: having
 given up the toolkit's docking, we have to build one, and it has to be better than what it replaced.
 

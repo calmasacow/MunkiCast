@@ -1,12 +1,12 @@
-# SPDX-FileCopyrightText: Libertas-Studio contributors
+# SPDX-FileCopyrightText: MunkiCast contributors
 # SPDX-License-Identifier: GPL-3.0-or-later
 
 # Reuse one build directory: fresh configurations cannot catch stale pkg-config results.
 foreach(system_ffmpeg ON OFF ON)
     execute_process(
         COMMAND "${CMAKE_COMMAND}" -S "${SOURCE_DIR}" -B "${CHECK_DIR}"
-                -G "${GENERATOR}" -DLIBERTAS_USE_SYSTEM_FFMPEG=${system_ffmpeg}
-                -DLIBERTAS_BUILD_TESTS=OFF -DLIBERTAS_BUILD_TOOLS=OFF
+                -G "${GENERATOR}" -DMUNKICAST_USE_SYSTEM_FFMPEG=${system_ffmpeg}
+                -DMUNKICAST_BUILD_TESTS=OFF -DMUNKICAST_BUILD_TOOLS=OFF
         RESULT_VARIABLE outcome OUTPUT_VARIABLE output ERROR_VARIABLE errors)
     if(NOT outcome EQUAL 0)
         message(FATAL_ERROR "FFmpeg selection configure failed: ${output}\n${errors}")

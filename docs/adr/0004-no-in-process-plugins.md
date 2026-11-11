@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: Libertas-Studio contributors
+SPDX-FileCopyrightText: MunkiCast contributors
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 # ADR 0004 — No in-process plugin ABI; three extension tiers instead
@@ -59,5 +59,5 @@ correctness; a signed plugin segfaults identically.
   pleasant to author, and first-party effects should be written *using* the shader-effect path to
   prove it.
 - Extension authors may licence their work however they wish, since extensions are data, sandboxed
-  Wasm, or separate programs over a socket — never linked code. GPLv3 binds only forks of Libertas.
+  Wasm, or separate programs over a socket — never linked code. GPLv3 binds only forks of MunkiCast.
 - Tier 2 and the extension framework are deferred until a working show demands them.

@@ -2,7 +2,7 @@
 
 ## Project Structure & Module Organization
 
-Libertas-Studio is a Linux-first C++23/C17 application built with CMake and Qt/QML. Product applications live in `apps/` (`libertas-ui` contains the workspace QML); reusable libraries live in `libs/` (for example, `ldoc` for the document model and `llayout` for layout math). Unit tests are in `tests/unit/`, with fixtures and golden data under `tests/fixtures/` and `tests/golden/`. `tools/` holds development spikes, not product modules. Architecture decisions live in `docs/adr/`; schemas live in `schema/`. Keep generated builds in a separate build directory.
+MunkiCast is a Linux-first C++23/C17 application built with CMake and Qt/QML. Product applications live in `apps/` (`munkicast-ui` contains the workspace QML); reusable libraries live in `libs/` (for example, `ldoc` for the document model and `llayout` for layout math). Unit tests are in `tests/unit/`, with fixtures and golden data under `tests/fixtures/` and `tests/golden/`. `tools/` holds development spikes, not product modules. Architecture decisions live in `docs/adr/`; schemas live in `schema/`. Keep generated builds in a separate build directory.
 
 ## Build, Test, and Development Commands
 
@@ -14,7 +14,7 @@ Use the documented CMake presets from the repository root:
 - `ctest --preset linux-ci` runs the suite with warnings treated as errors.
 - `ctest --preset linux-asan` and `ctest --preset linux-tsan` run sanitizer configurations.
 
-For UI changes, `./build/linux/apps/libertas-ui/libertas-ui --check` runs the headless QML and interaction checks.
+For UI changes, `./build/linux/apps/munkicast-ui/munkicast-ui --check` runs the headless QML and interaction checks.
 
 ## Coding Style & Naming Conventions
 

@@ -1,9 +1,9 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include <lcapture/dmabuf.hpp>
 
-namespace libertas::capture {
+namespace munkicast::capture {
 
 std::string fourcc_str(std::uint32_t fourcc) {
     if (fourcc == 0)
@@ -17,4 +17,4 @@ std::string fourcc_str(std::uint32_t fourcc) {
     return std::string(b);
 }
 
-} // namespace libertas::capture
+} // namespace munkicast::capture

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // The session boundary: everything that edits a document goes through this, and nothing outside
@@ -28,7 +28,7 @@ namespace {
 class ScratchDir {
 public:
     explicit ScratchDir(std::string_view tag) {
-        path_ = fs::temp_directory_path() / std::format("libertas-sess-{}-{}", ::getpid(), tag);
+        path_ = fs::temp_directory_path() / std::format("munkicast-sess-{}-{}", ::getpid(), tag);
         std::error_code ec;
         fs::remove_all(path_, ec);
         fs::create_directories(path_, ec);
@@ -40,7 +40,7 @@ public:
     ScratchDir(const ScratchDir&) = delete;
     ScratchDir& operator=(const ScratchDir&) = delete;
 
-    [[nodiscard]] fs::path project() const { return path_ / "Show.libertas"; }
+    [[nodiscard]] fs::path project() const { return path_ / "Show.munkicast"; }
 
 private:
     fs::path path_;

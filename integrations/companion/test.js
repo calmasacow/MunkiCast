@@ -1,10 +1,10 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { LibertasInstance } from './main.js'
+import { MunkiCastInstance } from './main.js'
 test('Companion actions, feedbacks and presets route native identities correctly', async () => {
-  assert.equal(LibertasInstance.prototype.getConfigFields.call({}).find(field => field.id === 'password').type, 'secret-text')
+  assert.equal(MunkiCastInstance.prototype.getConfigFields.call({}).find(field => field.id === 'password').type, 'secret-text')
   const calls = []
   const mock = {
     scenes: [{ sceneUuid: 'scene-1', sceneName: 'Camera' }], inputs: [{ inputUuid: 'input-1', inputName: 'Mic' }],
@@ -13,7 +13,7 @@ test('Companion actions, feedbacks and presets route native identities correctly
     parseVariablesInString: async v => v, log: (level, msg) => { throw new Error(`${level}: ${msg}`) },
     setActionDefinitions: v => { mock.actions = v }, setFeedbackDefinitions: v => { mock.feedbacks = v }, setPresetDefinitions: v => { mock.presets = v },
   }
-  LibertasInstance.prototype.defineControls.call(mock, ['GetSceneList'])
+  MunkiCastInstance.prototype.defineControls.call(mock, ['GetSceneList'])
   await mock.actions.program.callback({ options: { scene: 'scene-1' } })
   assert.deepEqual(calls.pop(), ['SetCurrentProgramScene', { sceneUuid: 'scene-1' }])
   await mock.actions.replay.callback({ options: { operation: 'Save' } })
@@ -52,7 +52,7 @@ test('Companion actions, feedbacks and presets route native identities correctly
 
 test('Output timecode variables follow server status, preserve hours and reset when stopped', async () => {
   const statuses = {
-    LibertasGetState: { streaming: true, recording: true }, GetSceneList: {},
+    MunkiCastGetState: { streaming: true, recording: true }, GetSceneList: {},
     GetStreamStatus: { outputActive: true, outputTimecode: '12:34:56.789' },
     GetRecordStatus: { outputActive: true, outputTimecode: '00:01:02.345' },
   }
@@ -61,11 +61,11 @@ test('Output timecode variables follow server status, preserve hours and reset w
     setVariableValues: values => { mock.variables = values }, checkFeedbacks: () => {},
     log: (_level, message) => { throw new Error(message) },
   }
-  await LibertasInstance.prototype.refresh.call(mock)
+  await MunkiCastInstance.prototype.refresh.call(mock)
   assert.equal(mock.variables.stream_timecode, '12:34:56')
   assert.equal(mock.variables.record_timecode, '00:01:02')
   statuses.GetStreamStatus.outputActive = statuses.GetRecordStatus.outputActive = false
-  await LibertasInstance.prototype.refresh.call(mock)
+  await MunkiCastInstance.prototype.refresh.call(mock)
   assert.equal(mock.variables.stream_timecode, '00:00:00')
   assert.equal(mock.variables.record_timecode, '00:00:00')
 })

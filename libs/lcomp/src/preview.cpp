@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "lcomp/preview.hpp"
@@ -843,7 +843,7 @@ std::expected<void, std::string> serve_preview(lipc::Channel channel, FrameSourc
                 total.missed += static_cast<std::uint64_t>(budgets) - 1;
             }
             ++total.frames;
-            if (std::getenv("LIBERTAS_BENCHMARK") && total.frames % 120 == 0)
+            if (std::getenv("MUNKICAST_BENCHMARK") && total.frames % 120 == 0)
                 std::fprintf(stderr, "render %s: %.3f ms average, %llu frames, %llu missed\n",
                              canvas.name.c_str(),
                              static_cast<double>(total.ns) / static_cast<double>(total.frames) /
@@ -1166,11 +1166,11 @@ std::expected<pid_t, std::string> spawn_renderer(const std::filesystem::path& ex
     std::vector<std::string> owned;
     for (char** entry = environ; entry != nullptr && *entry != nullptr; ++entry) {
         const std::string_view item{*entry};
-        if (item.starts_with("LIBERTAS_CHANNEL_FD="))
+        if (item.starts_with("MUNKICAST_CHANNEL_FD="))
             continue;
         owned.emplace_back(*entry);
     }
-    owned.emplace_back("LIBERTAS_CHANNEL_FD=3");
+    owned.emplace_back("MUNKICAST_CHANNEL_FD=3");
     std::vector<char*> envp;
     envp.reserve(owned.size() + 1);
     for (std::string& item : owned)

@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // The Vulkan context, shared between the spike-core translation units that need its guts.
@@ -14,7 +14,7 @@
 
 #include <vulkan/vulkan.h>
 
-namespace libertas::rhi {
+namespace munkicast::rhi {
 
 /// Owned by whoever built a pipeline on top of this context; opaque here.
 struct ConvertState;
@@ -60,4 +60,4 @@ struct VkCtx {
     void (*on_destroy)(VkCtx&) = nullptr;
 };
 
-} // namespace libertas::rhi
+} // namespace munkicast::rhi

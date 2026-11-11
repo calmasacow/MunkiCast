@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "ldoc/project_io.hpp"
@@ -27,7 +27,7 @@ namespace {
 constexpr std::string_view kProjectFile = "project.json";
 constexpr std::string_view kAssetsFile = "assets.json";
 constexpr std::string_view kScenesDir = "scenes";
-constexpr std::string_view kPrivateDir = ".libertas";
+constexpr std::string_view kPrivateDir = ".munkicast";
 constexpr std::string_view kLockFile = "lock";
 constexpr std::string_view kQuarantineDir = "quarantine";
 constexpr std::string_view kStagingPrefix = "staging-";
@@ -276,7 +276,7 @@ std::expected<ProjectLock, std::string> ProjectLock::acquire(const fs::path& dir
         ::close(fd);
         if (err == EACCES || err == EAGAIN)
             return std::unexpected(
-                std::format("{} is already open in another Libertas instance", dir.string()));
+                std::format("{} is already open in another MunkiCast instance", dir.string()));
         return std::unexpected(std::format("lock {}: {}", path.string(), std::strerror(err)));
     }
     return ProjectLock{fd};

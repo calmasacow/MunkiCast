@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "lsession/actions.hpp"
@@ -344,7 +344,7 @@ std::optional<ActionRef> Bindings::conflict(const ActionRef& ref, std::string_vi
 
 std::string Bindings::to_toml() const {
     std::string out;
-    out += "# Libertas-Studio key bindings.\n";
+    out += "# MunkiCast key bindings.\n";
     out += "#\n";
     out += "# Only what differs from the defaults is written here, so a release that changes a\n";
     out += "# default changes it for everyone who never touched that binding, and leaves alone\n";

@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: Libertas-Studio contributors
+SPDX-FileCopyrightText: MunkiCast contributors
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 # ADR 0003 — Wayland-native, no X11 code anywhere
@@ -29,7 +29,7 @@ hyprland_toplevel_export_manager_v1
 
 ## Decision
 
-Libertas contains **no X11 code at all**: no xshm, no xcomposite, no xcb, no graphics-hook injection.
+MunkiCast contains **no X11 code at all**: no xshm, no xcomposite, no xcb, no graphics-hook injection.
 
 | X11-era workaround | Native replacement |
 |---|---|
@@ -47,8 +47,8 @@ key-grab table. Retrofitting that onto a grab-shaped design is a rewrite.
 
 **Hard guardrail.** The session here is `QT_QPA_PLATFORM=wayland;xcb` with Xwayland live on `:0`, so
 a Qt app *silently* falls back to XWayland when the Wayland path misbehaves — which is how one ends
-up debugging an X11 app believed to be native. Libertas forces `wayland` with **no xcb fallback**,
-and `libertas probe` fails loudly if it finds itself on XWayland.
+up debugging an X11 app believed to be native. MunkiCast forces `wayland` with **no xcb fallback**,
+and `munkicast probe` fails loudly if it finds itself on XWayland.
 
 ## Rejected alternatives
 
@@ -65,4 +65,4 @@ compositor-agnostic, permission-correct path and must be the default. Revisit as
 - No "game capture" feature on Linux, ever. Toplevel capture is the answer.
 - Hotkeys are mediated by the compositor/portal, so the UI cannot show a raw key-grab editor; it
   shows registered actions and defers binding to the portal's UI where applicable.
-- `libertas probe` must detect and refuse XWayland — tested in CI.
+- `munkicast probe` must detect and refuse XWayland — tested in CI.

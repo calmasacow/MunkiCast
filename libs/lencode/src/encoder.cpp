@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 //
 // Encode and mux for the Phase-0 gate.
@@ -36,7 +36,7 @@
 // FFmpeg's dynamic CUDA loader: the driver is opened at runtime, so no CUDA toolkit is needed to
 // build and machines without NVIDIA still start. Included before hwcontext_cuda.h, whose cuda.h
 // include it satisfies. A system FFmpeg without nv-codec-headers builds without GPU input.
-#if LIBERTAS_HAVE_FFNVCODEC
+#if MUNKICAST_HAVE_FFNVCODEC
 #include <ffnvcodec/dynlink_loader.h>
 #endif
 extern "C" {
@@ -44,7 +44,7 @@ extern "C" {
 #include <libavformat/avformat.h>
 #include <libavutil/audio_fifo.h>
 #include <libavutil/hwcontext.h>
-#if LIBERTAS_HAVE_FFNVCODEC
+#if MUNKICAST_HAVE_FFNVCODEC
 #include <libavutil/hwcontext_cuda.h>
 #endif
 #include <libavutil/imgutils.h>
@@ -53,7 +53,7 @@ extern "C" {
 #include <libswscale/swscale.h>
 }
 
-namespace libertas::encode {
+namespace munkicast::encode {
 
 const char* tier_name(VideoTier t) {
     switch (t) {
@@ -97,7 +97,7 @@ struct Encoder {
     // Device input (NVENC reading Vulkan memory through CUDA). All null on the CPU path.
     AVBufferRef* cuda_device = nullptr;
     AVBufferRef* cuda_frames = nullptr;
-#if LIBERTAS_HAVE_FFNVCODEC
+#if MUNKICAST_HAVE_FFNVCODEC
     CudaFunctions* cu = nullptr;
     struct Imported {
         std::uint64_t id = 0;
@@ -569,7 +569,7 @@ AVCodecContext* try_video(const char* name, const RuntimeConfig& cfg, AVFormatCo
     return c;
 }
 
-#if LIBERTAS_HAVE_FFNVCODEC
+#if MUNKICAST_HAVE_FFNVCODEC
 // The CUDA device whose UUID is the Vulkan compositor's, so NVENC reads memory on that GPU.
 // Null when there is none: no NVIDIA driver, or the compositor runs on another vendor's GPU.
 AVBufferRef* cuda_device_for(const std::array<std::uint8_t, 16>& uuid, CudaFunctions* cu) {
@@ -1191,7 +1191,7 @@ bool encoder_takes_device_frames(const Encoder& enc) {
     return enc.vctx && enc.vctx->pix_fmt == AV_PIX_FMT_CUDA;
 }
 
-#if LIBERTAS_HAVE_FFNVCODEC
+#if MUNKICAST_HAVE_FFNVCODEC
 bool encoder_video_device(Encoder& enc, int fd, std::uint64_t size, std::uint64_t id,
                           std::uint32_t pitch, std::shared_ptr<const void> owner,
                           std::int64_t pts_ns, std::string& error) {
@@ -1330,7 +1330,7 @@ void encoder_close(Encoder* enc) {
     if (enc->vctx != nullptr)
         avcodec_free_context(&enc->vctx);
     // After NVENC is gone: it may still have held mapped imports until its context closed.
-#if LIBERTAS_HAVE_FFNVCODEC
+#if MUNKICAST_HAVE_FFNVCODEC
     if (enc->cu) {
         auto* device = reinterpret_cast<AVHWDeviceContext*>(enc->cuda_device->data);
         CUcontext previous = nullptr;
@@ -1361,4 +1361,4 @@ void encoder_close(Encoder* enc) {
     delete enc;
 }
 
-} // namespace libertas::encode
+} // namespace munkicast::encode

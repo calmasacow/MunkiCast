@@ -12,7 +12,7 @@ interchangeable would silently change shows.
 ## Decision
 
 Import is an explicit conversion into a new directory, never a change to the OBS collection or
-an existing Libertas project. Require canvas width, height and rational frame rate. Resolve UUIDs
+an existing MunkiCast project. Require canvas width, height and rational frame rate. Resolve UUIDs
 first, names only when unique. Preserve shared source identities, scene ordering, nested scenes,
 visibility, locks, audio routes and supported placement. Reverse OBS's bottom-first item order.
 

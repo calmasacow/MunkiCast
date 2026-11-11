@@ -6,7 +6,7 @@
 #include <string>
 #include <vector>
 
-namespace libertas::capture {
+namespace munkicast::capture {
 struct AudioDevice {
     std::string id, name;
     bool monitor = false;
@@ -53,4 +53,4 @@ class AudioSink {
     explicit AudioSink(std::unique_ptr<State> state);
     std::unique_ptr<State> state_;
 };
-} // namespace libertas::capture
+} // namespace munkicast::capture

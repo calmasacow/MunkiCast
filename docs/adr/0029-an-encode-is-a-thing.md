@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: Libertas-Studio contributors
+SPDX-FileCopyrightText: MunkiCast contributors
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 # ADR 0029 — An encode is a thing, not a property of an output
@@ -181,7 +181,7 @@ two-encode arrangement as a named fixture, because it is the shape this ADR exis
 `Project::encodes`, `Output::encode` in place of `Output::canvas` and `Output::encoder`, and
 `AddEncode` / `RemoveEncode` / `SetEncode` by symmetry with outputs. The golden v2 fixture is
 the shape this ADR was written for: a 1440p encode to YouTube, and one 1080p encode made once
-and sent to both Twitch and Kick. `libertas inspect` reports it as **"2 concurrent encode(s)
+and sent to both Twitch and Kick. `munkicast inspect` reports it as **"2 concurrent encode(s)
 asked of the GPU"** for three destinations, which is the pre-flight number this change exists
 to make readable.
 

@@ -1,6 +1,6 @@
 # Native MCP: application control and coverage
 
-The built-in server is `apps/libertas-ui/mcpserver.cpp`. It listens independently
+The built-in server is `apps/munkicast-ui/mcpserver.cpp`. It listens independently
 of the WebSocket server and calls the real application objects on the UI thread.
 It exposes Streamable HTTP JSON-RPC at `/mcp`, with its own loopback port, Bearer
 token, lifecycle and `mcp.json`. **Tools > MCP Server Settings** is a dedicated
@@ -62,7 +62,7 @@ shell execution or desktop-wide input tool is exposed.
 
 ## Verification
 
-`./build-make/apps/libertas-ui/libertas-ui --check --check-mcp` creates an isolated
+`./build-make/apps/munkicast-ui/munkicast-ui --check --check-mcp` creates an isolated
 project/settings directory and runs the real UI plus the official MCP SDK. It checks:
 
 - Dedicated Tools panel, independent port/token validation, private persisted

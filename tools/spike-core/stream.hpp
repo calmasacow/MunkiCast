@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
@@ -10,14 +10,14 @@
 #include <string>
 #include <vector>
 
-namespace libertas::spike {
+namespace munkicast::spike {
 
 // These moved to libs/lcapture beside DmabufImage: both capture backends describe a frame the
 // same way, and the import side must not be able to tell which one produced it. Aliased rather
 // than renamed so the PipeWire half of this spike stays as it was measured.
-using DmabufPlane = libertas::capture::DmabufPlane;
+using DmabufPlane = munkicast::capture::DmabufPlane;
 
-using CapturedFrame = libertas::capture::CapturedFrame;
+using CapturedFrame = munkicast::capture::CapturedFrame;
 
 struct NegotiatedFormat {
     std::uint32_t width = 0;
@@ -30,7 +30,7 @@ struct NegotiatedFormat {
     std::int32_t fps_den = 1;
 };
 
-using libertas::capture::kModifierInvalid;
+using munkicast::capture::kModifierInvalid;
 inline constexpr std::uint64_t kModifierLinear = 0;
 
 /// A long-lived PipeWire connection. One per process: pw_init/pw_deinit are not reliably
@@ -113,8 +113,8 @@ const char* node_readiness_str(NodeReadiness r);
 bool pw_dump_formats(PwSession& session, std::uint32_t node_id);
 
 /// Human-readable fourcc, e.g. "AR24".
-using libertas::capture::fourcc_str;
+using munkicast::capture::fourcc_str;
 /// Decodes the vendor nibble of a DRM format modifier, e.g. "NVIDIA(0x...)".
 std::string modifier_str(std::uint64_t modifier);
 
-} // namespace libertas::spike
+} // namespace munkicast::spike

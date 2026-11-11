@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
@@ -17,7 +17,7 @@ namespace lsession {
 ///
 /// It holds the undo history, the journal and the project lock, so everything that has to happen
 /// together when a command is applied -- apply it, record it durably, tell everyone -- happens in
-/// one place. When the document moves to `libertas-session`, this class moves with it and the UI
+/// one place. When the document moves to `munkicast-session`, this class moves with it and the UI
 /// gets a proxy implementing the same interface.
 class LocalSession final : public Session {
 public:

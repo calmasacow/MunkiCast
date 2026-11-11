@@ -1,4 +1,4 @@
-// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
@@ -10,11 +10,11 @@
 #include <string>
 #include <vector>
 
-namespace libertas::rhi {
+namespace munkicast::rhi {
 struct VkCtx;
 }
 
-namespace libertas::capture {
+namespace munkicast::capture {
 
 /// The monitors the compositor says are connected, right now.
 ///
@@ -91,4 +91,4 @@ private:
     std::unique_ptr<Impl> impl_;
 };
 
-} // namespace libertas::capture
+} // namespace munkicast::capture

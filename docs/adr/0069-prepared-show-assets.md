@@ -1,5 +1,5 @@
 <!--
-SPDX-FileCopyrightText: Libertas-Studio contributors
+SPDX-FileCopyrightText: MunkiCast contributors
 SPDX-License-Identifier: GPL-3.0-or-later
 -->
 # ADR 0069 — Prepared show assets on local storage
@@ -38,7 +38,7 @@ for the choice:
 
 - the saved project keeps the operator's own paths, so turning caching off is a flag
   rather than a migration;
-- `libertas-render` and `libertas-source` need no new path logic — they receive the
+- `munkicast-render` and `munkicast-source` need no new path logic — they receive the
   prepared path as if it had been typed into the settings field;
 - nothing new is stat-ed on the render thread.
 
