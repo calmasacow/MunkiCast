@@ -44,6 +44,28 @@ Item {
     /// Double-clicked, which everywhere in audio means unity.
     signal reset
 
+    activeFocusOnTab: !fader.locked
+    Accessible.role: Accessible.Slider
+    Accessible.name: qsTr("Gain")
+
+    // Keyboard trim, one undo step per press: Up/Down 1 dB (Shift 0.25), PgUp/PgDn 6 dB, Home unity.
+    Keys.onPressed: (event) => {
+        if (fader.locked)
+            return;
+        const fine = (event.modifiers & Qt.ShiftModifier) ? 0.25 : 1.0;
+        const by = event.key === Qt.Key_Up ? fine : event.key === Qt.Key_Down ? -fine
+                 : event.key === Qt.Key_PageUp ? 6 : event.key === Qt.Key_PageDown ? -6 : 0;
+        if (event.key === Qt.Key_Home) {
+            fader.reset();
+        } else if (by !== 0) {
+            fader.moved(Math.max(fader.gainMin, Math.min(fader.gainMax, fader.gainDb + by)));
+            fader.released();
+        } else {
+            return;
+        }
+        event.accepted = true;
+    }
+
     function fraction(db) {
         return (Math.max(fader.gainMin, Math.min(fader.gainMax, db)) - fader.gainMin) /
                (fader.gainMax - fader.gainMin);
@@ -139,7 +161,7 @@ Item {
              : Theme.c.panelHeaderActive
         border.width: 1
         border.color: fader.locked ? Theme.c.textMuted
-                    : mouse.containsMouse || mouse.pressed ? Theme.c.accent
+                    : mouse.containsMouse || mouse.pressed || fader.activeFocus ? Theme.c.accent
                     : Theme.c.border
     }
 

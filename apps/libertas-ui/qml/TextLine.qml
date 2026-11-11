@@ -117,6 +117,7 @@ Item {
             echoMode: field.echoMode
             id: input
             objectName: "textLineInput"
+            activeFocusOnTab: true
 
             anchors.fill: parent
             anchors.leftMargin: 5

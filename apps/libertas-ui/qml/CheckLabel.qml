@@ -14,6 +14,14 @@ Item {
 
     signal toggled
 
+    activeFocusOnTab: true
+    Accessible.role: Accessible.CheckBox
+    Accessible.name: text
+    Accessible.checked: checked
+    Accessible.onToggleAction: check.toggled()
+    Keys.onSpacePressed: check.toggled()
+    Keys.onReturnPressed: check.toggled()
+
     implicitWidth: 19 + label.implicitWidth
     implicitHeight: Math.max(13, label.implicitHeight)
 
@@ -28,7 +36,7 @@ Item {
         radius: 2
         color: check.checked ? Theme.c.accent : "transparent"
         border.width: 1
-        border.color: mouse.containsMouse ? Theme.c.accent : Theme.c.border
+        border.color: mouse.containsMouse || check.activeFocus ? Theme.c.accent : Theme.c.border
 
         Text {
             anchors.centerIn: parent

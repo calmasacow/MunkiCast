@@ -152,6 +152,17 @@ Item {
         TextInput {
             id: input
             objectName: "numberInput"
+            activeFocusOnTab: true
+            onActiveFocusChanged: if (activeFocus) selectAll()
+            // Up/Down nudge by `step`, Page Up/Down by ten steps.
+            Keys.onUpPressed: field.nudge(field.step)
+            Keys.onDownPressed: field.nudge(-field.step)
+            Keys.onPressed: event => {
+                if (event.key === Qt.Key_PageUp || event.key === Qt.Key_PageDown) {
+                    field.nudge((event.key === Qt.Key_PageUp ? 10 : -10) * field.step);
+                    event.accepted = true;
+                }
+            }
 
             anchors.fill: parent
             anchors.leftMargin: 5

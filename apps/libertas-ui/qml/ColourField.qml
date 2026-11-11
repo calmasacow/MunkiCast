@@ -25,6 +25,12 @@ Item {
 
     signal committed(string newValue)
 
+    function pick() {
+        const chosen = ColourDialog.pick(field.parses ? field.value : "#ffffff");
+        if (chosen !== "")
+            field.committed(chosen);
+    }
+
     implicitHeight: 22
 
     readonly property bool parses: /^#[0-9a-fA-F]{6}$/.test(field.value)
@@ -52,7 +58,14 @@ Item {
         radius: 2
         color: field.parses ? field.shown : Theme.c.window
         border.width: 1
-        border.color: mouse.containsMouse ? Theme.c.accent
+        // Space/Enter opens the picker, same as a click.
+        activeFocusOnTab: true
+        Accessible.role: Accessible.Button
+        Accessible.name: field.label
+        Keys.onSpacePressed: field.pick()
+        Keys.onReturnPressed: field.pick()
+
+        border.color: mouse.containsMouse || activeFocus ? Theme.c.accent
                     : !field.parses ? Theme.c.warning
                     : Theme.c.border
 
@@ -79,11 +92,7 @@ Item {
             anchors.fill: parent
             hoverEnabled: true
             cursorShape: Qt.PointingHandCursor
-            onClicked: {
-                const chosen = ColourDialog.pick(field.parses ? field.value : "#ffffff");
-                if (chosen !== "")
-                    field.committed(chosen);
-            }
+            onClicked: field.pick()
         }
 
         ToolTipText {

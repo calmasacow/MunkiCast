@@ -261,6 +261,10 @@ bool Document::renameCollection(const QString& name) {
         emit notice(QStringLiteral("Enter a collection name (1–128 characters)."));
         return false;
     }
+    // An unsaved collection gets its folder first: saving it installs a new session, which
+    // would drop the rename from the undo history if the rename came first.
+    if (session_->path().empty() && !saveCurrentCollection())
+        return false;
     run(ldoc::SetProjectName{clean.toStdString()});
     return saveCurrentCollection();
 }

@@ -144,6 +144,15 @@ Item {
         panel.dropZone = "";
     }
 
+    Rectangle {
+        anchors.fill: list
+        visible: list.activeFocus
+        color: "transparent"
+        border.width: 1
+        border.color: Theme.c.accent
+        z: 10
+    }
+
     ListView {
         id: list
 
@@ -162,6 +171,43 @@ Item {
         interactive: false
 
         NoDragScroll {}
+
+        // Keyboard: Up/Down move the selection, Enter opens settings, Space toggles
+        // visibility, Left/Right collapse/expand a group, F2 renames (shortcut above).
+        activeFocusOnTab: true
+        Accessible.role: Accessible.List
+        Accessible.name: qsTr("Sources")
+        function rowAt(i) { return list.itemAtIndex(i); }
+        function selectedRow() {
+            for (let i = 0; i < list.count; ++i) {
+                const r = list.rowAt(i);
+                if (r && r.nodeId === Document.selectedNode)
+                    return i;
+            }
+            return -1;
+        }
+        Keys.onPressed: event => {
+            const at = list.selectedRow();
+            const row = at >= 0 ? list.rowAt(at) : null;
+            if (event.key === Qt.Key_Up || event.key === Qt.Key_Down) {
+                const next = Math.max(0, Math.min(list.count - 1,
+                    at < 0 ? 0 : at + (event.key === Qt.Key_Down ? 1 : -1)));
+                list.positionViewAtIndex(next, ListView.Contain);
+                const r = list.rowAt(next);
+                if (r)
+                    Document.selectNodeOn(panel.canvasId, r.nodeId);
+            } else if (row && (event.key === Qt.Key_Return || event.key === Qt.Key_Enter)) {
+                panel.configure(row.sourceId);
+            } else if (row && event.key === Qt.Key_Space) {
+                Document.setNodeVisible(row.nodeId, !row.nodeVisible);
+            } else if (row && row.isGroup && (event.key === Qt.Key_Left || event.key === Qt.Key_Right)
+                       && row.expanded === (event.key === Qt.Key_Left)) {
+                Document.toggleGroupExpanded(panel.canvasId, row.nodeId);
+            } else {
+                return;
+            }
+            event.accepted = true;
+        }
 
         delegate: Rectangle {
             id: row

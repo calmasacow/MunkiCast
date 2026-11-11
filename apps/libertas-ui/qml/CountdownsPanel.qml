@@ -161,7 +161,7 @@ Item {
                             ToolButton {
                                 anchors.left: parent.left
                                 anchors.verticalCenter: parent.verticalCenter
-                                label: "Ὕ1"
+                                label: "🗑"
                                 tip: qsTr("Remove this timer binding")
                                 onClicked: Document.removeCountdown(timer.sourceId)
                             }

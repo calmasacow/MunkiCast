@@ -7634,6 +7634,9 @@ int main(int argc, char** argv) {
                "an action with nothing behind it yet says so");
         // Scene Collection actions must drive the real dialog and saved project session.
         {
+            // Start from a saved collection, so `original` is a real folder rather than "(unsaved)".
+            document.save();
+            settle();
             const auto original = document.projectPath();
             const auto dialogs = collect(window->contentItem(), QStringLiteral("collectionDialog"));
             report(dialogs.size() == 1, "Scene Collection has one GUI workflow dialog");
