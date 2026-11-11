@@ -7,6 +7,8 @@ SPDX-License-Identifier: GPL-3.0-or-later
 A live streaming and recording studio for Linux, built clean-sheet. Omarchy (Arch + Hyprland) is the
 bedrock target; the rest of Linux follows, then macOS and Windows.
 
+![MunkiCast Live workspace: Program view, scenes, mixer and broadcast stats](docs/screenshots/live.jpg)
+
 **Status: pre-alpha.** H.264/AAC streaming to one RTMP/RTMPS destination, MKV recording,
 replay buffering, Studio Mode, Companion control, and an independent native MCP server are
 available. See [current status](docs/current_goal.md) and the [remaining work](docs/todo.md).
@@ -16,7 +18,14 @@ What exists is a workspace you can use and a document you can edit:
 - **`munkicast-ui`** — one window holding the whole workspace, with Adobe-style drop-zone docking,
   dividers, tab groups, live Omarchy theme following, and a layout that survives being saved and
   restored at any resolution.
-- **Saved workspaces** — `Build`, `Live`, and the `Encode` graph across the top, plus any you add. Building a show and
+<table>
+<tr>
+<td><a href="docs/screenshots/build.jpg"><img src="docs/screenshots/build.jpg" alt="Build workspace: scenes and sources for two canvases side by side"></a><br><b>Build</b>: both canvases, scenes and sources</td>
+<td><a href="docs/screenshots/encoder-flow.jpg"><img src="docs/screenshots/encoder-flow.jpg" alt="Encoder Flow: canvases and audio tracks wired through encoders to destinations"></a><br><b>Encoder Flow</b>: canvases wired to encoders and outputs</td>
+</tr>
+</table>
+
+- **Saved workspaces** — `Build`, `Live`, and the `Encoder Flow` graph across the top, plus any you add. Building a show and
   running one want different panels up; these are arrangements of the one surface, never OS
   windows. The built-in pair can be rearranged and reset but not renamed away, so there is always
   a known arrangement to get back to.

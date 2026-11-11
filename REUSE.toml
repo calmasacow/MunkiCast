@@ -4,7 +4,7 @@ SPDX-PackageSupplier = "MunkiCast contributors"
 SPDX-PackageDownloadLocation = "https://github.com/calmasacow/MunkiCast"
 
 [[annotations]]
-path = ["tests/unit/fixtures/images/**"]
+path = ["tests/unit/fixtures/images/**", "docs/screenshots/**"]
 precedence = "aggregate"
 SPDX-FileCopyrightText = "MunkiCast contributors"
 SPDX-License-Identifier = "GPL-3.0-or-later"
