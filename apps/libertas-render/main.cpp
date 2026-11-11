@@ -232,7 +232,8 @@ class Renderer {
             std::string error;
             const auto displays = display_output ? projectors_.acquire(canvas, device_.get()) :
                 std::vector<libertas::rhi::PresentationTarget>{};
-            auto result = gpu->render(plan, max_edge, error, full_output, displays);
+            auto result = gpu->render(plan, max_edge, error, full_output, displays,
+                                      full_output && device_output && device_output());
             projectors_.present(canvas, result && result->status != lcomp::PictureStatus::Unsupported);
             if (result)
                 return std::move(*result);
@@ -256,6 +257,14 @@ class Renderer {
     }
 
     Projectors& projectors() { return projectors_; }
+
+    /// Whether full-size output should stay on the GPU as NV12 for the encoder.
+    std::function<bool()> device_output;
+
+    std::array<std::uint8_t, 16> gpu_uuid() {
+        return !cpu_ && !gpu_failed_ && device() ? libertas::rhi::vk_device_uuid(*device_)
+                                                 : std::array<std::uint8_t, 16>{};
+    }
 
     bool fresh() const {
         if (projectors_.dirty()) return true;
@@ -747,6 +756,8 @@ int main() {
     AudioSources audio;
     Renderer renderer(audio);
     Recorder recorder(audio);
+    recorder.gpu_uuid = [&renderer] { return renderer.gpu_uuid(); };
+    renderer.device_output = [&recorder] { return recorder.takes_device_frames(); };
     lcomp::RecordHooks record;
     record.control = [&recorder](const lcomp::RecordRequest& request, const ldoc::Project& p) {
         return recorder.control(request, p);

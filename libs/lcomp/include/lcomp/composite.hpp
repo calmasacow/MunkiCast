@@ -71,6 +71,17 @@ struct Gap {
     GapReason reason = GapReason::UnsupportedType;
 };
 
+/// A full-size frame left on the GPU as NV12 (BT.709 limited range) for a hardware encoder.
+/// Luma rows at offset 0, interleaved chroma at `pitch * height`, both `pitch` bytes per row.
+/// `fd` is an opaque-fd export of the whole allocation, owned by the producer; an importer dups
+/// it. While any copy of the owning shared_ptr lives, the producer will not rewrite the buffer.
+struct DeviceNv12 {
+    int fd = -1;
+    std::uint64_t size = 0;
+    std::uint64_t id = 0; ///< Unique per allocation, so an importer can cache its import.
+    std::uint32_t pitch = 0;
+};
+
 /// One canvas, straight sRGB8, tightly packed, top-left origin.
 ///
 /// Not the encode target. ADR-0006 still composites in scene-linear RGBA16F on a VkDevice;
@@ -89,6 +100,8 @@ struct Picture {
     const std::uint8_t* borrowed = nullptr;
     /// Retains an immutable borrowed source image through transport.
     std::shared_ptr<const void> owner{};
+    /// Set instead of `pixels` when the frame never left the GPU.
+    std::shared_ptr<const DeviceNv12> nv12{};
 
     /// Where to read from: the borrowed buffer when there is one, otherwise our own.
     [[nodiscard]] const std::uint8_t* read_from() const {

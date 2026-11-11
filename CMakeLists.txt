@@ -79,6 +79,11 @@ if(LIBERTAS_BUILD_TESTS)
     endif()
 endif()
 
+# Vendored Vulkan C headers: a distro update can remove vulkan-headers while keeping the loader.
+# Set before any find_package(Vulkan), which then finds these instead of /usr/include.
+set(Vulkan_INCLUDE_DIR "${CMAKE_SOURCE_DIR}/third_party/vulkan-headers/include"
+    CACHE PATH "Vulkan headers (vendored)" FORCE)
+
 add_subdirectory(libs/lcore)
 add_subdirectory(libs/lipc)
 add_subdirectory(libs/llayout)

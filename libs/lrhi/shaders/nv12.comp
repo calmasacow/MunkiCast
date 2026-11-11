@@ -1,0 +1,49 @@
+// SPDX-FileCopyrightText: Libertas-Studio contributors
+// SPDX-License-Identifier: GPL-3.0-or-later
+#version 450
+// Straight sRGB RGBA8 (the encoder's input) to NV12 in a device buffer that NVENC reads through
+// CUDA. Same maths as swscale's RGB->YUV it replaces: the matrix applies to encoded R'G'B', and
+// chroma averages each 2x2 block of R'G'B' before converting. Ported from the ADR-0019 spike.
+//
+// One invocation owns a 4x2 luma block: one aligned 32-bit store per luma row and one per chroma
+// row, so nothing is read-modify-written. Pitch and uv_offset must be multiples of 4.
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(binding = 1) uniform sampler2D src;
+layout(std430, binding = 3) writeonly buffer Dst { uint data[]; };
+// rect: width, height, pitch (bytes per row, both planes), uv_offset (bytes).
+// flags.x: 1 = full range. flags.y: 1 = BT.601, otherwise BT.709.
+layout(push_constant) uniform Push { ivec4 rect; ivec4 flags; } p;
+
+vec3 coeff() { return p.flags.y == 1 ? vec3(0.299, 0.587, 0.114) : vec3(0.2126, 0.7152, 0.0722); }
+float encode_y(float y) { return p.flags.x == 1 ? y * 255.0 : 16.0 + y * 219.0; }
+vec2 encode_uv(vec3 rgb) {
+    vec3 k = coeff();
+    float y = dot(rgb, k);
+    float scale = p.flags.x == 1 ? 255.0 : 224.0;
+    return 128.0 + vec2((rgb.b - y) / (2.0 * (1.0 - k.b)), (rgb.r - y) / (2.0 * (1.0 - k.r))) * scale;
+}
+uint pack4(vec4 v) {
+    uvec4 b = uvec4(round(clamp(v, 0.0, 255.0)));
+    return b.x | (b.y << 8) | (b.z << 16) | (b.w << 24);
+}
+
+void main() {
+    uint w = uint(p.rect.x), h = uint(p.rect.y), pitch = uint(p.rect.z), uv = uint(p.rect.w);
+    uint x0 = gl_GlobalInvocationID.x * 4u, y0 = gl_GlobalInvocationID.y * 2u;
+    if (x0 >= w || y0 >= h)
+        return;
+    // Clamping duplicates the edge pixel on odd sizes, which is what chroma should average.
+    ivec2 lim = ivec2(w - 1u, h - 1u);
+    vec3 px[8];
+    for (uint r = 0u; r < 2u; ++r)
+        for (uint c = 0u; c < 4u; ++c)
+            px[r * 4u + c] = texelFetch(src, min(ivec2(x0 + c, y0 + r), lim), 0).rgb;
+    vec3 k = coeff();
+    for (uint r = 0u; r < 2u && y0 + r < h; ++r)
+        data[((y0 + r) * pitch + x0) >> 2] =
+            pack4(vec4(encode_y(dot(px[r * 4u], k)), encode_y(dot(px[r * 4u + 1u], k)),
+                       encode_y(dot(px[r * 4u + 2u], k)), encode_y(dot(px[r * 4u + 3u], k))));
+    vec2 c0 = encode_uv((px[0] + px[1] + px[4] + px[5]) * 0.25);
+    vec2 c1 = encode_uv((px[2] + px[3] + px[6] + px[7]) * 0.25);
+    data[(uv + (y0 >> 1) * pitch + x0) >> 2] = pack4(vec4(c0, c1));
+}

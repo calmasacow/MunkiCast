@@ -4,6 +4,7 @@
 
 #include <lcapture/dmabuf.hpp>
 
+#include <array>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -35,6 +36,8 @@ std::vector<std::uint64_t> vk_supported_modifiers(VkCtx& ctx, std::uint32_t drm_
 
 /// A short description of the selected device, for logging.
 std::string vk_device_name(VkCtx& ctx);
+/// Matches CUDA's cuDeviceGetUuid, so an encoder can open the same physical GPU.
+std::array<std::uint8_t, 16> vk_device_uuid(VkCtx& ctx);
 bool vk_matches_drm_device(VkCtx& ctx, std::uint64_t device);
 
 /// Imports one dmabuf frame as a VkImage and copies it back to host memory, proving the import

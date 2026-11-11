@@ -10,10 +10,13 @@
 #include <filesystem>
 #include <lcapture/screen.hpp>
 #include <lcomp/filters.hpp>
+#include <lencode/encoder.hpp>
 #include <lrhi/composite.hpp>
 #include <libdrm/drm_fourcc.h>
 #include <mutex>
 extern "C" {
+#include <libavcodec/avcodec.h>
+#include <libavformat/avformat.h>
 #include <libswscale/swscale.h>
 }
 
@@ -779,6 +782,107 @@ LTEST_CASE(a_real_capture_slot_stays_on_device_until_preview_readback) {
     CHECK(!gpu->render(invalid_plan, 640, error).has_value());
     CHECK(error.find("producer fence") != std::string::npos);
     REQUIRE_MSG(gpu->render(plan, 640, error).has_value(), "{}", error);
+}
+
+// The release path for NVIDIA: Vulkan composites to NV12 in exported memory, NVENC reads it via
+// CUDA, and no frame visits system RAM. Decodes the file and checks luma against the CPU oracle.
+LTEST_CASE(nvenc_encodes_gpu_nv12_frames_without_readback) {
+    auto d = device();
+    std::string error;
+    auto gpu = libertas::rhi::GpuCompositor::create(*d, error);
+    REQUIRE_MSG(gpu, "{}", error);
+    constexpr int w = 256, h = 144, count = 30;
+    libertas::encode::RuntimeConfig cfg;
+    cfg.path = (std::filesystem::temp_directory_path() / "libertas-gpu-nv12.mkv").string();
+    std::filesystem::remove(cfg.path);
+    cfg.width = cfg.source_width = w;
+    cfg.height = cfg.source_height = h;
+    cfg.source_rgba = true;
+    cfg.audio_channels = 0;
+    cfg.force_tier = "h264_nvenc";
+    cfg.video_options = {{"preset", "p4"}, {"tune", "lossless"}};
+    cfg.gpu_uuid = libertas::rhi::vk_device_uuid(*d);
+    auto encoder = libertas::encode::encoder_open(cfg, error);
+    REQUIRE_MSG(encoder, "{}", error);
+    REQUIRE_MSG(libertas::encode::encoder_takes_device_frames(*encoder),
+                "NVENC did not open on the compositor's GPU");
+
+    auto project = show(w, h);
+    std::vector<std::uint8_t> pixels(w * h * 4);
+    std::vector<std::vector<std::uint8_t>> expected_luma;
+    for (int i = 0; i < count; ++i) {
+        for (int y = 0; y < h; ++y)
+            for (int x = 0; x < w; ++x) {
+                auto* px = &pixels[std::size_t(y * w + x) * 4];
+                px[0] = std::uint8_t((x * 255 / w + i * 8) & 255);
+                px[1] = std::uint8_t(y * 255 / h);
+                px[2] = std::uint8_t(((x / 16 + y / 16 + i) & 1) * 200);
+                px[3] = 255;
+            }
+        const auto plan = lcomp::plan_canvas(project, project.canvases[0].id, [&](const auto&) {
+            return lcomp::CapturedPicture{w, h, pixels.data(), pixels.size()};
+        });
+        lcomp::Picture full;
+        // Every fifth frame takes the host fallback, as when NVENC still holds every GPU slot.
+        const bool host = i % 5 == 4;
+        REQUIRE_MSG(gpu->render(plan, 32, error, &full, {}, !host), "{}", error);
+        REQUIRE_MSG(bool(full.nv12) != host, "frame {} took the wrong path", i);
+        const auto cpu = lcomp::execute_cpu(plan);
+        std::vector<std::uint8_t> luma(std::size_t(w) * h);
+        for (std::size_t p = 0; p < luma.size(); ++p) {
+            const auto* c = &cpu.pixels[p * 4];
+            luma[p] = std::uint8_t(
+                std::lround(16 + 219 * (0.2126 * c[0] + 0.7152 * c[1] + 0.0722 * c[2]) / 255));
+        }
+        expected_luma.push_back(std::move(luma));
+        const auto& frame = full.nv12;
+        const auto pts = i * 1'000'000'000LL / 60;
+        REQUIRE_MSG(host ? libertas::encode::encoder_video(*encoder, full.pixels.data(),
+                                                            full.stride, pts, error)
+                         : libertas::encode::encoder_video_device(*encoder, frame->fd,
+                                                                  frame->size, frame->id,
+                                                                  frame->pitch, frame, pts, error),
+                    "{}", error);
+    }
+    REQUIRE_MSG(libertas::encode::encoder_finish(*encoder, error), "{}", error);
+    encoder.reset();
+
+    AVFormatContext* file = nullptr;
+    REQUIRE(avformat_open_input(&file, cfg.path.c_str(), nullptr, nullptr) >= 0);
+    REQUIRE(avformat_find_stream_info(file, nullptr) >= 0);
+    const int stream = av_find_best_stream(file, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+    REQUIRE(stream >= 0);
+    auto* decoder = avcodec_alloc_context3(avcodec_find_decoder(AV_CODEC_ID_H264));
+    REQUIRE(avcodec_parameters_to_context(decoder, file->streams[stream]->codecpar) >= 0);
+    REQUIRE(avcodec_open2(decoder, decoder->codec, nullptr) >= 0);
+    auto* packet = av_packet_alloc();
+    auto* frame = av_frame_alloc();
+    int decoded = 0, worst = 0;
+    const auto drain = [&] {
+        while (avcodec_receive_frame(decoder, frame) >= 0) {
+            REQUIRE(decoded < count);
+            for (int y = 0; y < h; ++y)
+                for (int x = 0; x < w; ++x)
+                    worst = std::max(worst, std::abs(int(frame->data[0][y * frame->linesize[0] + x]) -
+                                                     int(expected_luma[std::size_t(decoded)][std::size_t(y * w + x)])));
+            ++decoded;
+        }
+    };
+    while (av_read_frame(file, packet) >= 0) {
+        if (packet->stream_index == stream && avcodec_send_packet(decoder, packet) >= 0)
+            drain();
+        av_packet_unref(packet);
+    }
+    avcodec_send_packet(decoder, nullptr);
+    drain();
+    av_frame_free(&frame);
+    av_packet_free(&packet);
+    avcodec_free_context(&decoder);
+    avformat_close_input(&file);
+    std::filesystem::remove(cfg.path);
+    CHECK_EQ(decoded, count);
+    // Lossless NVENC: only the shader-vs-reference rounding and the CPU path's 8-bit sRGB remain.
+    CHECK_MSG(worst <= 3, "decoded luma differs from the CPU oracle by {}", worst);
 }
 
 int main() {

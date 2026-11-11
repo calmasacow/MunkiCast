@@ -2,12 +2,14 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "shaders/composite_spv.h"
 #include "shaders/filter_spv.h"
+#include "shaders/nv12_spv.h"
 #include "shaders/preview_spv.h"
 #include "shaders/yuv_spv.h"
 #include "vk_ctx_internal.hpp"
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <chrono>
 #include <cmath>
 #include <cstdio>
@@ -21,6 +23,7 @@
 #include <map>
 #include <poll.h>
 #include <stdexcept>
+#include <unistd.h>
 
 namespace libertas::rhi {
 namespace {
@@ -169,6 +172,25 @@ struct Buffer {
     }
 };
 
+// An NV12 frame NVENC reads in place through CUDA. Exported once as an opaque fd; reused while
+// nobody outside holds `frame`, which the encoder keeps until NVENC has finished reading it.
+struct Nv12Slot {
+    VkCtx& c;
+    VkBuffer buffer = VK_NULL_HANDLE;
+    VkDeviceMemory memory = VK_NULL_HANDLE;
+    std::shared_ptr<lcomp::DeviceNv12> frame;
+    int width = 0, height = 0;
+
+    ~Nv12Slot() {
+        if (frame && frame->fd >= 0)
+            ::close(frame->fd);
+        if (buffer)
+            vkDestroyBuffer(c.device, buffer, nullptr);
+        if (memory)
+            vkFreeMemory(c.device, memory, nullptr);
+    }
+};
+
 struct Push {
     std::array<int, 4> rect{};
     std::array<int, 4> flags{};
@@ -211,7 +233,9 @@ struct GpuCompositor::Impl {
     VkDescriptorSetLayout set_layout = VK_NULL_HANDLE;
     VkPipelineLayout layout = VK_NULL_HANDLE;
     VkPipeline composite = VK_NULL_HANDLE, preview = VK_NULL_HANDLE, filter = VK_NULL_HANDLE,
-               yuv = VK_NULL_HANDLE;
+               yuv = VK_NULL_HANDLE, nv12 = VK_NULL_HANDLE;
+    std::vector<std::unique_ptr<Nv12Slot>> nv12_slots;
+    bool nv12_broken = false;
     VkDescriptorPool descriptors = VK_NULL_HANDLE;
     VkSampler sampler = VK_NULL_HANDLE;
     std::vector<std::unique_ptr<Image>> images;
@@ -337,6 +361,7 @@ struct GpuCompositor::Impl {
         uploads.clear();
         readback.reset();
         full_readback.reset();
+        nv12_slots.clear();
         histories.clear();
         retired.clear();
         recycled.clear();
@@ -349,6 +374,8 @@ struct GpuCompositor::Impl {
             vkDestroyPipeline(c->device, preview, nullptr);
         if (yuv)
             vkDestroyPipeline(c->device, yuv, nullptr);
+        if (nv12)
+            vkDestroyPipeline(c->device, nv12, nullptr);
         if (filter)
             vkDestroyPipeline(c->device, filter, nullptr);
         if (composite)
@@ -486,6 +513,7 @@ struct GpuCompositor::Impl {
         preview = pipeline(kPreviewSpv, sizeof(kPreviewSpv));
         filter = pipeline(kFilterSpv, sizeof(kFilterSpv));
         yuv = pipeline(kYuvSpv, sizeof(kYuvSpv));
+        nv12 = pipeline(kNv12Spv, sizeof(kNv12Spv));
         const VkDescriptorPoolSize sizes[] = {{VK_DESCRIPTOR_TYPE_STORAGE_IMAGE, 4096},
                                               {VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER, 8192},
                                               {VK_DESCRIPTOR_TYPE_STORAGE_BUFFER, 256}};
@@ -767,6 +795,117 @@ struct GpuCompositor::Impl {
         return image;
     }
 
+    // A free slot of this size, or null when NVENC still holds all of them (or export failed);
+    // the caller then reads back RGBA instead. Eight covers NVENC's surfaces plus one in hand.
+    Nv12Slot* nv12_slot(int width, int height) {
+        const auto idle = [](const auto& slot) { return slot->frame.use_count() == 1; };
+        std::erase_if(nv12_slots, [&](const auto& slot) {
+            return (slot->width != width || slot->height != height) && idle(slot);
+        });
+        for (auto& slot : nv12_slots)
+            if (slot->width == width && slot->height == height && idle(slot))
+                return slot.get();
+        if (nv12_broken || nv12_slots.size() >= 8 || !c->get_memory_fd)
+            return nullptr;
+        try {
+            auto slot = std::make_unique<Nv12Slot>(*c);
+            slot->width = width;
+            slot->height = height;
+            // CUDA's own frame pool aligns rows to 256 bytes; NVENC is happy with that pitch.
+            const auto pitch = (static_cast<std::uint32_t>(width) + 255u) & ~255u;
+            VkExternalMemoryBufferCreateInfo external{};
+            external.sType = VK_STRUCTURE_TYPE_EXTERNAL_MEMORY_BUFFER_CREATE_INFO;
+            external.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
+            VkBufferCreateInfo bi{};
+            bi.sType = VK_STRUCTURE_TYPE_BUFFER_CREATE_INFO;
+            bi.pNext = &external;
+            bi.size = VkDeviceSize{pitch} * static_cast<VkDeviceSize>(height) * 3 / 2;
+            bi.usage = VK_BUFFER_USAGE_STORAGE_BUFFER_BIT;
+            checked(vkCreateBuffer(c->device, &bi, nullptr, &slot->buffer), "create NV12 buffer");
+            VkMemoryRequirements req{};
+            vkGetBufferMemoryRequirements(c->device, slot->buffer, &req);
+            VkMemoryDedicatedAllocateInfo dedicated{};
+            dedicated.sType = VK_STRUCTURE_TYPE_MEMORY_DEDICATED_ALLOCATE_INFO;
+            dedicated.buffer = slot->buffer;
+            VkExportMemoryAllocateInfo exported{};
+            exported.sType = VK_STRUCTURE_TYPE_EXPORT_MEMORY_ALLOCATE_INFO;
+            exported.pNext = &dedicated;
+            exported.handleTypes = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
+            VkMemoryAllocateInfo mi{};
+            mi.sType = VK_STRUCTURE_TYPE_MEMORY_ALLOCATE_INFO;
+            mi.pNext = &exported;
+            mi.allocationSize = req.size;
+            mi.memoryTypeIndex =
+                memory_type(*c, req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT);
+            checked(vkAllocateMemory(c->device, &mi, nullptr, &slot->memory), "allocate NV12");
+            checked(vkBindBufferMemory(c->device, slot->buffer, slot->memory, 0), "bind NV12");
+            VkMemoryGetFdInfoKHR gi{};
+            gi.sType = VK_STRUCTURE_TYPE_MEMORY_GET_FD_INFO_KHR;
+            gi.memory = slot->memory;
+            gi.handleType = VK_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD_BIT;
+            int fd = -1;
+            checked(c->get_memory_fd(c->device, &gi, &fd), "export NV12");
+            static std::atomic<std::uint64_t> next_id{0};
+            slot->frame = std::make_shared<lcomp::DeviceNv12>(
+                lcomp::DeviceNv12{fd, req.size, ++next_id, pitch});
+            nv12_slots.push_back(std::move(slot));
+            return nv12_slots.back().get();
+        } catch (const std::exception& e) {
+            std::fprintf(stderr, "GPU NV12 output unavailable, reading back RGBA: %s\n", e.what());
+            nv12_broken = true;
+            return nullptr;
+        }
+    }
+
+    // Straight RGBA8 canvas to NV12 in `slot`. The caller's fence wait completes the write before
+    // the encoder sees the frame.
+    // ponytail: host fence wait orders Vulkan before CUDA; an exported timeline semaphore
+    // would let the next frame start without that wait.
+    void convert_nv12(Image& src, Nv12Slot& slot) {
+        VkDescriptorSetAllocateInfo ai{};
+        ai.sType = VK_STRUCTURE_TYPE_DESCRIPTOR_SET_ALLOCATE_INFO;
+        ai.descriptorPool = descriptors;
+        ai.descriptorSetCount = 1;
+        ai.pSetLayouts = &set_layout;
+        VkDescriptorSet set = VK_NULL_HANDLE;
+        checked(vkAllocateDescriptorSets(c->device, &ai, &set), "allocate composite descriptors");
+        ++dispatches;
+        const VkDescriptorImageInfo source{sampler, src.view, VK_IMAGE_LAYOUT_GENERAL};
+        const VkDescriptorBufferInfo target{slot.buffer, 0, VK_WHOLE_SIZE};
+        std::array<VkWriteDescriptorSet, 2> writes{};
+        for (auto& w : writes) {
+            w.sType = VK_STRUCTURE_TYPE_WRITE_DESCRIPTOR_SET;
+            w.dstSet = set;
+            w.descriptorCount = 1;
+        }
+        writes[0].dstBinding = 1;
+        writes[0].descriptorType = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        writes[0].pImageInfo = &source;
+        writes[1].dstBinding = 3;
+        writes[1].descriptorType = VK_DESCRIPTOR_TYPE_STORAGE_BUFFER;
+        writes[1].pBufferInfo = &target;
+        vkUpdateDescriptorSets(c->device, 2, writes.data(), 0, nullptr);
+        const auto pitch = static_cast<int>(slot.frame->pitch);
+        Push push;
+        push.rect = {slot.width, slot.height, pitch, pitch * slot.height};
+        vkCmdBindPipeline(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, nv12);
+        vkCmdBindDescriptorSets(cmd, VK_PIPELINE_BIND_POINT_COMPUTE, layout, 0, 1, &set, 0,
+                                nullptr);
+        vkCmdPushConstants(cmd, layout, VK_SHADER_STAGE_COMPUTE_BIT, 0, sizeof(push), &push);
+        vkCmdDispatch(cmd, (static_cast<std::uint32_t>(slot.width) + 31) / 32,
+                      (static_cast<std::uint32_t>(slot.height) + 15) / 16, 1);
+        VkBufferMemoryBarrier written{};
+        written.sType = VK_STRUCTURE_TYPE_BUFFER_MEMORY_BARRIER;
+        written.srcAccessMask = VK_ACCESS_SHADER_WRITE_BIT;
+        written.dstAccessMask = VK_ACCESS_MEMORY_READ_BIT;
+        written.srcQueueFamilyIndex = written.dstQueueFamilyIndex = VK_QUEUE_FAMILY_IGNORED;
+        written.buffer = slot.buffer;
+        written.size = VK_WHOLE_SIZE;
+        vkCmdPipelineBarrier(cmd, VK_PIPELINE_STAGE_COMPUTE_SHADER_BIT,
+                             VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, 0, 0, nullptr, 1, &written, 0,
+                             nullptr);
+    }
+
     void dispatch(Image& dest, Image& src, VkPipeline pipe, const Push& push, int width, int height,
                   Image* auxiliary = nullptr) {
         if (width <= 0 || height <= 0)
@@ -952,7 +1091,8 @@ struct GpuCompositor::Impl {
     }
 
     lcomp::Picture render(const lcomp::DrawPlan& plan, std::uint32_t max_edge,
-                          lcomp::Picture* full_output, std::span<const PresentationTarget> displays) {
+                          lcomp::Picture* full_output, std::span<const PresentationTarget> displays,
+                          bool nv12_output) {
         const auto begin = std::chrono::steady_clock::now();
         lcomp::Picture out;
         out.width = plan.width;
@@ -1062,7 +1202,17 @@ struct GpuCompositor::Impl {
             auto pixels = std::move(full_output->pixels);
             *full_output = out;
             full_output->pixels = std::move(pixels);
-            export_picture(*full_output, 0, full_readback);
+            // Even sizes only: NV12 has one chroma sample per 2x2 block.
+            auto* slot = nv12_output && plan.width % 2 == 0 && plan.height % 2 == 0
+                             ? nv12_slot(plan.width, plan.height)
+                             : nullptr;
+            export_picture(*full_output, 0, full_readback, slot == nullptr);
+            if (slot) {
+                convert_nv12(*full_rgba, *slot);
+                full_output->nv12 = slot->frame;
+                full_output->stride = 0;
+                full_output->pixels.clear();
+            }
         }
         export_picture(out, max_edge, readback);
         // HDMI shares the very same full-resolution sRGB conversion as the encoder. No
@@ -1178,7 +1328,7 @@ struct GpuCompositor::Impl {
             std::memcpy(picture.pixels.data(), source.mapped, size);
         };
         copy_picture(out, *readback);
-        if (full_output)
+        if (full_output && !full_output->nv12)
             copy_picture(*full_output, *full_readback);
         std::uint64_t spare_bytes = 0;
         for (std::size_t i = image_at; i < images.size(); ++i)
@@ -1228,9 +1378,10 @@ std::unique_ptr<GpuCompositor> GpuCompositor::create(VkCtx& device, std::string&
 std::optional<lcomp::Picture> GpuCompositor::render(const lcomp::DrawPlan& plan,
                                                     std::uint32_t max_edge, std::string& error,
                                                     lcomp::Picture* full_output,
-                                                    std::span<const PresentationTarget> displays) {
+                                                    std::span<const PresentationTarget> displays,
+                                                    bool nv12_output) {
     try {
-        return impl_->render(plan, max_edge, full_output, displays);
+        return impl_->render(plan, max_edge, full_output, displays, nv12_output);
     } catch (const std::exception& e) {
         error = e.what();
         return std::nullopt;

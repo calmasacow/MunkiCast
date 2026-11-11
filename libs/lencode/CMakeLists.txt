@@ -7,6 +7,9 @@
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(FFMPEG REQUIRED IMPORTED_TARGET
     libavcodec libavformat libavutil libswscale libswresample)
+# nv-codec-headers: NVENC reads compositor frames from GPU memory. Optional; without it every
+# frame is read back and uploaded.
+pkg_check_modules(FFNVCODEC IMPORTED_TARGET ffnvcodec)
 
 add_library(lencode
     src/encoder.cpp
@@ -22,4 +25,7 @@ target_link_libraries(lencode
         libertas::flags
         libertas::lcore
         PkgConfig::FFMPEG
+        $<TARGET_NAME_IF_EXISTS:PkgConfig::FFNVCODEC>
 )
+target_compile_definitions(lencode PRIVATE
+    LIBERTAS_HAVE_FFNVCODEC=$<BOOL:${FFNVCODEC_FOUND}>)

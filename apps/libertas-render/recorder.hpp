@@ -8,6 +8,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <functional>
 #include <lcomp/composite.hpp>
 #include <lcomp/preview.hpp>
 #include <lcore/log.hpp>
@@ -30,6 +31,15 @@ class Recorder {
     }
 
     [[nodiscard]] bool running() const { return encoder_ != nullptr; }
+
+    /// The compositor's Vulkan device UUID, so NVENC opens on the same GPU and reads its frames
+    /// in place. Zero (or unset) keeps system-memory frames.
+    std::function<std::array<std::uint8_t, 16>()> gpu_uuid;
+
+    /// Whether the running encoder takes GPU-resident NV12 frames instead of RGBA pixels.
+    [[nodiscard]] bool takes_device_frames() const {
+        return encoder_ && libertas::encode::encoder_takes_device_frames(*encoder_);
+    }
 
     /// Which canvas is being recorded, or nil. The preview loop asks this to decide whether a
     /// canvas has to be composited at full size as well as preview size.
@@ -125,6 +135,8 @@ class Recorder {
 
         auto cfg = libertas::encode::runtime_config(*encode, audio ? *audio : silent, *canvas,
                                                     request.path);
+        if (gpu_uuid)
+            cfg.gpu_uuid = gpu_uuid();
         if (!audio) {
             cfg.audio_channels = 0; // no audio stream at all, rather than a silent one
             cfg.audio_bitrate = 0;
@@ -194,7 +206,8 @@ class Recorder {
         if (picture.width != static_cast<std::int32_t>(width_) ||
             picture.height != static_cast<std::int32_t>(height_)) {
             error = "Output stopped because the canvas size changed.";
-        } else if (const auto* pixels = picture.read_from()) {
+        } else if (const auto* pixels = picture.nv12 ? nullptr : picture.read_from();
+                   pixels || (picture.nv12 && takes_device_frames())) {
             const auto pts =
                 std::chrono::duration_cast<std::chrono::nanoseconds>(frame_time - started_).count();
             // Match the encoder time base; early ticks must not submit duplicate timestamps.
@@ -207,8 +220,12 @@ class Recorder {
                 missed_ += gap;
                 encode_lag_ += std::min(gap, encode_blocked_slots_);
                 const auto encode_started = std::chrono::steady_clock::now();
-                if (libertas::encode::encoder_video(*encoder_, pixels, picture.stride, pts,
-                                                    error)) {
+                const auto& gpu = picture.nv12;
+                if (gpu ? libertas::encode::encoder_video_device(*encoder_, gpu->fd, gpu->size,
+                                                                 gpu->id, gpu->pitch, gpu, pts,
+                                                                 error)
+                        : libertas::encode::encoder_video(*encoder_, pixels, picture.stride, pts,
+                                                          error)) {
                     last_video_slot_ = slot;
                     ++frames_;
                 }

@@ -153,9 +153,14 @@ VkCtxPtr vk_init(const std::string& prefer_drm_node, std::string& error) {
     ctx->have_foreign_queue =
         device_has_ext(chosen, VK_EXT_QUEUE_FAMILY_FOREIGN_EXTENSION_NAME);
 
-    VkPhysicalDeviceProperties props{};
-    vkGetPhysicalDeviceProperties(chosen, &props);
-    ctx->device_name = props.deviceName;
+    VkPhysicalDeviceIDProperties ids{};
+    ids.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ID_PROPERTIES;
+    VkPhysicalDeviceProperties2 named{};
+    named.sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_PROPERTIES_2;
+    named.pNext = &ids;
+    vkGetPhysicalDeviceProperties2(chosen, &named);
+    ctx->device_name = named.properties.deviceName;
+    std::copy(std::begin(ids.deviceUUID), std::end(ids.deviceUUID), ctx->uuid.begin());
 
     std::uint32_t qn = 0;
     vkGetPhysicalDeviceQueueFamilyProperties(chosen, &qn, nullptr);
@@ -274,6 +279,7 @@ void vk_destroy(VkCtx* ctx) {
 }
 
 std::string vk_device_name(VkCtx& ctx) { return ctx.device_name; }
+std::array<std::uint8_t, 16> vk_device_uuid(VkCtx& ctx) { return ctx.uuid; }
 
 std::vector<std::uint64_t> vk_supported_modifiers(VkCtx& ctx, std::uint32_t drm_format) {
     std::vector<std::uint64_t> out;

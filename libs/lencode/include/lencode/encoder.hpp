@@ -4,6 +4,7 @@
 
 #include "ldoc/document.hpp"
 
+#include <array>
 #include <cstdint>
 #include <map>
 #include <memory>
@@ -44,6 +45,9 @@ struct RuntimeConfig {
     std::map<std::string, std::string> video_options;
     std::string custom_options;
     std::string rescale_filter = "bilinear";
+    /// Non-zero: open NVENC on this CUDA device (Vulkan deviceUUID) for encoder_video_device.
+    /// Ignored, with CPU input kept, when the tier is not NVENC or no CUDA device matches.
+    std::array<std::uint8_t, 16> gpu_uuid{};
 
     /// Audio. Zero channels disables the audio stream entirely, which is useful for isolating a
     /// video problem but is NOT the Phase-0 gate - the gate requires synced audio.
@@ -121,13 +125,24 @@ bool encoder_finish(Encoder& enc, std::string& error);
 
 const EncoderStats& encoder_stats(Encoder& enc);
 
-/// Submits a frame that is already in the encoder's NV12 layout, skipping colour conversion
-/// entirely. This is the GPU-convert path of ADR-0019.
+/// Submits a frame already in the encoder's NV12 layout from host memory, skipping colour
+/// conversion. Used by the encode spike (ADR-0019); the app uses encoder_video_device.
 bool encoder_video_nv12(Encoder& enc, const std::uint8_t* y, int y_stride, const std::uint8_t* uv,
                         int uv_stride, std::int64_t pts_ns, std::string& error);
 
 /// Whether the encoder opened with NV12, which the GPU convert path requires.
 bool encoder_is_nv12(Encoder& enc);
+
+/// Whether NVENC opened on `RuntimeConfig::gpu_uuid` and accepts encoder_video_device.
+bool encoder_takes_device_frames(const Encoder& enc);
+
+/// Encodes an NV12 frame that never left the GPU: Vulkan memory exported as an opaque fd
+/// (`fd`, `size` bytes; luma at 0, chroma at `pitch * height`). CUDA imports it once per `id`
+/// and NVENC reads it in place. `owner` is kept until NVENC has read the frame; the producer
+/// must not overwrite the memory while it lives. `fd` stays owned by the caller.
+bool encoder_video_device(Encoder& enc, int fd, std::uint64_t size, std::uint64_t id,
+                          std::uint32_t pitch, std::shared_ptr<const void> owner,
+                          std::int64_t pts_ns, std::string& error);
 
 /// What the document says, in the terms the muxer needs.
 ///

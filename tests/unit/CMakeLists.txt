@@ -56,7 +56,7 @@ target_compile_definitions(test_preview PRIVATE
     LIBERTAS_IMAGE_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/images")
 add_dependencies(test_preview libertas-render vst_fixture)
 set_tests_properties(test_preview PROPERTIES ENVIRONMENT "LIBERTAS_RENDER_BACKEND=cpu")
-libertas_unit_test(test_gpu_composite libertas::lrhi)
+libertas_unit_test(test_gpu_composite libertas::lrhi libertas::lencode PkgConfig::RECORD_TEST_FFMPEG)
 target_compile_definitions(test_gpu_composite PRIVATE
     LIBERTAS_IMAGE_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/images")
 set_tests_properties(test_gpu_composite PROPERTIES SKIP_RETURN_CODE 77)

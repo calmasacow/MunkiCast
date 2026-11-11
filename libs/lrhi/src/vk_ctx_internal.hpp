@@ -8,6 +8,7 @@
 // vulkan.cpp and anything building a pipeline on this context both have to agree on.
 #pragma once
 
+#include <array>
 #include <cstdint>
 #include <string>
 
@@ -41,6 +42,7 @@ struct VkCtx {
     std::uint32_t queue_family = 0;
     VkCommandPool pool = VK_NULL_HANDLE;
     std::string device_name;
+    std::array<std::uint8_t, 16> uuid{}; ///< VkPhysicalDeviceIDProperties::deviceUUID
     bool have_foreign_queue = false;
     bool have_memory_budget = false;
 

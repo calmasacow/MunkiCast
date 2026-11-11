@@ -14,3 +14,9 @@ path = ["**/*.json", "**/*.toml", "**/*.md", ".gitignore", ".clang-format", ".ed
 precedence = "aggregate"
 SPDX-FileCopyrightText = "Libertas-Studio contributors"
 SPDX-License-Identifier = "GPL-3.0-or-later"
+
+[[annotations]]
+path = ["third_party/vulkan-headers/**"]
+precedence = "aggregate"
+SPDX-FileCopyrightText = "2015-2026 The Khronos Group Inc."
+SPDX-License-Identifier = "Apache-2.0 OR MIT"

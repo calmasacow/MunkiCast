@@ -33,10 +33,20 @@
 #include <thread>
 #include <unistd.h>
 
+// FFmpeg's dynamic CUDA loader: the driver is opened at runtime, so no CUDA toolkit is needed to
+// build and machines without NVIDIA still start. Included before hwcontext_cuda.h, whose cuda.h
+// include it satisfies. A system FFmpeg without nv-codec-headers builds without GPU input.
+#if LIBERTAS_HAVE_FFNVCODEC
+#include <ffnvcodec/dynlink_loader.h>
+#endif
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
 #include <libavutil/audio_fifo.h>
+#include <libavutil/hwcontext.h>
+#if LIBERTAS_HAVE_FFNVCODEC
+#include <libavutil/hwcontext_cuda.h>
+#endif
 #include <libavutil/imgutils.h>
 #include <libavutil/opt.h>
 #include <libswresample/swresample.h>
@@ -83,6 +93,19 @@ struct Encoder {
     AVStream* vst = nullptr;
     AVFrame* vframe = nullptr;
     SwsContext* sws = nullptr;
+
+    // Device input (NVENC reading Vulkan memory through CUDA). All null on the CPU path.
+    AVBufferRef* cuda_device = nullptr;
+    AVBufferRef* cuda_frames = nullptr;
+#if LIBERTAS_HAVE_FFNVCODEC
+    CudaFunctions* cu = nullptr;
+    struct Imported {
+        std::uint64_t id = 0;
+        CUexternalMemory memory = nullptr;
+        CUdeviceptr pointer = 0;
+    };
+    std::vector<Imported> imported;
+#endif
 
     AVCodecContext* actx = nullptr;
     AVStream* ast = nullptr;
@@ -434,7 +457,7 @@ bool drain(Encoder& enc, AVCodecContext* ctx, AVStream*, std::uint64_t& bytes, s
 /// which is the ladder's whole mechanism - "not available" and "present but unusable here" must
 /// both fall through to the next rung rather than abort the run.
 AVCodecContext* try_video(const char* name, const RuntimeConfig& cfg, AVFormatContext* fmt,
-                          std::string& why) {
+                          std::string& why, AVBufferRef* hw_frames = nullptr) {
     const AVCodec* codec = avcodec_find_encoder_by_name(name);
     if (codec == nullptr) {
         why = "not built into this libavcodec";
@@ -473,6 +496,11 @@ AVCodecContext* try_video(const char* name, const RuntimeConfig& cfg, AVFormatCo
                 c->pix_fmt =
                     c->pix_fmt == AV_PIX_FMT_P010LE ? AV_PIX_FMT_YUV420P10LE : AV_PIX_FMT_YUV420P;
         }
+    }
+    if (hw_frames) {
+        c->hw_frames_ctx = av_buffer_ref(hw_frames);
+        c->pix_fmt = AV_PIX_FMT_CUDA;
+        c->sw_pix_fmt = AV_PIX_FMT_NV12;
     }
     c->bit_rate = cfg.bitrate;
     c->gop_size =
@@ -541,6 +569,72 @@ AVCodecContext* try_video(const char* name, const RuntimeConfig& cfg, AVFormatCo
     return c;
 }
 
+#if LIBERTAS_HAVE_FFNVCODEC
+// The CUDA device whose UUID is the Vulkan compositor's, so NVENC reads memory on that GPU.
+// Null when there is none: no NVIDIA driver, or the compositor runs on another vendor's GPU.
+AVBufferRef* cuda_device_for(const std::array<std::uint8_t, 16>& uuid, CudaFunctions* cu) {
+    int count = 0;
+    if (!cu->cuDeviceGetUuid || cu->cuInit(0) != CUDA_SUCCESS ||
+        cu->cuDeviceGetCount(&count) != CUDA_SUCCESS)
+        return nullptr;
+    for (int i = 0; i < count; ++i) {
+        CUdevice device = 0;
+        CUuuid id{};
+        if (cu->cuDeviceGet(&device, i) != CUDA_SUCCESS ||
+            cu->cuDeviceGetUuid(&id, device) != CUDA_SUCCESS ||
+            std::memcmp(id.bytes, uuid.data(), uuid.size()) != 0)
+            continue;
+        AVBufferRef* result = nullptr;
+        if (av_hwdevice_ctx_create(&result, AV_HWDEVICE_TYPE_CUDA, std::to_string(i).c_str(),
+                                   nullptr, 0) < 0)
+            return nullptr;
+        return result;
+    }
+    return nullptr;
+}
+
+// Reopens an NV12 NVENC context to take CUDA frames. Any failure leaves the CPU-input encoder.
+void open_device_input(Encoder& enc, const char* name, AVFormatContext* fmt) {
+    if (std::strcmp(name, "h264_nvenc") != 0 || enc.vctx->pix_fmt != AV_PIX_FMT_NV12 ||
+        std::ranges::all_of(enc.cfg.gpu_uuid, [](auto b) { return b == 0; }))
+        return;
+    const auto give_up = [&](const char* why) {
+        lc::warn("NVENC GPU input unavailable ({}); using system-memory frames", why);
+        av_buffer_unref(&enc.cuda_frames);
+        av_buffer_unref(&enc.cuda_device);
+        cuda_free_functions(&enc.cu);
+    };
+    if (cuda_load_functions(&enc.cu, nullptr) < 0 || !enc.cu->cuImportExternalMemory ||
+        !enc.cu->cuExternalMemoryGetMappedBuffer || !enc.cu->cuDestroyExternalMemory)
+        return give_up("CUDA driver lacks external memory");
+    enc.cuda_device = cuda_device_for(enc.cfg.gpu_uuid, enc.cu);
+    if (!enc.cuda_device)
+        return give_up("compositor GPU is not a CUDA device");
+    enc.cuda_frames = av_hwframe_ctx_alloc(enc.cuda_device);
+    if (!enc.cuda_frames)
+        return give_up("frames context");
+    auto* frames = reinterpret_cast<AVHWFramesContext*>(enc.cuda_frames->data);
+    frames->format = AV_PIX_FMT_CUDA;
+    frames->sw_format = AV_PIX_FMT_NV12;
+    frames->width = enc.vctx->width;
+    frames->height = enc.vctx->height;
+    frames->initial_pool_size = 0; // Frames point at imported memory; the pool is never drawn.
+    if (av_hwframe_ctx_init(enc.cuda_frames) < 0)
+        return give_up("frames context init");
+    auto cfg = enc.cfg;
+    std::string why;
+    // try_video sets NV12; the CUDA context replaces it with hardware frames of that layout.
+    AVCodecContext* hardware = try_video(name, cfg, fmt, why, enc.cuda_frames);
+    if (!hardware)
+        return give_up(why.c_str());
+    avcodec_free_context(&enc.vctx);
+    enc.vctx = hardware;
+    lc::info("NVENC reads frames from GPU memory (zero-copy)");
+}
+#else
+void open_device_input(Encoder&, const char*, AVFormatContext*) {}
+#endif
+
 } // namespace
 
 EncoderPtr encoder_open(const RuntimeConfig& cfg, std::string& error) {
@@ -589,6 +683,7 @@ EncoderPtr encoder_open(const RuntimeConfig& cfg, std::string& error) {
         if (enc->vctx != nullptr) {
             enc->stats.tier = rung.tier;
             enc->stats.video_encoder = rung.name;
+            open_device_input(*enc, rung.name, enc->fmt);
             break;
         }
         error = std::format("{}: {}", rung.name, why);
@@ -613,7 +708,8 @@ EncoderPtr encoder_open(const RuntimeConfig& cfg, std::string& error) {
     avcodec_parameters_from_context(enc->vst->codecpar, enc->vctx);
 
     enc->vframe = av_frame_alloc();
-    enc->vframe->format = enc->vctx->pix_fmt;
+    enc->vframe->format =
+        enc->vctx->pix_fmt == AV_PIX_FMT_CUDA ? AV_PIX_FMT_NV12 : enc->vctx->pix_fmt;
     enc->vframe->width = enc->vctx->width;
     enc->vframe->height = enc->vctx->height;
     enc->vframe->colorspace = enc->vctx->colorspace;
@@ -936,7 +1032,21 @@ bool encoder_video(Encoder& enc, const std::uint8_t* bgra, std::size_t stride, s
     const auto t_begin = std::chrono::steady_clock::now();
     enc.vframe->pict_type = enc.force_keyframe ? AV_PICTURE_TYPE_I : AV_PICTURE_TYPE_NONE;
     enc.force_keyframe = false;
-    const int r = avcodec_send_frame(enc.vctx, enc.vframe);
+    // An encoder opened for GPU frames still takes the occasional host frame (odd canvas size,
+    // or every GPU slot still queued in NVENC): upload it rather than fail the output.
+    AVFrame* upload = nullptr;
+    if (encoder_takes_device_frames(enc)) {
+        upload = av_frame_alloc();
+        if (!upload || av_hwframe_get_buffer(enc.cuda_frames, upload, 0) < 0 ||
+            av_hwframe_transfer_data(upload, enc.vframe, 0) < 0 ||
+            av_frame_copy_props(upload, enc.vframe) < 0) {
+            av_frame_free(&upload);
+            error = "cannot upload the frame to the GPU encoder";
+            return false;
+        }
+    }
+    const int r = avcodec_send_frame(enc.vctx, upload ? upload : enc.vframe);
+    av_frame_free(&upload);
     if (r < 0) {
         error = std::format("avcodec_send_frame (video): {}", av_err(r));
         return false;
@@ -1077,6 +1187,122 @@ bool encoder_is_nv12(Encoder& enc) {
     return enc.vctx->pix_fmt == AV_PIX_FMT_NV12;
 }
 
+bool encoder_takes_device_frames(const Encoder& enc) {
+    return enc.vctx && enc.vctx->pix_fmt == AV_PIX_FMT_CUDA;
+}
+
+#if LIBERTAS_HAVE_FFNVCODEC
+bool encoder_video_device(Encoder& enc, int fd, std::uint64_t size, std::uint64_t id,
+                          std::uint32_t pitch, std::shared_ptr<const void> owner,
+                          std::int64_t pts_ns, std::string& error) {
+    if (!encoder_takes_device_frames(enc)) {
+        error = "the encoder was not opened for GPU frames";
+        return false;
+    }
+    const auto height = static_cast<std::uint64_t>(enc.vctx->height);
+    if (fd < 0 || pitch < static_cast<std::uint32_t>(enc.vctx->width) ||
+        size < std::uint64_t{pitch} * height * 3 / 2) {
+        error = "invalid GPU frame";
+        return false;
+    }
+    auto* device = reinterpret_cast<AVHWDeviceContext*>(enc.cuda_device->data);
+    auto* cuda = static_cast<AVCUDADeviceContext*>(device->hwctx);
+    CUcontext ignored = nullptr;
+    if (enc.cu->cuCtxPushCurrent(cuda->cuda_ctx) != CUDA_SUCCESS) {
+        error = "cannot enter the CUDA context";
+        return false;
+    }
+    auto found = std::ranges::find(enc.imported, id, &Encoder::Imported::id);
+    if (found == enc.imported.end()) {
+        // CUDA takes ownership of the descriptor it imports, so give it a duplicate.
+        CUDA_EXTERNAL_MEMORY_HANDLE_DESC handle{};
+        handle.type = CU_EXTERNAL_MEMORY_HANDLE_TYPE_OPAQUE_FD;
+        handle.handle.fd = ::dup(fd);
+        handle.size = size;
+        handle.flags = 1; // CUDA_EXTERNAL_MEMORY_DEDICATED: the export is a dedicated allocation.
+        Encoder::Imported entry{id};
+        CUDA_EXTERNAL_MEMORY_BUFFER_DESC buffer{};
+        buffer.size = size;
+        if (handle.handle.fd < 0 ||
+            enc.cu->cuImportExternalMemory(&entry.memory, &handle) != CUDA_SUCCESS) {
+            if (handle.handle.fd >= 0)
+                ::close(handle.handle.fd);
+            enc.cu->cuCtxPopCurrent(&ignored);
+            error = "CUDA could not import the GPU frame";
+            return false;
+        }
+        if (enc.cu->cuExternalMemoryGetMappedBuffer(&entry.pointer, entry.memory, &buffer) !=
+            CUDA_SUCCESS) {
+            enc.cu->cuDestroyExternalMemory(entry.memory);
+            enc.cu->cuCtxPopCurrent(&ignored);
+            error = "CUDA could not map the GPU frame";
+            return false;
+        }
+        // ponytail: the producer keeps at most eight slots; imports for retired ids are freed
+        // only when the encoder closes. Resizing a canvas mid-output stops the output anyway.
+        enc.imported.push_back(entry);
+        found = std::prev(enc.imported.end());
+    }
+    enc.cu->cuCtxPopCurrent(&ignored);
+    if (enc.t0_ns == AV_NOPTS_VALUE)
+        enc.t0_ns = pts_ns;
+
+    AVFrame* frame = av_frame_alloc();
+    if (!frame) {
+        error = "cannot allocate a GPU frame";
+        return false;
+    }
+    frame->format = AV_PIX_FMT_CUDA;
+    frame->width = enc.vctx->width;
+    frame->height = enc.vctx->height;
+    frame->hw_frames_ctx = av_buffer_ref(enc.cuda_frames);
+    frame->data[0] = reinterpret_cast<std::uint8_t*>(found->pointer);
+    frame->data[1] = frame->data[0] + std::uint64_t{pitch} * height;
+    frame->linesize[0] = frame->linesize[1] = static_cast<int>(pitch);
+    // NVENC holds a reference to this buffer until it has read the frame; releasing it releases
+    // `owner`, which is what returns the slot to the compositor.
+    auto* held = new std::shared_ptr<const void>(std::move(owner));
+    frame->buf[0] = av_buffer_create(
+        nullptr, 0, [](void* opaque, std::uint8_t*) { delete static_cast<std::shared_ptr<const void>*>(opaque); },
+        held, 0);
+    if (!frame->buf[0] || !frame->hw_frames_ctx) {
+        if (!frame->buf[0])
+            delete held;
+        av_frame_free(&frame);
+        error = "cannot wrap the GPU frame";
+        return false;
+    }
+    frame->colorspace = enc.vctx->colorspace;
+    frame->color_range = enc.vctx->color_range;
+    frame->color_primaries = enc.vctx->color_primaries;
+    frame->color_trc = enc.vctx->color_trc;
+    frame->pts = av_rescale_q(pts_ns - enc.t0_ns, AVRational{1, 1'000'000'000}, enc.vctx->time_base);
+    frame->pict_type = enc.force_keyframe ? AV_PICTURE_TYPE_I : AV_PICTURE_TYPE_NONE;
+    enc.force_keyframe = false;
+
+    const auto t_begin = std::chrono::steady_clock::now();
+    const int r = avcodec_send_frame(enc.vctx, frame);
+    av_frame_free(&frame);
+    if (r < 0) {
+        error = std::format("avcodec_send_frame (video): {}", av_err(r));
+        return false;
+    }
+    if (!drain(enc, enc.vctx, enc.vst, enc.stats.video_bytes, error))
+        return false;
+    enc.stats.video_encode_ms.push_back(
+        std::chrono::duration<double, std::milli>(std::chrono::steady_clock::now() - t_begin)
+            .count());
+    ++enc.stats.video_frames;
+    return true;
+}
+#else
+bool encoder_video_device(Encoder&, int, std::uint64_t, std::uint64_t, std::uint32_t,
+                          std::shared_ptr<const void>, std::int64_t, std::string& error) {
+    error = "this build has no CUDA support";
+    return false;
+}
+#endif
+
 const EncoderStats& encoder_stats(Encoder& enc) {
     return enc.stats;
 }
@@ -1103,6 +1329,22 @@ void encoder_close(Encoder* enc) {
         av_frame_free(&enc->aframe);
     if (enc->vctx != nullptr)
         avcodec_free_context(&enc->vctx);
+    // After NVENC is gone: it may still have held mapped imports until its context closed.
+#if LIBERTAS_HAVE_FFNVCODEC
+    if (enc->cu) {
+        auto* device = reinterpret_cast<AVHWDeviceContext*>(enc->cuda_device->data);
+        CUcontext previous = nullptr;
+        enc->cu->cuCtxPushCurrent(static_cast<AVCUDADeviceContext*>(device->hwctx)->cuda_ctx);
+        for (const auto& entry : enc->imported) {
+            enc->cu->cuMemFree(entry.pointer); // A mapped buffer is freed before its memory.
+            enc->cu->cuDestroyExternalMemory(entry.memory);
+        }
+        enc->cu->cuCtxPopCurrent(&previous);
+        cuda_free_functions(&enc->cu);
+    }
+#endif
+    av_buffer_unref(&enc->cuda_frames);
+    av_buffer_unref(&enc->cuda_device);
     if (enc->actx != nullptr)
         avcodec_free_context(&enc->actx);
     if (enc->fmt != nullptr) {
