@@ -134,6 +134,7 @@ qt_add_qml_module(munkicast-ui
         qml/StatusBar.qml
         qml/TabStrip.qml
         qml/TextLine.qml
+        qml/ArmSwitch.qml
         qml/ToolButton.qml
         qml/ToolTipText.qml
         qml/WorkspaceTabs.qml
@@ -226,6 +227,13 @@ if(MUNKICAST_BUILD_TESTS)
 endif()
 
 qt_add_resources(munkicast-ui connector_catalog PREFIX "/connectors" FILES data/obs-services.json)
+# Destination icons live with their source CSV so the artist replaces them in one place.
+file(GLOB destination_icons RELATIVE "${PROJECT_SOURCE_DIR}/docs/streaming-destination-icons"
+    CONFIGURE_DEPENDS "${PROJECT_SOURCE_DIR}/docs/streaming-destination-icons/svg/*.svg")
+list(TRANSFORM destination_icons PREPEND "${PROJECT_SOURCE_DIR}/docs/streaming-destination-icons/")
+qt_add_resources(munkicast-ui destination_icons PREFIX "/destinations"
+    BASE "${PROJECT_SOURCE_DIR}/docs/streaming-destination-icons"
+    FILES "${PROJECT_SOURCE_DIR}/docs/streaming-destination-icons/destinations.csv" ${destination_icons})
 
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(SOUP REQUIRED IMPORTED_TARGET libsoup-3.0)

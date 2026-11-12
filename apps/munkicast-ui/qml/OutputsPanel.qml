@@ -72,6 +72,7 @@ Item {
                     required property string implementation
                     required property int bitrateKbps
                     required property string destinationKind
+                    required property string serviceIcon
                     required property string url
                     required property string credentialRef
                     required property bool isEnabled
@@ -79,122 +80,136 @@ Item {
 
                     objectName: "outputBlock"
                     width: content.width
-                    height: outColumn.height + 8
+                    height: 36
+
+                    // One rule for every row: 8px gutter, 8px between columns, everything on
+                    // the row's centre line. Column widths are fixed fractions so the three text
+                    // columns line up across rows whatever the names are.
+                    readonly property int gutter: 8
+                    readonly property bool armable: output.destinationKind !== "file"
+                                                    && output.destinationKind !== "replay"
 
                     Rectangle {
                         anchors.fill: parent
-                        anchors.margins: 4
-                        radius: 2
-                        color: "transparent"
+                        anchors.leftMargin: output.gutter
+                        anchors.rightMargin: output.gutter
+                        anchors.topMargin: 2
+                        anchors.bottomMargin: 2
+                        radius: 3
+                        color: rowMouse.containsMouse ? Theme.c.panelHeaderActive : "transparent"
                         border.width: 1
-                        border.color: output.misconfigured ? Theme.c.error
-                                    : Theme.c.border
+                        border.color: output.misconfigured ? Theme.c.error : Theme.c.border
                     }
 
-                    Column {
-                        id: outColumn
-
-                        anchors.left: parent.left
-                        anchors.right: parent.right
-                        anchors.top: parent.top
-                        anchors.topMargin: 8
-                        anchors.leftMargin: 12
-                        anchors.rightMargin: 12
-                        spacing: 3
-
-                        Item {
-                            width: parent.width
-                            height: 32
-
-                            MouseArea {
-                                id: rowMouse
-                                anchors.fill: parent
-                                acceptedButtons: Qt.LeftButton | Qt.RightButton
-                                onDoubleClicked: Workspace.openEncode(output.outputId)
-                                onClicked: mouse => {
-                                    if (mouse.button !== Qt.RightButton) return;
-                                    const at = mapToItem(outputMenu, mouse.x, mouse.y);
-                                    outputMenu.popup(at.x, at.y, [
-                                        {text: qsTr("Settings"), action: () => { Workspace.openEncode(output.outputId); }},
-                                        {text: qsTr("Include in output configuration"), checked: output.isEnabled,
-                                         action: () => Document.setOutputEnabled(output.outputId, !output.isEnabled)},
-                                        {separator: true},
-                                        {text: qsTr("Remove output"), action: () => Document.removeOutput(output.outputId)}
-                                    ]);
-                                }
-                            }
-
-                            ToolButton {
-                                id: badge
-                                objectName: "outputIcon"
-                                width: 36
-                                height: 24
-                                anchors.left: parent.left
-                                anchors.verticalCenter: parent.verticalCenter
-                                label: output.destinationKind === "file" ? "REC"
-                                     : output.destinationKind === "replay" ? "CLIP" : "LIVE"
-                                tip: qsTr("Settings for %1").arg(output.name)
-                                onClicked: Workspace.openEncode(output.outputId)
-                            }
-                            Row {
-                                anchors.left: badge.right
-                                anchors.leftMargin: 6
-                                anchors.right: outputAction.left
-                                anchors.rightMargin: 6
-                                anchors.verticalCenter: parent.verticalCenter
-                                Text {
-                                    width: parent.width * 0.38
-                                    text: output.name
-                                    font.pixelSize: 11
-                                    color: output.misconfigured ? Theme.c.error : Theme.c.text
-                                    elide: Text.ElideRight
-                                }
-                                Text {
-                                    width: parent.width * 0.29
-                                    text: output.canvasName
-                                    font.pixelSize: 11
-                                    color: Theme.c.textMuted
-                                    elide: Text.ElideRight
-                                }
-                                Text {
-                                    width: parent.width * 0.33
-                                    text: output.encodeName
-                                    font.pixelSize: 11
-                                    color: Theme.c.text
-                                    elide: Text.ElideRight
-                                }
-                            }
-                            ToolButton {
-                                id: outputAction
-                                anchors.right: parent.right
-                                anchors.verticalCenter: parent.verticalCenter
-                                width: 26
-                                height: 26
-                                label: output.destinationKind === "file"
-                                     ? (Preview.recording ? "\u25a0" : "\u25cf") : "\u25b6"
-                                enabled: output.destinationKind === "replay"
-                                       ? Preview.replayActive && !Preview.replaySaving &&
-                                         !Preview.outputPending && Preview.replayDurationMs > 0
-                                       : output.destinationKind === "file" &&
-                                         !Preview.recordingPending &&
-                                         (Preview.recording || output.encodeId === panel.recordTarget)
-                                tip: output.destinationKind === "replay" ? qsTr("Save replay clip")
-                                     : output.destinationKind === "file"
-                                     ? (Preview.recording ? qsTr("Stop recording") : qsTr("Start recording"))
-                                     : qsTr("Use Go Live in the top toolbar")
-                                onClicked: {
-                                    if (output.destinationKind === "replay") {
-                                        Preview.saveReplay(Document.replayPath());
-                                        return;
-                                    }
-                                    if (Preview.recording) Preview.stopRecording(output.encodeId);
-                                    else Preview.startRecording(output.encodeId,
-                                        Document.recordingPathFor(output.encodeId));
-                                }
-                            }
+                    MouseArea {
+                        id: rowMouse
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        acceptedButtons: Qt.LeftButton | Qt.RightButton
+                        onDoubleClicked: Workspace.openEncode(output.outputId)
+                        onClicked: mouse => {
+                            if (mouse.button !== Qt.RightButton) return;
+                            const at = mapToItem(outputMenu, mouse.x, mouse.y);
+                            outputMenu.popup(at.x, at.y, [
+                                {text: qsTr("Settings"), action: () => { Workspace.openEncode(output.outputId); }},
+                                {text: qsTr("Include in output configuration"), checked: output.isEnabled,
+                                 action: () => Document.setOutputEnabled(output.outputId, !output.isEnabled)},
+                                {separator: true},
+                                {text: qsTr("Remove output"), action: () => Document.removeOutput(output.outputId)}
+                            ]);
                         }
+                    }
 
+                    // The service icon, borderless; it opens the node in Encoder Flow.
+                    Item {
+                        id: badge
+                        objectName: "outputIcon"
+                        x: output.gutter * 2
+                        width: 20
+                        height: 20
+                        anchors.verticalCenter: parent.verticalCenter
+                        activeFocusOnTab: true
+                        Accessible.role: Accessible.Button
+                        Accessible.name: qsTr("Settings for %1").arg(output.name)
+                        Accessible.onPressAction: Workspace.openEncode(output.outputId)
+                        Keys.onReturnPressed: Workspace.openEncode(output.outputId)
+                        Keys.onSpacePressed: Workspace.openEncode(output.outputId)
 
+                        Image {
+                            anchors.fill: parent
+                            source: output.serviceIcon
+                            sourceSize: Qt.size(40, 40)
+                            fillMode: Image.PreserveAspectFit
+                            opacity: badgeMouse.containsMouse || badge.activeFocus ? 1 : 0.9
+                        }
+                        Rectangle {
+                            anchors.fill: parent
+                            anchors.margins: -2
+                            radius: 3
+                            color: "transparent"
+                            border.width: 1
+                            border.color: Theme.c.accent
+                            visible: badge.activeFocus
+                        }
+                        MouseArea {
+                            id: badgeMouse
+                            anchors.fill: parent
+                            hoverEnabled: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: Workspace.openEncode(output.outputId)
+                        }
+                        ToolTipText {
+                            text: qsTr("Settings for %1").arg(output.name)
+                            visible: badgeMouse.containsMouse
+                            hoverArea: badgeMouse
+                        }
+                    }
+
+                    Row {
+                        anchors.left: badge.right
+                        anchors.leftMargin: output.gutter
+                        anchors.right: arm.left
+                        anchors.rightMargin: output.gutter
+                        anchors.verticalCenter: parent.verticalCenter
+                        spacing: output.gutter
+
+                        Text {
+                            width: (parent.width - 2 * parent.spacing) * 0.4
+                            text: output.name
+                            font.pixelSize: 11
+                            color: output.misconfigured ? Theme.c.error : Theme.c.text
+                            elide: Text.ElideRight
+                        }
+                        Text {
+                            width: (parent.width - 2 * parent.spacing) * 0.25
+                            text: output.canvasName
+                            font.pixelSize: 11
+                            color: Theme.c.textMuted
+                            elide: Text.ElideRight
+                        }
+                        Text {
+                            width: (parent.width - 2 * parent.spacing) * 0.35
+                            text: output.encodeName
+                            font.pixelSize: 11
+                            color: Theme.c.text
+                            elide: Text.ElideRight
+                        }
+                    }
+
+                    // Same toggle as the Encoder Flow node. Recording and Backtrack have no arm
+                    // state here (their switches are the toolbar's Record and Replay), so the
+                    // slot stays reserved to keep the columns aligned.
+                    ArmSwitch {
+                        id: arm
+                        objectName: "outputArmSwitch"
+                        anchors.right: parent.right
+                        anchors.rightMargin: output.gutter * 2
+                        anchors.verticalCenter: parent.verticalCenter
+                        visible: output.armable
+                        opacity: visible ? 1 : 0
+                        checked: output.isEnabled
+                        name: output.name
+                        onToggled: Document.setOutputEnabled(output.outputId, !output.isEnabled)
                     }
                 }
             }
@@ -204,10 +219,10 @@ Item {
                 delegate: Item {
                     required property string modelData
                     width: content.width
-                    height: 38
+                    height: 36
                     Text {
                         anchors.left: parent.left
-                        anchors.leftMargin: 12
+                        anchors.leftMargin: 16
                         anchors.right: pending.left
                         anchors.rightMargin: 8
                         anchors.verticalCenter: parent.verticalCenter
@@ -219,7 +234,7 @@ Item {
                     Text {
                         id: pending
                         anchors.right: parent.right
-                        anchors.rightMargin: 12
+                        anchors.rightMargin: 16
                         anchors.verticalCenter: parent.verticalCenter
                         text: qsTr("Not available")
                         color: Theme.c.textMuted
@@ -281,17 +296,31 @@ Item {
                 onClicked: Workspace.openEncode()
             }
 
+            // Arms or disarms every streaming destination at once. Reads "Disable All" while
+            // any is armed, so one press always makes the panel safe.
             ToolButton {
-                objectName: "startAllOutputs"
-                width: 72
-                label: qsTr("Start All")
-                enabled: false
-                tip: qsTr("Starting all outputs together is not implemented yet")
-            }
-            ToolButton {
-                label: "\u25a0"
-                enabled: false
-                tip: qsTr("Stop all outputs - not available yet")
+                objectName: "armAllOutputs"
+                readonly property bool anyArmed: {
+                    for (let i = 0; i < armedProbe.count; ++i)
+                        if (armedProbe.itemAt(i) && armedProbe.itemAt(i).armed) return true;
+                    return false;
+                }
+                width: 76
+                label: anyArmed ? qsTr("Disable All") : qsTr("Enable All")
+                enabled: armedProbe.count > 0
+                tip: anyArmed ? qsTr("Disarm every destination") : qsTr("Arm every destination that has somewhere to send")
+                onClicked: Document.setAllOutputsEnabled(!anyArmed)
+
+                Repeater {
+                    id: armedProbe
+                    model: Document.outputs
+                    delegate: Item {
+                        required property string destinationKind
+                        required property bool isEnabled
+                        readonly property bool armed: isEnabled && destinationKind !== "file"
+                                                      && destinationKind !== "replay"
+                    }
+                }
             }
 
         }

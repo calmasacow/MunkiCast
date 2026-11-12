@@ -28,6 +28,9 @@ class Connectors : public QObject {
     explicit Connectors(QObject* parent = nullptr);
     static QVariantList catalog();
     static QVariantMap service(const QString& id);
+    /// `qrc:` URL of the icon for a service id (or the recording icon for a file output);
+    /// empty when the service has none, so the caller falls back to its text badge.
+    static QString iconFor(const QString& service, const QString& kind);
 
     bool busy() const { return busy_; }
 

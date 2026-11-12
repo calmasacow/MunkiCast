@@ -29,12 +29,38 @@ std::optional<QString> oauth_callback_code(const QByteArray& request, const QStr
     return query.queryItemValue("code", QUrl::FullyDecoded);
 }
 
+// Display name, icon slug and service status per OBS service name, from the icon set's CSV.
+// ponytail: naive comma split; the CSV's only quoted column is `notes`, which is last and unread.
+static QHash<QString, QStringList> destinationArt() {
+    QHash<QString, QStringList> out;
+    QFile file(QStringLiteral(":/destinations/destinations.csv"));
+    if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+        return out;
+    file.readLine();
+    while (!file.atEnd()) {
+        const auto f = QString::fromUtf8(file.readLine()).trimmed().split(',');
+        if (f.size() >= 5)
+            out.insert(f[1], {f[0], f[2], f[4]});
+    }
+    return out;
+}
+
+QString Connectors::iconFor(const QString& service, const QString& kind) {
+    if (kind == "file")
+        return QStringLiteral("qrc:/destinations/svg/RECORDING.svg");
+    if (kind == "replay")
+        return QStringLiteral("qrc:/destinations/svg/replay-backtrack.svg");
+    const auto slug = Connectors::service(service).value("icon").toString();
+    return slug.isEmpty() ? QString{} : QStringLiteral("qrc:/destinations/svg/%1.svg").arg(slug);
+}
+
 QVariantList Connectors::catalog() {
     static const QVariantList entries = [] {
+        const auto art = destinationArt();
         QVariantList out{
-            QVariantMap{{"id", "rtmp"}, {"title", "RTMP"}, {"kind", "rtmp"}},
-            QVariantMap{{"id", "srt"}, {"title", "SRT (not available yet)"}, {"kind", "srt"}},
-            QVariantMap{{"id", "whip"}, {"title", "WHIP (not available yet)"}, {"kind", "whip"}}};
+            QVariantMap{{"id", "rtmp"}, {"title", "RTMP"}, {"kind", "rtmp"}, {"icon", "RTMP"}},
+            QVariantMap{{"id", "srt"}, {"title", "SRT (not available yet)"}, {"kind", "srt"}, {"icon", "SRT"}},
+            QVariantMap{{"id", "whip"}, {"title", "WHIP (not available yet)"}, {"kind", "whip"}, {"icon", "whip"}}};
         QFile file(QStringLiteral(":/connectors/data/obs-services.json"));
         if (!file.open(QIODevice::ReadOnly))
             return out;
@@ -60,8 +86,11 @@ QVariantList Connectors::catalog() {
             if (id == "twitch")
                 servers.prepend(
                     QVariantMap{{"id", "rtmp://live.twitch.tv/app"}, {"title", "Auto"}});
+            const auto a = art.value(name);
             out.append(QVariantMap{{"id", id},
-                                   {"title", id == "youtube" ? "YouTube" : name == "Twitter" ? "x.com" : name},
+                                   {"title", a.isEmpty() ? name : a[0]},
+                                   {"icon", a.value(1)},
+                                   {"discontinued", a.value(2) == "discontinued"},
                                    {"kind", "rtmp"},
                                    {"servers", servers},
                                    {"oauth", id == "twitch" || id == "youtube"},

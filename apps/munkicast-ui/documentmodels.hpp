@@ -505,6 +505,8 @@ struct OutputRow {
     QString implementation;
     int bitrateKbps = 0;
     QString destinationKind;
+    /// `qrc:` icon for the destination service; empty means the text badge.
+    QString serviceIcon;
     QString url;
     /// The *name* of a credential. There is no field anywhere in this program that holds the
     /// credential itself (ADR-0022), and this row is one of the places that would be tempting.
@@ -546,6 +548,7 @@ public:
         AudioEncodeNameRole,
         PositionXRole,
         PositionYRole,
+        ServiceIconRole,
     };
 
     using RowModelBase::RowModelBase;

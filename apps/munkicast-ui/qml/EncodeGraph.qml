@@ -683,6 +683,7 @@ Item {
             nodeKind: "output"
             nodeId: outputId
             connectionGraph: graph
+            cornerIcon: serviceIcon
 
             required property string outputId
             required property string name
@@ -691,6 +692,7 @@ Item {
             required property string audioEncodeName
             required property string encodeName
             required property string destinationKind
+            required property string serviceIcon
             required property bool isEnabled
             required property bool misconfigured
             required property double positionX
@@ -741,42 +743,12 @@ Item {
             onVideoInputYChanged: report()
             onAudioInputYChanged: report()
 
-            status: Rectangle {
+            status: ArmSwitch {
                 objectName: "encodeArmingSwitch"
                 visible: outputCard.destinationKind !== "file" && outputCard.destinationKind !== "replay"
-                width: 26
-                height: 13
-                radius: 7
-                color: Theme.c.panelHeader
-                border.width: 1
-                border.color: activeFocus ? Theme.c.accent : Theme.c.border
-                activeFocusOnTab: visible
-                Accessible.role: Accessible.CheckBox
-                Accessible.name: qsTr("Arm %1").arg(outputCard.name)
-                Accessible.checkable: true
-                Accessible.checked: outputCard.isEnabled
-                Accessible.onToggleAction: toggle()
-
-                function toggle() {
-                    Document.setOutputEnabled(outputCard.outputId, !outputCard.isEnabled);
-                }
-                Keys.onSpacePressed: toggle()
-                Keys.onReturnPressed: toggle()
-
-                Rectangle {
-                    width: 9
-                    height: 9
-                    radius: 5
-                    y: 2
-                    x: outputCard.isEnabled ? parent.width - 11 : 2
-                    objectName: "encodeArmingIndicator"
-                    color: outputCard.isEnabled ? Theme.c.good : Theme.c.error
-                }
-                MouseArea {
-                    anchors.fill: parent
-                    cursorShape: Qt.PointingHandCursor
-                    onClicked: parent.toggle()
-                }
+                checked: outputCard.isEnabled
+                name: outputCard.name
+                onToggled: Document.setOutputEnabled(outputCard.outputId, !outputCard.isEnabled)
             }
 
             Column {

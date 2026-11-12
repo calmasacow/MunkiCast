@@ -1,0 +1,21 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" viewBox="0 0 128 128">
+  <defs>
+    <style>
+      .cls-1{fill:#000000}
+      .cls-2{font-family:&apos;Source Sans 3&apos;;font-size:40;font-weight:bold;fill:#ffffff;text-anchor:middle}
+      .cls-3{display:none}
+      .cls-4{fill:#ed1c24}
+    </style>
+  </defs>
+  <title>RECORDING.svg</title>
+  <g id="Layer_2" data-name="Layer 2">
+    <path d="M33 5 L95 5 C110.464 5 123 17.536 123 33 L123 95 C123 110.464 110.464 123 95 123 L33 123 C17.536 123 5 110.464 5 95 L5 33 C5 17.536 17.536 5 33 5 Z" class="cls-1"/>
+    <text transform="matrix(1.106 0 0 1.106 64 82.427)" x="0" y="0" xml:space="preserve" class="cls-2"><tspan x="0" y="0">WHIP</tspan></text>
+  </g>
+  <g id="Layer_1" data-name="Layer 1" class="cls-3">
+    <path d="M23.103 64 C23.103 41.413 41.413 23.103 64 23.103 C86.587 23.103 104.897 41.413 104.897 64 C104.897 86.587 86.587 104.897 64 104.897 C41.413 104.897 23.103 86.587 23.103 64 Z" class="cls-4"/>
+  </g>
+  <g id="Layer_3" data-name="Layer 3">
+  </g>
+</svg>

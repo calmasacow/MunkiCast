@@ -6283,6 +6283,39 @@ int main(int argc, char** argv) {
             const auto gears = collect(window->contentItem(), QStringLiteral("manageOutputs"));
             report(collect(window->contentItem(), QStringLiteral("outputsManagerDialog")).isEmpty(),
                    "the redundant outputs manager is removed");
+            {
+                const auto arms = collect(window->contentItem(), QStringLiteral("outputArmSwitch"));
+                int streaming = 0, shown = 0;
+                for (const auto& o : document.projectForBindings().outputs)
+                    streaming += o.destination.kind != ldoc::DestinationKind::File &&
+                                 o.destination.kind != ldoc::DestinationKind::Replay;
+                for (auto* a : arms) shown += a->isVisible();
+                report(shown == streaming, "only streaming destinations show an arm toggle");
+                for (auto* icon : icons)
+                    report(icon->width() <= icon->parentItem()->width() && icon->x() >= 0,
+                           "the destination icon sits inside its row");
+                const auto all = collect(window->contentItem(), QStringLiteral("armAllOutputs"));
+                report(all.size() == 1 && all.front()->property("label").toString() == "Enable All",
+                       "with nothing armed the footer offers Enable All");
+                auto armable = std::ranges::find_if(document.projectForBindings().outputs, [](const auto& o) {
+                    return o.destination.kind == ldoc::DestinationKind::Rtmp;
+                });
+                if (armable != document.projectForBindings().outputs.end()) {
+                    const auto id = QString::fromStdString(armable->id.to_string());
+                    const bool hadUrl = !armable->destination.url.empty();
+                    if (!hadUrl) document.setOutputDestination(id, QStringLiteral("rtmp"), QStringLiteral("rtmp://127.0.0.1/live"));
+                    document.setAllOutputsEnabled(true);
+                    settle();
+                    const auto armed = std::ranges::find_if(document.projectForBindings().outputs,
+                        [&](const auto& o) { return o.id.to_string() == id.toStdString(); });
+                    report(armed != document.projectForBindings().outputs.end() && armed->enabled &&
+                               all.front()->property("label").toString() == "Disable All",
+                           "Enable All arms a destination and the footer then offers Disable All");
+                    document.undo();
+                    if (!hadUrl) document.undo();
+                    settle();
+                }
+            }
             if (!rows.isEmpty() && !icons.isEmpty() && !gears.isEmpty()) {
                 const int previous_workspace = workspace.activeWorkspace();
                 const auto selected = rows.front()->property("outputId").toString();

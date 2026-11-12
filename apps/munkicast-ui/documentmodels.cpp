@@ -239,6 +239,7 @@ QVariant OutputModel::data(const QModelIndex& index, int role) const {
     case ImplementationRole:  return r->implementation;
     case BitrateRole:         return r->bitrateKbps;
     case DestinationKindRole: return r->destinationKind;
+    case ServiceIconRole:     return r->serviceIcon;
     case UrlRole:             return r->url;
     case CredentialRefRole:   return r->credentialRef;
     case EnabledRole:         return r->enabled;
@@ -264,6 +265,7 @@ QHash<int, QByteArray> OutputModel::roleNames() const {
         {ImplementationRole, "implementation"},
         {BitrateRole, "bitrateKbps"},
         {DestinationKindRole, "destinationKind"},
+        {ServiceIconRole, "serviceIcon"},
         {UrlRole, "url"},
         {CredentialRefRole, "credentialRef"},
         // Not "enabled": that is QQuickItem's own property, and a delegate exposing a role

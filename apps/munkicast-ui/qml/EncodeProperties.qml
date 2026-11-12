@@ -155,26 +155,55 @@ Item {
             width: parent.width - 28
             spacing: 6
 
-            Text {
+            Row {
                 width: parent.width
-                text: {
-                    if (panel.revision < 0) return "";
-                    if (panel.selectedKind === "encode")
-                        return qsTr("Properties: %1").arg(panel.encode.name || "");
-                    if (panel.selectedKind === "audio-encode")
-                        return qsTr("Properties: %1").arg(panel.audio.name || "");
-                    if (panel.selectedKind === "canvas")
-                        return qsTr("Properties: %1").arg(
-                            Document.canvasNameOf(panel.selectedId));
-                    if (panel.selectedKind === "output" || panel.selectedKind === "bus")
-                        return qsTr("Properties: %1").arg(nodeName.value);
-                    return qsTr("Properties");
+                spacing: 6
+
+                Text {
+                    id: titleLabel
+                    visible: headerIcon.visible
+                    text: qsTr("Properties:")
+                    font.pixelSize: 15
+                    font.weight: Font.DemiBold
+                    color: Theme.c.accent
+                    bottomPadding: 6
                 }
-                font.pixelSize: 15
-                font.weight: Font.DemiBold
-                color: Theme.c.accent
-                elide: Text.ElideRight
-                bottomPadding: 6
+
+                Image {
+                    id: headerIcon
+                    objectName: "propertiesServiceIcon"
+                    visible: panel.selectedKind === "output" && (panel.destination.serviceIcon || "") !== ""
+                    source: visible ? panel.destination.serviceIcon : ""
+                    width: 18
+                    height: 18
+                    y: (titleLabel.implicitHeight - titleLabel.bottomPadding - height) / 2
+                    sourceSize: Qt.size(36, 36)
+                    fillMode: Image.PreserveAspectFit
+                }
+
+                Text {
+                    width: parent.width - (headerIcon.visible ? titleLabel.width + headerIcon.width + 12 : 0)
+                    text: {
+                        if (panel.revision < 0) return "";
+                        if (panel.selectedKind === "encode")
+                            return qsTr("Properties: %1").arg(panel.encode.name || "");
+                        if (panel.selectedKind === "audio-encode")
+                            return qsTr("Properties: %1").arg(panel.audio.name || "");
+                        if (panel.selectedKind === "canvas")
+                            return qsTr("Properties: %1").arg(
+                                Document.canvasNameOf(panel.selectedId));
+                        if (headerIcon.visible)
+                            return nodeName.value;
+                        if (panel.selectedKind === "output" || panel.selectedKind === "bus")
+                            return qsTr("Properties: %1").arg(nodeName.value);
+                        return qsTr("Properties");
+                    }
+                    font.pixelSize: 15
+                    font.weight: Font.DemiBold
+                    color: Theme.c.accent
+                    elide: Text.ElideRight
+                    bottomPadding: 6
+                }
             }
 
             // Names for the destination and bus selections.
@@ -712,7 +741,9 @@ Item {
                     visible: panel.streamDestination
                     label: qsTr("Destination type")
                     labelWidth: 150
-                    choices: Document.destinationKinds.map(k => k.id)
+                    // Shut-down services stay selectable only on an output already using one.
+                choices: Document.destinationKinds.filter(k => !k.discontinued
+                    || k.id === panel.destination.service).map(k => k.id)
                     choiceLabels: {
                         const labels = {};
                         for (const kind of Document.destinationKinds) labels[kind.id] = kind.title;

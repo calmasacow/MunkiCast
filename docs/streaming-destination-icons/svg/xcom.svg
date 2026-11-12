@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="128" height="128" viewBox="0 0 128 128">
+  <title>xcom.svg</title>
+  <g id="Layer_2" data-name="Layer 2">
+    <path d="M33 5 L95 5 C110.464 5 123 17.536 123 33 L123 95 C123 110.464 110.464 123 95 123 L33 123 C17.536 123 5 110.464 5 95 L5 33 C5 17.536 17.536 5 33 5 Z" fill="#000000"/>
+  </g>
+  <g id="Layer_1" data-name="Layer 1">
+    <path d="M91.056 21.75 L105.397 21.75 L74.075 57.541 L110.922 106.25 L82.078 106.25 L59.47 76.716 L33.633 106.25 L19.272 106.25 L52.767 67.961 L17.444 21.75 L47.019 21.75 L67.433 48.745 Z M86.019 97.678 L93.961 97.678 L42.692 29.875 L34.161 29.875 Z" fill="#ffffff"/>
+  </g>
+</svg>

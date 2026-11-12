@@ -40,6 +40,8 @@ Item {
     readonly property point outPort: Qt.point(card.x + card.width, card.y + 30)
     /// Filled by the node, drawn at the right of the title row.
     property alias status: statusSlot.data
+    /// Drawn in the bottom-right corner: a destination's service icon. Empty draws nothing.
+    property string cornerIcon: ""
     default property alias body: bodySlot.data
 
     signal pressed(real mouseX, real mouseY)
@@ -202,6 +204,19 @@ Item {
         anchors.bottom: parent.bottom
         anchors.margins: 1
         implicitHeight: childrenRect.height + 8
+    }
+
+    Image {
+        objectName: "nodeCornerIcon"
+        visible: card.cornerIcon !== ""
+        source: card.cornerIcon
+        width: 20
+        height: 20
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        anchors.margins: 6
+        sourceSize: Qt.size(40, 40)
+        fillMode: Image.PreserveAspectFit
     }
 
     // Above the card, below its body: a press anywhere that is not a control selects and

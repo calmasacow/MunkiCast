@@ -99,3 +99,5 @@ target_include_directories(test_connectors PRIVATE ../../apps/munkicast-ui)
 set_target_properties(test_connectors PROPERTIES AUTOMOC ON)
 qt_add_resources(test_connectors connector_catalog_test PREFIX "/connectors"
     BASE ../../apps/munkicast-ui FILES ../../apps/munkicast-ui/data/obs-services.json)
+qt_add_resources(test_connectors destination_csv_test PREFIX "/destinations"
+    BASE ../../docs/streaming-destination-icons FILES ../../docs/streaming-destination-icons/destinations.csv)

@@ -1345,6 +1345,9 @@ void Document::rebuild() {
         const auto kind = ldoc::to_string(o.destination.kind);
         row.destinationKind = QString::fromUtf8(kind.data(),
                                                 static_cast<qsizetype>(kind.size()));
+        row.serviceIcon = Connectors::iconFor(
+            o.destination.service.empty() ? QStringLiteral("rtmp") : qstr(o.destination.service),
+            row.destinationKind);
         row.url = qstr(o.destination.url);
         // The *name* of a credential. The project format has no field for the credential
         // itself, so there is nothing here to leak (ADR-0022).
@@ -4042,6 +4045,23 @@ void Document::setOutputEnabled(const QString& id, bool enabled) {
     edit_output(id, [enabled](ldoc::Output& o) { o.enabled = enabled; });
 }
 
+void Document::setAllOutputsEnabled(bool enabled) {
+    std::vector<ldoc::Command> steps;
+    for (ldoc::Output o : session_->project().outputs) {
+        // Recording and Backtrack are driven by Record/Replay; disarming Backtrack would also
+        // stop the replay buffer, so they are not part of "all destinations".
+        const bool streaming = o.destination.kind != ldoc::DestinationKind::File &&
+                               o.destination.kind != ldoc::DestinationKind::Replay;
+        const bool armable = !enabled || !o.destination.url.empty();
+        if (!streaming || o.enabled == enabled || !armable)
+            continue;
+        o.enabled = enabled;
+        steps.push_back(ldoc::SetOutput{std::move(o)});
+    }
+    if (!steps.empty())
+        run(ldoc::make_batch(std::move(steps), enabled ? "Enable all outputs" : "Disable all outputs"));
+}
+
 void Document::addEncode() {
     const ldoc::Project& p = session_->project();
     const ldoc::Canvas* c = current_canvas();
@@ -4615,6 +4635,8 @@ QVariantMap Document::outputEncoderSettings(const QString& id) const {
             const auto fallback = o.destination.kind == ldoc::DestinationKind::Rtmps
                 ? QStringLiteral("rtmp") : settings["destinationKind"].toString();
             settings["service"] = o.destination.service.empty() ? fallback : qstr(o.destination.service);
+            settings["serviceIcon"] = Connectors::iconFor(settings["service"].toString(),
+                                                          settings["destinationKind"].toString());
             return settings;
         }
     }

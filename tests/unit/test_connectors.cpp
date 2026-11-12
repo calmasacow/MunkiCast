@@ -59,6 +59,27 @@ LTEST_CASE(catalog_has_unique_destinations_and_usable_ingest_servers) {
     CHECK(Connectors::service("missing").isEmpty());
 }
 
+LTEST_CASE(destination_csv_names_icons_and_flags_every_service) {
+    int withIcon = 0;
+    for (const auto& value : Connectors::catalog()) {
+        const auto entry = value.toMap();
+        if (entry.value("id").toString().startsWith("obs:") || entry.value("id") == "twitch")
+            withIcon += !entry.value("icon").toString().isEmpty();
+    }
+    CHECK(withIcon > 70);
+    CHECK(Connectors::service("obs:Vaughn Live / iNSTAGIB").value("title") == "Vaughn Live");
+    CHECK(Connectors::service("obs:Twitter").value("title") == "x.com");
+    CHECK(Connectors::service("youtube").value("title") == "YouTube");
+    CHECK(Connectors::service("obs:Trovo").value("discontinued").toBool());
+    CHECK(!Connectors::service("twitch").value("discontinued").toBool());
+    CHECK(Connectors::iconFor("twitch", "rtmp") == "qrc:/destinations/svg/twitch.svg");
+    CHECK(Connectors::iconFor("rtmp", "rtmp") == "qrc:/destinations/svg/RTMP.svg");
+    CHECK(Connectors::iconFor("srt", "srt") == "qrc:/destinations/svg/SRT.svg");
+    CHECK(Connectors::iconFor("whip", "whip") == "qrc:/destinations/svg/whip.svg");
+    CHECK(Connectors::iconFor("", "replay") == "qrc:/destinations/svg/replay-backtrack.svg");
+    CHECK(Connectors::iconFor("", "file") == "qrc:/destinations/svg/RECORDING.svg");
+}
+
 LTEST_CASE(kick_and_rumble_offer_stream_key_destinations) {
     const auto kick = Connectors::service("obs:Kick");
     const auto rumble = Connectors::service("obs:Rumble");

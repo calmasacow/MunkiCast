@@ -533,6 +533,9 @@ public:
     Q_INVOKABLE void removeOutput(const QString& id);
     Q_INVOKABLE void renameOutput(const QString& id, const QString& name);
     Q_INVOKABLE void setOutputEnabled(const QString& id, bool enabled);
+    /// Arm or disarm every streaming destination in one undo step. Recording and Backtrack are
+    /// untouched; destinations with no URL yet are skipped rather than failing the batch.
+    Q_INVOKABLE void setAllOutputsEnabled(bool enabled);
     Q_INVOKABLE void setReplaySettings(const QString& id, int seconds, int memoryMB);
     Q_INVOKABLE QString replayOutputId() const;
     Q_INVOKABLE QString replayPath() const;

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:xlink="http://www.w3.org/1999/xlink" width="128" height="128" viewBox="0 0 128 128">
+  <title>RECORDING.svg</title>
+  <g id="Layer_2" data-name="Layer 2">
+    <path d="M33 5 L95 5 C110.464 5 123 17.536 123 33 L123 95 C123 110.464 110.464 123 95 123 L33 123 C17.536 123 5 110.464 5 95 L5 33 C5 17.536 17.536 5 33 5 Z" fill="#ffffff"/>
+  </g>
+  <g id="Layer_1" data-name="Layer 1">
+    <path d="M23.103 64 C23.103 41.413 41.413 23.103 64 23.103 C86.587 23.103 104.897 41.413 104.897 64 C104.897 86.587 86.587 104.897 64 104.897 C41.413 104.897 23.103 86.587 23.103 64 Z" fill="#ed1c24"/>
+  </g>
+</svg>
