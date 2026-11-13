@@ -167,7 +167,9 @@ class Preview : public QObject {
     void schedule_tick();
     void try_send();
     void update_size();
-    void on_readable();
+    struct Received;
+    void on_received(Received& item);
+    void stop_reader();
     void on_writable();
     void lose(const QString& why);
     void reap(bool patient);

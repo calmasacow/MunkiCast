@@ -75,6 +75,12 @@ struct Preview::Held {
     std::uint32_t fps_num = 0, fps_den = 0;
 };
 
+struct Preview::Received {
+    lcomp::PreviewEvent event;
+    QImage image;
+    QString error;
+};
+
 struct Preview::State {
     std::mutex mu;
     std::map<QString, Held> frames;
@@ -91,7 +97,6 @@ struct Preview::State {
 struct Preview::Link {
     std::optional<lcomp::PreviewLink> channel;
     pid_t child = -1;
-    QSocketNotifier* read = nullptr;
     QSocketNotifier* write = nullptr;
     bool alive = false;
     bool in_flight = false;
@@ -106,6 +111,11 @@ struct Preview::Link {
     ldoc::Project pending;
     std::vector<QString> sent;
     std::map<QString, Held> incoming;
+    /// Receives and decodes off the UI thread; the UI only handles finished events. Last, so it
+    /// is joined before `channel` is destroyed.
+    /// Tells a restarted link's events from its predecessor's; an address could be reused.
+    std::uint64_t id = [] { static std::uint64_t next = 0; return ++next; }();
+    std::jthread reader;
 };
 
 class ProgramImageProvider : public QQuickImageProvider {
@@ -202,10 +212,9 @@ Preview::Preview(QObject* parent)
 Preview::~Preview() {
     if (!link_)
         return;
-    if (link_->read != nullptr)
-        link_->read->setEnabled(false);
     if (link_->write != nullptr)
         link_->write->setEnabled(false);
+    stop_reader();
     if (link_->channel) {
         link_->channel->quit();
         link_->channel->close();
@@ -811,14 +820,41 @@ void Preview::start() {
         return;
     }
     link_->alive = true;
-    link_->read = new QSocketNotifier(link_->channel->poll_fd(), QSocketNotifier::Read, this);
     link_->write = new QSocketNotifier(link_->channel->poll_fd(), QSocketNotifier::Write, this);
     link_->write->setEnabled(false);
-    QObject::connect(link_->read, &QSocketNotifier::activated, this, [this] { on_readable(); });
     QObject::connect(link_->write, &QSocketNotifier::activated, this, [this] { on_writable(); });
-    // A frame can already be queued by the time the notifier is created. The notifier is
-    // level-triggered, and this still drains whatever arrived between hello and the first poll.
-    QTimer::singleShot(0, this, [this] { on_readable(); });
+    // Receive, decode and copy pixels here, off the UI thread: a 4K frame copy and its QImage
+    // used to sit between the UI's own paints. Events are posted back in order. `link` guards
+    // against delivery after lose()/restart() replaced the link.
+    Link* link = link_.get();
+    const auto id = link->id;
+    link_->reader = std::jthread([this, link, id](std::stop_token stop) {
+        while (!stop.stop_requested()) {
+            auto event = link->channel->receive(50);
+            if (event && !event->has_value())
+                continue;
+            auto item = std::make_shared<Received>();
+            const bool last = !event || (**event).kind == lcomp::PreviewEvent::Kind::PeerGone;
+            if (!event) {
+                item->error = QString::fromStdString(event.error());
+            } else {
+                item->event = std::move(**event);
+                if (item->event.kind == lcomp::PreviewEvent::Kind::Frame)
+                    item->image = image_from(item->event.frame);
+            }
+            QMetaObject::invokeMethod(this, [this, id, item] {
+                if (link_ && link_->id == id) on_received(*item);
+            }, Qt::QueuedConnection);
+            if (last) return;
+        }
+    });
+}
+
+void Preview::stop_reader() {
+    if (link_ && link_->reader.joinable()) {
+        link_->reader.request_stop();
+        link_->reader.join();
+    }
 }
 
 void Preview::try_send() {
@@ -848,18 +884,15 @@ void Preview::try_send() {
         link_->sent.push_back(QString::fromStdString(canvas.id.to_string()));
 }
 
-void Preview::on_readable() {
+void Preview::on_received(Received& item) {
     if (!link_ || !link_->channel)
         return;
-    for (;;) {
-        auto event = link_->channel->poll();
-        if (!event) {
-            lose(QString::fromStdString(event.error()));
-            return;
-        }
-        if (!event->has_value())
-            return;
-        lcomp::PreviewEvent& got = **event;
+    if (!item.error.isEmpty()) {
+        lose(item.error);
+        return;
+    }
+    {
+        lcomp::PreviewEvent& got = item.event;
         switch (got.kind) {
         case lcomp::PreviewEvent::Kind::Projector: {
             const auto document = QJsonDocument::fromJson(QByteArray::fromStdString(got.projector));
@@ -971,7 +1004,7 @@ void Preview::on_readable() {
             held.render_lag_frames = got.frame.render_lag_frames;
             held.fps_num = got.frame.fps_num;
             held.fps_den = got.frame.fps_den;
-            held.image = image_from(got.frame);
+            held.image = std::move(item.image);
             link_->incoming.insert_or_assign(QString::fromStdString(got.frame.canvas.to_string()),
                                              std::move(held));
             break;
@@ -1305,10 +1338,9 @@ void Preview::lose(const QString& why) {
         recording_pending_ = false;
         emit recordingChanged();
     }
-    if (link_->read != nullptr)
-        link_->read->setEnabled(false);
     if (link_->write != nullptr)
         link_->write->setEnabled(false);
+    stop_reader();
     if (link_->channel) {
         link_->channel->close();
         link_->channel.reset();
@@ -1326,6 +1358,7 @@ void Preview::lose(const QString& why) {
 }
 
 void Preview::restart() {
+    stop_reader();
     if (link_ && link_->channel) {
         link_->channel->quit();
         link_->channel->close();
