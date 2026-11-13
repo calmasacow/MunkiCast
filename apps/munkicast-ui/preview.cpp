@@ -377,7 +377,7 @@ QString Preview::caption(const QString& canvasId) const {
 
 void Preview::setLive(bool live, ldoc::Fps rate) {
     program_live_ = live;
-    live = live || recording_ || streaming_ || replay_ || !filter_target_.isEmpty() ||
+    live = live || recording_ || streaming_ || replay_ || previewing() ||
            std::chrono::steady_clock::now() < transition_until_;
     if ((recording_ || streaming_ || replay_) && recording_rate_.valid() && (!rate.valid() || recording_rate_.hz() > rate.hz()))
         rate = recording_rate_;
@@ -398,7 +398,7 @@ void Preview::setLive(bool live, ldoc::Fps rate) {
             live_deadline_ += live_period_;
             if (live_deadline_ <= now)
                 live_deadline_ += live_period_ * ((now - live_deadline_) / live_period_ + 1);
-            if (program_live_ || recording_ || streaming_ || replay_ || !filter_target_.isEmpty() ||
+            if (program_live_ || recording_ || streaming_ || replay_ || previewing() ||
                 now < transition_until_)
                 schedule_tick();
         });
@@ -687,68 +687,8 @@ void Preview::publish(const ldoc::Project& project) {
     // blanking the frame and rebuilding the source once a second instead of letting it count.
     // The colour rules are the one thing the worker cannot derive, so they travel as settings
     // and are resolved there too.
-    if (const auto owner = ldoc::Id::parse(filter_target_.toStdString());
-        owner && !project.canvases.empty()) {
-        auto canvas = project.canvases.front();
-        canvas.id = filter_canvas_;
-        canvas.name = "Filter preview";
-        canvas.emergency_scene.reset();
-        ldoc::Scene scene;
-        scene.id = filter_scene_;
-        scene.name = "Filter preview";
-        scene.canvas = canvas.id;
-        if (const auto* source = project.source(*owner)) {
-            auto node = ldoc::make_node(ldoc::NodeKind::Source, source->name);
-            node.id = filter_node_;
-            std::get<ldoc::SourceData>(node.data).source = source->id;
-            node.layout.fit = ldoc::FitMode::Contain;
-            node.layout.size = {double(canvas.width), double(canvas.height)};
-            scene.roots.push_back(node);
-        } else if (const auto* selected = project.scene(*owner)) {
-            if (const auto* original = project.canvas(selected->canvas)) {
-                canvas.width = original->width;
-                canvas.height = original->height;
-            }
-            auto node = ldoc::make_node(ldoc::NodeKind::Precomp, selected->name);
-            node.id = filter_node_;
-            auto& data = std::get<ldoc::PrecompData>(node.data);
-            data.scene = selected->id;
-            data.size = {double(canvas.width), double(canvas.height)};
-            scene.roots.push_back(node);
-        } else {
-            for (const auto& existing : project.scenes)
-                if (const auto* node = ldoc::find_node(existing.roots, *owner)) {
-                    scene.roots = {*node};
-                    scene.roots[0].visible = true;
-                    scene.roots[0].transform = {};
-                    const auto remap = [&](ldoc::Id& id) {
-                        const auto [it, inserted] =
-                            filter_ids_.try_emplace(id, ldoc::Id::generate());
-                        (void)inserted;
-                        id = it->second;
-                    };
-                    const auto clone = [&](auto&& self, ldoc::Node& item) -> void {
-                        remap(item.id);
-                        for (auto& effect : item.effects)
-                            remap(effect.id);
-                        if (auto* group = std::get_if<ldoc::GroupData>(&item.data))
-                            for (auto& child : group->children)
-                                self(self, child);
-                    };
-                    clone(clone, scene.roots[0]);
-                    break;
-                }
-        }
-        ldoc::Deck deck;
-        deck.id = filter_deck_;
-        deck.name = "Filter preview";
-        deck.canvas = canvas.id;
-        deck.program_scene = scene.id;
-        link_->pending.settings.extra["ui.filter-preview-deck"] = deck.id.to_string();
-        link_->pending.canvases.push_back(canvas);
-        link_->pending.scenes.push_back(scene);
-        link_->pending.decks.push_back(deck);
-    }
+    for (auto& [name, spot] : spots_)
+        stage_spot(project, spot);
     link_->refresh_only = false;
     link_->have_pending = true;
     if (!project.canvases.empty())
@@ -775,19 +715,107 @@ std::string Preview::publishedSourceSetting(const QString& sourceId,
     return text ? *text : std::string{};
 }
 
-QString Preview::setFilterTarget(const QString& owner) {
-    if (filter_target_ != owner) {
-        filter_target_ = owner;
-        filter_ids_.clear();
+Preview::Spot& Preview::spot(const QString& slot) {
+    return spots_[slot];
+}
+
+bool Preview::previewing() const {
+    for (const auto& [name, spot] : spots_) {
+        (void)name;
+        if (!spot.target.isEmpty())
+            return true;
+    }
+    return false;
+}
+
+/// Adds one hidden canvas showing just `spot.target`: a source, a whole scene, or a single node
+/// taken out of the scene it lives in. The renderer draws it like any other canvas, so a caller
+/// only needs the canvas key and an `image://program/` URL -- no separate thumbnail protocol.
+void Preview::stage_spot(const ldoc::Project& project, Spot& spot) {
+    const auto owner = ldoc::Id::parse(spot.target.toStdString());
+    if (!owner || project.canvases.empty())
+        return;
+    auto canvas = project.canvases.front();
+    canvas.id = spot.canvas;
+    canvas.name = "Preview";
+    canvas.emergency_scene.reset();
+    ldoc::Scene scene;
+    scene.id = spot.scene;
+    scene.name = "Preview";
+    scene.canvas = canvas.id;
+    if (const auto* source = project.source(*owner)) {
+        auto node = ldoc::make_node(ldoc::NodeKind::Source, source->name);
+        node.id = spot.node;
+        std::get<ldoc::SourceData>(node.data).source = source->id;
+        node.layout.fit = ldoc::FitMode::Contain;
+        node.layout.size = {double(canvas.width), double(canvas.height)};
+        scene.roots.push_back(node);
+    } else if (const auto* selected = project.scene(*owner)) {
+        if (const auto* original = project.canvas(selected->canvas)) {
+            canvas.width = original->width;
+            canvas.height = original->height;
+        }
+        auto node = ldoc::make_node(ldoc::NodeKind::Precomp, selected->name);
+        node.id = spot.node;
+        auto& data = std::get<ldoc::PrecompData>(node.data);
+        data.scene = selected->id;
+        data.size = {double(canvas.width), double(canvas.height)};
+        scene.roots.push_back(node);
+    } else {
+        for (const auto& existing : project.scenes) {
+            if (const auto* node = ldoc::find_node(existing.roots, *owner)) {
+                scene.roots = {*node};
+                scene.roots[0].visible = true;
+                scene.roots[0].transform = {};
+                // Fresh ids, kept across republishes: the renderer retains media per node, and
+                // reusing the live node's id would make the two fight over one worker.
+                const auto remap = [&](ldoc::Id& id) {
+                    const auto [it, inserted] = spot.ids.try_emplace(id, ldoc::Id::generate());
+                    (void)inserted;
+                    id = it->second;
+                };
+                const auto clone = [&](auto&& self, ldoc::Node& item) -> void {
+                    remap(item.id);
+                    for (auto& effect : item.effects)
+                        remap(effect.id);
+                    if (auto* group = std::get_if<ldoc::GroupData>(&item.data))
+                        for (auto& child : group->children)
+                            self(self, child);
+                };
+                clone(clone, scene.roots[0]);
+                break;
+            }
+        }
+    }
+    ldoc::Deck deck;
+    deck.id = spot.deck;
+    deck.name = "Preview";
+    deck.canvas = canvas.id;
+    deck.program_scene = scene.id;
+    link_->pending.settings.extra["ui.filter-preview-deck"] = deck.id.to_string();
+    link_->pending.canvases.push_back(std::move(canvas));
+    link_->pending.scenes.push_back(std::move(scene));
+    link_->pending.decks.push_back(std::move(deck));
+}
+
+QString Preview::setPreviewTarget(const QString& slot, const QString& owner) {
+    Spot& chosen = spot(slot);
+    if (chosen.target != owner) {
+        chosen.target = owner;
+        chosen.ids.clear();
         {
             std::lock_guard lock(state_->mu);
-            state_->frames.erase(QString::fromStdString(filter_canvas_.to_string()));
+            state_->frames.erase(QString::fromStdString(chosen.canvas.to_string()));
         }
         setLive(program_live_,
                 latest_.canvases.empty() ? ldoc::Fps{} : latest_.canvases.front().fps);
         publish(latest_);
     }
-    return owner.isEmpty() ? QString{} : QString::fromStdString(filter_canvas_.to_string());
+    return owner.isEmpty() ? QString{} : QString::fromStdString(chosen.canvas.to_string());
+}
+
+QString Preview::setFilterTarget(const QString& owner) {
+    return setPreviewTarget(QStringLiteral("filters"), owner);
 }
 
 /// Posted, not emitted directly. `start` runs while the singleton is being created, which is

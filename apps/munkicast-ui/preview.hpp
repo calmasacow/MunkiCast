@@ -87,6 +87,16 @@ class Preview : public QObject {
     /// -1 releases the manual transition; [0, 1] mixes Main and its linked destinations.
     Q_INVOKABLE void setManualTransition(double progress);
     Q_INVOKABLE QString setFilterTarget(const QString& owner);
+    /// A small picture of one source, scene or node, for a thumbnail or a settings dialog.
+    ///
+    /// `slot` names the asker ("sources", "settings"), so two panels previewing different
+    /// things do not fight over one target the way a single slot would. An empty `owner`
+    /// releases that slot. Returns the canvas key to put in an `image://program/` URL, or
+    /// empty when nothing is being previewed.
+    ///
+    /// Each live slot costs one composite per tick, so callers keep the count small: the
+    /// source list previews only the selected row, not every visible one.
+    Q_INVOKABLE QString setPreviewTarget(const QString& slot, const QString& owner);
 
     /// Projectors use renderer-owned GPU windows, independent of dock resolution/UI activity.
     Q_INVOKABLE QVariantList projectorScreens() const;
@@ -217,12 +227,21 @@ class Preview : public QObject {
     double manual_progress_ = -1;
     std::map<ldoc::Id, std::pair<std::optional<ldoc::Id>, ldoc::Id>> manual_targets_;
     std::map<ldoc::Id, std::optional<ldoc::Id>> immediate_targets_;
-    QString filter_target_;
-    ldoc::Id filter_canvas_ = ldoc::Id::generate();
-    ldoc::Id filter_scene_ = ldoc::Id::generate();
-    ldoc::Id filter_node_ = ldoc::Id::generate();
-    ldoc::Id filter_deck_ = ldoc::Id::generate();
-    std::map<ldoc::Id, ldoc::Id> filter_ids_;
+    /// One synthesised canvas per asker. The filters dialog is the slot named "filters";
+    /// its ids are fixed at construction so its image URL survives a target change.
+    struct Spot {
+        QString target;
+        ldoc::Id canvas = ldoc::Id::generate();
+        ldoc::Id scene = ldoc::Id::generate();
+        ldoc::Id node = ldoc::Id::generate();
+        ldoc::Id deck = ldoc::Id::generate();
+        /// Cloned node ids, so a previewed node keeps stable ids across republishes.
+        std::map<ldoc::Id, ldoc::Id> ids;
+    };
+    std::map<QString, Spot> spots_;
+    [[nodiscard]] Spot& spot(const QString& slot);
+    [[nodiscard]] bool previewing() const;
+    void stage_spot(const ldoc::Project& project, Spot& spot);
     std::map<QObject*, int> preview_sizes_;
     std::uint32_t preview_edge_ = 0;
     struct RenderBaseline { std::uint64_t ns = 0, frames = 0, missed = 0; };
