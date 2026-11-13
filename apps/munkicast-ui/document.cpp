@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 
 #include "document.hpp"
+#include <QPointer>
 #include <QJsonArray>
 #include <QJsonDocument>
 
@@ -142,8 +143,8 @@ Document::Document(QObject* parent) : QObject(parent) {
     autosave_.setSingleShot(true);
     autosave_.setInterval(2000);
     connect(&autosave_, &QTimer::timeout, this, [this] {
-        if (session_->dirty() && !session_->path().empty())
-            save();
+        if (session_->dirty() && !session_->path().empty() && !live_)
+            saveInBackground();
     });
 
     countdown_actions_.setInterval(100);
@@ -1370,7 +1371,9 @@ void Document::rebuild() {
 
     emit changed();
     emit selectionChanged();
-    if (!session_->path().empty())
+    // Only real edits make the document dirty -- takes do not -- so a scene change never arms a
+    // save. Nothing is saved while recording or streaming; setLive(false) catches up.
+    if (!session_->path().empty() && session_->dirty() && !live_)
         autosave_.start();
 }
 
@@ -5696,6 +5699,11 @@ void Document::redo() {
 }
 
 void Document::save() {
+    if (live_) {
+        save_when_idle_ = true;
+        emit notice(QStringLiteral("Will save when recording and streaming stop."));
+        return;
+    }
     if (session_->path().empty()) {
         saveCurrentCollection();
         return;
@@ -5704,6 +5712,42 @@ void Document::save() {
         emit notice(QStringLiteral("Could not save: %1").arg(qstr(r.error())));
     else
         rememberCollection();
+}
+
+void Document::saveInBackground() {
+    if (session_->path().empty())
+        return;
+    QPointer<Document> self(this);
+    session_->save_async(
+        [self](std::function<void()> completion) {
+            if (self)
+                QMetaObject::invokeMethod(self, std::move(completion), Qt::QueuedConnection);
+        },
+        [self](std::expected<void, std::string> result) {
+            if (!self) return;
+            if (!result)
+                emit self->notice(QStringLiteral("Could not save: %1").arg(qstr(result.error())));
+            else
+                self->rememberCollection();
+        });
+}
+
+void Document::setLive(bool live) {
+    if (live_ == live)
+        return;
+    live_ = live;
+    if (live_) {
+        autosave_.stop();
+        return;
+    }
+    if (session_->dirty() || save_when_idle_) {
+        save_when_idle_ = false;
+        saveInBackground();
+    }
+}
+
+void Document::flushSaves() {
+    session_->wait_for_save();
 }
 
 } // namespace munkicast::ui

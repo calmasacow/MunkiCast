@@ -2,8 +2,11 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include <QFile>
 #include <QImage>
 #include <QTimer>
+#include <algorithm>
+#include <cstring>
 #include <functional>
 #include <stdexcept>
 #include <string_view>
@@ -31,6 +34,31 @@ class AlphaVideo {
     qint64 end_ = 0;
     std::function<void(const QImage&)> publish_;
     std::function<void()> finished_;
+    // Short clips (stingers, overlays) are read once into memory so playback never waits on
+    // the file's storage -- a network share stalling mid-clip froze every source reading it.
+    QByteArray bytes_;
+    qint64 offset_ = 0;
+    AVIOContext* io_ = nullptr;
+
+    static int read_memory(void* opaque, uint8_t* buffer, int size) {
+        auto* self = static_cast<AlphaVideo*>(opaque);
+        const auto left = self->bytes_.size() - self->offset_;
+        if (left <= 0) return AVERROR_EOF;
+        const auto n = static_cast<int>(std::min<qint64>(size, left));
+        std::memcpy(buffer, self->bytes_.constData() + self->offset_, static_cast<std::size_t>(n));
+        self->offset_ += n;
+        return n;
+    }
+    static int64_t seek_memory(void* opaque, int64_t offset, int whence) {
+        auto* self = static_cast<AlphaVideo*>(opaque);
+        const qint64 size = self->bytes_.size();
+        if ((whence & ~AVSEEK_FORCE) == AVSEEK_SIZE) return size;
+        const qint64 base = whence == SEEK_CUR ? self->offset_ : whence == SEEK_END ? size : 0;
+        const qint64 target = base + offset;
+        if (target < 0 || target > size) return AVERROR(EINVAL);
+        self->offset_ = target;
+        return target;
+    }
 
     qint64 position() const {
         return static_cast<qint64>(static_cast<double>(position_()) / speed_);
@@ -122,6 +150,9 @@ class AlphaVideo {
     }
 
   public:
+    // The custom I/O callbacks hold `this`.
+    AlphaVideo(const AlphaVideo&) = delete;
+    AlphaVideo& operator=(const AlphaVideo&) = delete;
     AlphaVideo() {
         timer_.setSingleShot(true);
         timer_.setTimerType(Qt::PreciseTimer);
@@ -135,10 +166,29 @@ class AlphaVideo {
         av_packet_free(&packet_);
         avcodec_free_context(&decoder_);
         avformat_close_input(&input_);
+        if (io_) av_freep(&io_->buffer);
+        avio_context_free(&io_);
     }
 
     bool open(const QString& path) {
-        if (avformat_open_input(&input_, path.toUtf8().constData(), nullptr, nullptr) < 0)
+        // ponytail: whole-file read up to 64 MB; longer clips still stream from disk.
+        if (QFile file(path); file.size() > 0 && file.size() <= 64 * 1024 * 1024 &&
+                              file.open(QIODevice::ReadOnly)) {
+            bytes_ = file.readAll();
+            constexpr int chunk = 64 * 1024;
+            auto* buffer = static_cast<unsigned char*>(av_malloc(chunk));
+            if (bytes_.size() == file.size() && buffer &&
+                (io_ = avio_alloc_context(buffer, chunk, 0, this, read_memory, nullptr, seek_memory))) {
+                input_ = avformat_alloc_context();
+                if (!input_) return false;
+                input_->pb = io_;
+                input_->flags |= AVFMT_FLAG_CUSTOM_IO;
+            } else {
+                av_free(buffer);
+                bytes_.clear();
+            }
+        }
+        if (avformat_open_input(&input_, io_ ? nullptr : path.toUtf8().constData(), nullptr, nullptr) < 0)
             return false;
         if (avformat_find_stream_info(input_, nullptr) < 0)
             return false;

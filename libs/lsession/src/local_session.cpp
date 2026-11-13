@@ -12,6 +12,45 @@ namespace lsession {
 
 namespace {
 
+// A take changes only what is on air: a deck's program or preview. On-air state is not part of
+// the show -- it is never saved, never journaled, not undoable, and every open starts on the
+// emergency scene. A cue that has to create a deck for a linked canvas is structural, so a
+// batch containing anything else stays an ordinary edit.
+bool is_take(const ldoc::Command& command) {
+    if (const auto* batch = std::get_if<ldoc::Batch>(&command)) {
+        if (!batch->body || batch->body->commands.empty()) return false;
+        return std::ranges::all_of(batch->body->commands, [](const auto& c) { return is_take(c); });
+    }
+    return std::holds_alternative<ldoc::SetDeckProgram>(command) ||
+           std::holds_alternative<ldoc::SetDeckPreview>(command);
+}
+
+// A deck edit carries the whole deck, program and preview included. Journal it without them so
+// on-air state never reaches disk by that route either.
+ldoc::Command without_on_air(ldoc::Command command) {
+    const auto strip = [](ldoc::Command& c) {
+        if (auto* set = std::get_if<ldoc::SetDeck>(&c)) {
+            set->value.program_scene.reset();
+            set->value.preview_scene.reset();
+        }
+        if (auto* add = std::get_if<ldoc::AddDeck>(&c)) {
+            add->value.program_scene.reset();
+            add->value.preview_scene.reset();
+        }
+    };
+    if (auto* batch = std::get_if<ldoc::Batch>(&command); batch && batch->body) {
+        auto steps = batch->body->commands;
+        std::erase_if(steps, [](const auto& c) {
+            return std::holds_alternative<ldoc::SetDeckProgram>(c) ||
+                   std::holds_alternative<ldoc::SetDeckPreview>(c);
+        });
+        for (auto& step : steps) strip(step);
+        return ldoc::make_batch(std::move(steps), batch->description);
+    }
+    strip(command);
+    return command;
+}
+
 // Expand cues before history and journaling, so replay and undo restore explicit deck states
 // without firing cues again. Generated deck identities are recorded in the expanded command.
 Command with_scene_links(const Project& project, const Command& command) {
@@ -76,7 +115,6 @@ Command with_scene_links(const Project& project, const Command& command) {
 
 LocalSession::LocalSession(Project p) : history_(std::move(p)) {}
 
-LocalSession::~LocalSession() = default;
 
 std::expected<std::unique_ptr<LocalSession>, std::string> LocalSession::open(
     const std::filesystem::path& dir) {
@@ -190,7 +228,7 @@ void LocalSession::notice(ldoc::Severity severity, const std::string& text) {
 void LocalSession::journal(const Command& command) {
     if (!journal_.is_open())
         return; // an in-memory document has nowhere to record to, and that is not a failure
-    if (const auto r = journal_.record(command, history_.project().generation); !r) {
+    if (const auto r = journal_.record(without_on_air(command), history_.project().generation); !r) {
         notice(ldoc::Severity::Error,
                std::format("this change was made but could not be written to the recovery "
                            "journal, so it would be lost if the application stopped now: {}",
@@ -205,6 +243,13 @@ std::expected<std::string, std::string> LocalSession::run(const Command& command
 std::expected<std::string, std::string> LocalSession::run(const Command& command,
                                                           std::string_view gesture) {
     const Command expanded = with_scene_links(project(), command);
+    if (is_take(expanded)) {
+        if (auto r = history_.replay(expanded); !r)
+            return std::unexpected(r.error());
+        ++revision_;
+        notify(Change::Kind::Applied, expanded);
+        return ldoc::describe(expanded);
+    }
     auto description =
         gesture.empty() ? history_.run(expanded) : history_.run(expanded, gesture);
     if (!description)
@@ -215,7 +260,7 @@ std::expected<std::string, std::string> LocalSession::run(const Command& command
     // would draw a fader that jumped rather than followed.
     journal(expanded);
     dirty_ = true;
-    ++revision_;
+    edit_revision_ = ++revision_;
     notify(Change::Kind::Applied, expanded);
     return *description;
 }
@@ -233,7 +278,7 @@ std::expected<void, std::string> LocalSession::undo() {
     // yet, and a crash straight after one should not bring the undone work back.
     journal(*applied);
     dirty_ = true;
-    ++revision_;
+    edit_revision_ = ++revision_;
     notify(Change::Kind::Undone, *applied);
     return {};
 }
@@ -244,28 +289,129 @@ std::expected<void, std::string> LocalSession::redo() {
         return std::unexpected(applied.error());
     journal(*applied);
     dirty_ = true;
-    ++revision_;
+    edit_revision_ = ++revision_;
     notify(Change::Kind::Redone, *applied);
     return {};
 }
 
-std::expected<void, std::string> LocalSession::save() {
+std::expected<Project, std::string> LocalSession::begin_save() {
     if (dir_.empty())
         return std::unexpected("this project has not been given a location yet");
-
     Project copy = history_.project();
-    if (const auto r = ldoc::save_project(copy, dir_); !r)
-        return std::unexpected(r.error());
+    ldoc::clear_on_air(copy);
+    // From here, new commands are journaled against the generation this save will produce, into
+    // a fresh file; what was journaled so far waits in the rotated file until the save commits.
+    if (journal_.is_open()) {
+        if (const auto r = journal_.rotate(ldoc::saving_journal_path(dir_)); !r)
+            return std::unexpected(r.error());
+    }
+    history_.note_saved(copy.generation + 1);
+    return copy;
+}
 
-    // Take the new generation, keep the undo stack. save_project advances the generation and the
-    // document has to carry it -- otherwise the next save reuses the number and the journal
-    // replays against the wrong one -- but saving is not something the operator did to the
-    // document and emphatically must not throw away what they can undo.
-    history_.note_saved(copy.generation);
-    dirty_ = false;
+void LocalSession::finish_save(const std::expected<std::uint64_t, std::string>& result,
+                               std::uint64_t revision_at_snapshot) {
+    if (!result) {
+        // The rotated journal still holds that work and is replayed on the next open. Put the
+        // generation back so entries made meanwhile still match what is on disk.
+        history_.note_saved(history_.project().generation - 1);
+        return;
+    }
+    // Take the new generation but keep the undo stack: saving is not something the operator did
+    // to the document and must not throw away what they can undo.
+    history_.note_saved(*result);
+    std::error_code ec;
+    std::filesystem::remove(ldoc::saving_journal_path(dir_), ec);
+    // Clean only if nothing was edited after the snapshot; those edits are in the new journal.
+    if (edit_revision_ <= revision_at_snapshot)
+        dirty_ = false;
     ++revision_;
     notify(Change::Kind::Saved, std::nullopt);
+}
+
+std::expected<void, std::string> LocalSession::save() {
+    wait_for_save();
+    const std::uint64_t at = revision_;
+    auto copy = begin_save();
+    if (!copy)
+        return std::unexpected(copy.error());
+    const auto r = ldoc::save_project(*copy, dir_);
+    finish_save(r ? std::expected<std::uint64_t, std::string>{copy->generation}
+                  : std::expected<std::uint64_t, std::string>{std::unexpected(r.error())},
+                at);
+    if (!r)
+        return std::unexpected(r.error());
     return {};
+}
+
+void LocalSession::save_async(Post post,
+                              std::function<void(std::expected<void, std::string>)> done) {
+    if (saving_) {
+        // Coalesce: one more save after the one in flight, with the latest callbacks.
+        save_again_ = true;
+        again_post_ = std::move(post);
+        again_done_ = std::move(done);
+        return;
+    }
+    const std::uint64_t at = revision_;
+    auto copy = begin_save();
+    if (!copy) {
+        if (done)
+            done(std::unexpected(copy.error()));
+        return;
+    }
+    saving_ = true;
+    save_at_ = at;
+    save_done_ = std::move(done);
+    auto outcome = std::make_shared<std::optional<std::expected<std::uint64_t, std::string>>>();
+    save_outcome_ = outcome;
+    saver_ = std::jthread([this, project = std::move(*copy), dir = dir_, post = std::move(post),
+                           outcome]() mutable {
+        auto r = ldoc::save_project(project, dir);
+        *outcome = r ? std::expected<std::uint64_t, std::string>{project.generation}
+                     : std::expected<std::uint64_t, std::string>{std::unexpected(r.error())};
+        // Completion runs on the session's thread. If wait_for_save() already finished it, the
+        // posted call finds nothing in flight and does nothing.
+        post([this, outcome] {
+            if (saving_ && save_outcome_ == outcome)
+                complete_save();
+        });
+    });
+}
+
+void LocalSession::complete_save() {
+    if (saver_.joinable())
+        saver_.join();
+    const auto result = save_outcome_ && *save_outcome_ ? **save_outcome_
+        : std::expected<std::uint64_t, std::string>{std::unexpected("save did not finish")};
+    save_outcome_.reset();
+    finish_save(result, save_at_);
+    saving_ = false;
+    auto done = std::move(save_done_);
+    save_done_ = {};
+    if (done)
+        done(result ? std::expected<void, std::string>{}
+                    : std::expected<void, std::string>{std::unexpected(result.error())});
+    if (save_again_) {
+        save_again_ = false;
+        save_async(std::move(again_post_), std::move(again_done_));
+    }
+}
+
+void LocalSession::wait_for_save() {
+    // Finish any save in flight now, on this thread, so the next save starts from settled state.
+    // A queued follow-up save is started by complete_save(), so wait for that one as well.
+    while (saving_)
+        complete_save();
+}
+
+LocalSession::~LocalSession() {
+    save_again_ = false;
+    if (saving_) {
+        if (saver_.joinable())
+            saver_.join();
+        saving_ = false;
+    }
 }
 
 std::expected<void, std::string> LocalSession::save_as(const std::filesystem::path& dir) {

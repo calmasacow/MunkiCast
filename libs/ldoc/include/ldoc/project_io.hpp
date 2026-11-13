@@ -76,6 +76,15 @@ struct OpenResult {
 /// Where the command journal for a project lives.
 [[nodiscard]] std::filesystem::path journal_path(const std::filesystem::path& dir);
 
+/// Where a background save parks the journal it is folding in (see `Journal::rotate`). Replayed
+/// before `journal_path`, so a crash during that save loses nothing.
+[[nodiscard]] std::filesystem::path saving_journal_path(const std::filesystem::path& dir);
+
+/// Program and preview are what is on air, not part of the show. They are never written to disk,
+/// and every open starts each canvas on its emergency scene.
+void clear_on_air(Project& project);
+void start_on_emergency(Project& project);
+
 [[nodiscard]] std::expected<OpenResult, std::string> open_project(
     const std::filesystem::path& dir);
 

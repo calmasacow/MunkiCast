@@ -10,6 +10,8 @@
 
 #include <map>
 #include <memory>
+#include <optional>
+#include <thread>
 
 namespace lsession {
 
@@ -54,6 +56,9 @@ public:
     [[nodiscard]] bool dirty() const override { return dirty_; }
     [[nodiscard]] std::filesystem::path path() const override { return dir_; }
     std::expected<void, std::string> save() override;
+    void save_async(Post post,
+                    std::function<void(std::expected<void, std::string>)> done) override;
+    void wait_for_save() override;
 
     /// Give an in-memory document a home. Fails if it already has one.
     std::expected<void, std::string> save_as(const std::filesystem::path& dir);
@@ -71,6 +76,13 @@ private:
     /// command has already been applied, and refusing it now would make the document and the
     /// operator's screen disagree.
     void journal(const Command& command);
+    /// Snapshot for a save: the document without on-air state, and the journal rotated so that
+    /// commands made while the save runs land in a fresh file.
+    std::expected<Project, std::string> begin_save();
+    /// Apply a finished save on the session's thread.
+    void finish_save(const std::expected<std::uint64_t, std::string>& result,
+                     std::uint64_t revision_at_snapshot);
+    void complete_save();
 
     ldoc::DocumentHistory history_;
     ldoc::Journal journal_;
@@ -82,7 +94,20 @@ private:
     NoticeHandler notice_handler_;
     int next_token_ = 1;
     std::uint64_t revision_ = 0;
+    /// Revision of the last change that was journaled (an edit, not a take). A save clears
+    /// `dirty_` only if no edit arrived after its snapshot.
+    std::uint64_t edit_revision_ = 0;
     bool dirty_ = false;
+
+    // Declared last so it is joined before the members a running save would touch.
+    bool saving_ = false;
+    bool save_again_ = false;
+    std::uint64_t save_at_ = 0;
+    std::shared_ptr<std::optional<std::expected<std::uint64_t, std::string>>> save_outcome_;
+    std::function<void(std::expected<void, std::string>)> save_done_;
+    Post again_post_;
+    std::function<void(std::expected<void, std::string>)> again_done_;
+    std::jthread saver_;
 };
 
 } // namespace lsession

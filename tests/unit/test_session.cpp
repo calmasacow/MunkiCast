@@ -5,6 +5,9 @@
 // it holds a mutable Project.
 
 #include "lsession/local_session.hpp"
+#include "ldoc/project_io.hpp"
+#include "ldoc/journal.hpp"
+#include <functional>
 
 #include "ltest.hpp"
 #include <lcore/atomic_file.hpp>
@@ -490,15 +493,27 @@ LTEST_CASE(main_program_activation_fires_links_and_replays_exact_deck_states) {
     CHECK(std::none_of(after.decks.begin(), after.decks.end(), [&](const auto& deck) {
         return deck.program_scene == targets[2];
     }));
+    // Creating the Square deck is structural, so this take is an edit and undoes as one step.
     REQUIRE(session->undo());
-    CHECK(session->project() == before);
+    CHECK_EQ(session->project().decks.size(), before.decks.size());
     REQUIRE(session->redo());
-    CHECK(session->project() == after);
+    CHECK_EQ(session->project().decks.size(), after.decks.size());
+    // The created deck is journaled and survives reopening; what was on air does not -- every
+    // open starts each canvas on its emergency scene (here, with none set, its first scene).
     session.reset();
     opened = LocalSession::open(scratch.project());
     REQUIRE(opened);
     session = std::move(*opened);
-    CHECK(session->project() == after);
+    REQUIRE(session->project().decks.size() == after.decks.size());
+    for (const auto& deck : session->project().decks) {
+        CHECK(!deck.preview_scene);
+        const auto* first = [&]() -> const ldoc::Scene* {
+            for (const auto& scene : session->project().scenes)
+                if (scene.canvas == deck.canvas) return &scene;
+            return nullptr;
+        }();
+        CHECK(deck.program_scene == (first ? std::optional<Id>{first->id} : std::nullopt));
+    }
 
     // Reasserting an already-live Main scene repairs a target changed independently.
     REQUIRE(session->run(ldoc::SetDeckProgram{vertical.id, std::nullopt}));
@@ -519,6 +534,120 @@ LTEST_CASE(main_program_activation_fires_links_and_replays_exact_deck_states) {
     CHECK(fresh->project().decks[2].program_scene == targets[1]);
     REQUIRE(fresh->undo());
     CHECK(fresh->project() == p);
+}
+
+// ---- on-air state and background saving ------------------------------------------------
+
+namespace {
+ldoc::Project two_scenes_with_emergency() {
+    auto p = starter();
+    auto safe = p.scenes.front();
+    safe.id = Id::generate();
+    safe.name = "Safe";
+    safe.roots.clear();
+    p.scenes.push_back(safe);
+    p.canvases.front().emergency_scene = safe.id;
+    p.decks.front().program_scene = p.scenes.front().id;
+    return p;
+}
+} // namespace
+
+LTEST_CASE(a_scene_take_is_live_state_not_an_edit) {
+    ScratchDir scratch{"take"};
+    auto created = LocalSession::create(two_scenes_with_emergency(), scratch.project());
+    REQUIRE(created);
+    auto& session = *created;
+    const Id deck = session->project().decks.front().id;
+    const Id intro = session->project().scenes[0].id;
+    const auto revision = session->revision();
+    REQUIRE(session->run(ldoc::SetDeckProgram{deck, intro}));
+    CHECK(session->project().decks.front().program_scene == intro);
+    CHECK(session->revision() > revision); // listeners still follow it
+    CHECK(!session->dirty());              // ...but it arms no save
+    CHECK(!session->can_undo());           // ...and is not an undo step
+    CHECK(ldoc::Journal::read(ldoc::journal_path(scratch.project()))->entries.empty());
+    // A take batch (studio-mode Take) is a take too.
+    REQUIRE(session->run(ldoc::make_batch({ldoc::SetDeckProgram{deck, intro},
+                                           ldoc::SetDeckPreview{deck, std::nullopt}},
+                                          "Take preview")));
+    CHECK(!session->dirty());
+    CHECK(!session->can_undo());
+}
+
+LTEST_CASE(undoing_an_edit_does_not_rewind_what_is_on_air) {
+    auto session = LocalSession::in_memory(two_scenes_with_emergency());
+    auto deck = session->project().decks.front();
+    const Id safe = session->project().scenes[1].id;
+    deck.studio_mode = !deck.studio_mode; // a real deck edit, recorded with the old program
+    REQUIRE(session->run(ldoc::SetDeck{deck}));
+    REQUIRE(session->run(ldoc::SetDeckProgram{deck.id, safe}));
+    REQUIRE(session->undo());
+    CHECK(session->project().decks.front().studio_mode != deck.studio_mode);
+    CHECK(session->project().decks.front().program_scene == safe);
+}
+
+LTEST_CASE(every_open_starts_on_the_emergency_scene) {
+    ScratchDir scratch{"emergency"};
+    auto p = two_scenes_with_emergency();
+    const Id safe = p.scenes[1].id;
+    {
+        auto created = LocalSession::create(p, scratch.project());
+        REQUIRE(created);
+        // Take the non-emergency scene and make an edit so something is journaled.
+        REQUIRE((*created)->run(ldoc::SetDeckProgram{p.decks.front().id, p.scenes[0].id}));
+        REQUIRE((*created)->run(ldoc::RenameScene{p.scenes[0].id, "Intro 2"}));
+        // Crash: no save.
+    }
+    auto reopened = LocalSession::open(scratch.project());
+    REQUIRE(reopened);
+    CHECK((*reopened)->project().scenes[0].name == std::string("Intro 2")); // edit recovered
+    CHECK((*reopened)->project().decks.front().program_scene == safe);     // on emergency
+    CHECK(!(*reopened)->project().decks.front().preview_scene);
+}
+
+LTEST_CASE(a_background_save_keeps_edits_made_while_it_runs) {
+    ScratchDir scratch{"async"};
+    auto created = LocalSession::create(starter(), scratch.project());
+    REQUIRE(created);
+    auto& session = *created;
+    const Id scene = session->project().scenes[0].id;
+    REQUIRE(session->run(ldoc::RenameScene{scene, "One"}));
+    std::vector<std::function<void()>> posted;
+    bool finished = false;
+    session->save_async([&](std::function<void()> f) { posted.push_back(std::move(f)); },
+                        [&](std::expected<void, std::string> r) { finished = r.has_value(); });
+    // An edit lands while the save is (possibly) still writing.
+    REQUIRE(session->run(ldoc::RenameScene{scene, "Two"}));
+    session->wait_for_save();
+    CHECK(finished);
+    for (auto& f : posted) f(); // a late completion is harmless
+    CHECK(session->dirty());    // "Two" is not in the saved files yet
+    // Crash now; reopening must still have "Two" (from the fresh journal).
+    session.reset();
+    auto reopened = LocalSession::open(scratch.project());
+    REQUIRE(reopened);
+    CHECK((*reopened)->project().scenes[0].name == std::string("Two"));
+    CHECK(!fs::exists(ldoc::saving_journal_path(scratch.project())));
+}
+
+LTEST_CASE(a_crash_during_a_background_save_loses_nothing) {
+    ScratchDir scratch{"async-crash"};
+    auto created = LocalSession::create(starter(), scratch.project());
+    REQUIRE(created);
+    const Id scene = (*created)->project().scenes[0].id;
+    REQUIRE((*created)->run(ldoc::RenameScene{scene, "Before"}));
+    // Simulate the window between rotating the journal and the save committing: the rotated
+    // file holds "Before", the fresh journal holds a later edit, and the save never finished.
+    {
+        auto j = ldoc::Journal::open(ldoc::journal_path(scratch.project()));
+        REQUIRE(j);
+        REQUIRE(j->rotate(ldoc::saving_journal_path(scratch.project())));
+        REQUIRE(j->record(ldoc::RenameScene{scene, "After"}, (*created)->project().generation));
+    }
+    created->reset();
+    auto reopened = LocalSession::open(scratch.project());
+    REQUIRE(reopened);
+    CHECK((*reopened)->project().scenes[0].name == std::string("After"));
 }
 
 LTEST_MAIN("session")

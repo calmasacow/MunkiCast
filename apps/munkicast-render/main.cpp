@@ -60,7 +60,20 @@ class Renderer {
         workers_.clear();
     }
 
+    /// MUNKICAST_BENCHMARK: logs a per-frame step that took long enough to be a visible hitch.
+    struct SlowStep {
+        const char* name;
+        std::chrono::steady_clock::time_point start = std::chrono::steady_clock::now();
+        ~SlowStep() {
+            static const bool bench = std::getenv("MUNKICAST_BENCHMARK") != nullptr;
+            const auto ms = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - start).count();
+            if (bench && ms > 40) std::fprintf(stderr, "SLOW_STEP %s ms=%.1f\n", name, ms);
+        }
+    };
+
     const ldoc::Project& prepare(const ldoc::Project& project) {
+        const SlowStep slow{"prepare"};
         effective_.reset();
         transition_dirty_ = false;
         const auto now = std::chrono::steady_clock::now();
@@ -152,6 +165,7 @@ class Renderer {
             }
             auto selected = std::ranges::find(effective_->decks, deck.id, &ldoc::Deck::id);
             const auto scene_id = position < state.cut_ms ? state.from : state.target;
+            if (position < state.cut_ms && state.target) warm_scene(project, *state.target);
             const auto* source = effective_->source(state.source);
             const auto* canvas = effective_->canvas(deck.canvas);
             if (!scene_id || !effective_->scene(*scene_id) || !source || !canvas) continue;
@@ -180,6 +194,7 @@ class Renderer {
     lcomp::Picture render(const ldoc::Project& original, const ldoc::Id& canvas,
                           std::uint32_t max_edge, lcomp::Picture* full_output, bool display_output,
                           std::chrono::steady_clock::time_point frame_time) {
+        const auto t_entry = std::chrono::steady_clock::now();
         const auto& project = effective_ ? *effective_ : original;
         sample_time_ = frame_time;
         std::erase_if(videos_, [&](auto& item) {
@@ -226,15 +241,30 @@ class Renderer {
         auto frames = [this, &gpu](const ldoc::Source& source) {
             return source_frame(source, bool(gpu));
         };
+        const auto t_plan = std::chrono::steady_clock::now();
         auto plan = lcomp::plan_canvas(project, canvas, frames);
         next_animated_ = next_animated_ || lcomp::animated_plan(plan);
         if (gpu) {
             std::string error;
+            const auto t_acquire = std::chrono::steady_clock::now();
             const auto displays = display_output ? projectors_.acquire(canvas, device_.get()) :
                 std::vector<munkicast::rhi::PresentationTarget>{};
+            const auto t_render = std::chrono::steady_clock::now();
             auto result = gpu->render(plan, max_edge, error, full_output, displays,
                                       full_output && device_output && device_output());
+            const auto t_present = std::chrono::steady_clock::now();
             projectors_.present(canvas, result && result->status != lcomp::PictureStatus::Unsupported);
+            if (static const bool bench = std::getenv("MUNKICAST_BENCHMARK") != nullptr; bench) {
+                const auto t_end = std::chrono::steady_clock::now();
+                const auto ms = [](auto a, auto b) { return std::chrono::duration<double, std::milli>(b - a).count(); };
+                // Only frames slow enough to be a visible hitch.
+                if (ms(t_entry, t_end) > 40)
+                    std::fprintf(stderr, "SLOW_FRAME canvas=%s total_ms=%.1f setup_ms=%.1f plan_ms=%.1f "
+                                 "acquire_ms=%.1f gpu_ms=%.1f present_ms=%.1f\n",
+                                 canvas.to_string().c_str(), ms(t_entry, t_end), ms(t_entry, t_plan),
+                                 ms(t_plan, t_acquire), ms(t_acquire, t_render), ms(t_render, t_present),
+                                 ms(t_present, t_end));
+            }
             if (result)
                 return std::move(*result);
             // Work still in flight cannot have its resources or capture leases recycled.
@@ -296,6 +326,7 @@ class Renderer {
     bool next_animated_ = false;
 
     void done() {
+        const SlowStep slow{"done"};
         animated_ = next_animated_;
         next_animated_ = false;
         for (const auto& [id, snapshot] : worker_held_) {
@@ -413,6 +444,29 @@ class Renderer {
     std::map<std::string, std::unique_ptr<WorkerSession>> workers_;
     std::map<std::string, std::pair<std::shared_ptr<const lcomp::PreviewFrame>, std::uint64_t>> worker_held_;
     std::set<std::string> worker_wanted_;
+
+    /// Start a scene's retained media before it is drawn, so a clip behind a stinger is already
+    /// playing when the cut reveals it instead of resuming from paused under the overlay.
+    /// Follows visible precomps; `depth` bounds a precomp cycle.
+    void warm_scene(const ldoc::Project& project, const ldoc::Id& scene_id, int depth = 0) {
+        const auto* scene = project.scene(scene_id);
+        if (!scene || depth > 8) return;
+        const auto walk = [&](this const auto& self, const std::vector<ldoc::Node>& nodes) -> void {
+            for (const auto& node : nodes) {
+                if (!node.visible) continue;
+                if (const auto* children = node.children()) self(*children);
+                else if (const auto* pre = std::get_if<ldoc::PrecompData>(&node.data))
+                    warm_scene(project, pre->scene, depth + 1);
+                else if (const auto* src = std::get_if<ldoc::SourceData>(&node.data); src && src->source)
+                    if (const auto* source = project.source(*src->source); source && retained_media(*source)) {
+                        auto& session = worker_session(*source);
+                        session.worker->set_active(true);
+                        worker_wanted_.insert(source->id.to_string());
+                    }
+            }
+        };
+        walk(scene->roots);
+    }
 
     static bool retained_media(const ldoc::Source& source) {
         const auto it = source.settings.find("closeWhenInactive");

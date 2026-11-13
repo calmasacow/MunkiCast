@@ -418,7 +418,10 @@ LTEST_CASE(the_committed_project_still_opens) {
     CHECK_EQ(p.encode(p.outputs[1].encode)->encoder.bitrate_kbps, 8000);
     CHECK_EQ(p.decks[0].transition_ms, 420);
 
-    const Scene* live = p.scene(p.decks[0].program_scene.value());
+    // On-air state is never restored: every open starts on the canvas's emergency scene.
+    CHECK(p.decks[0].program_scene == p.canvases[0].emergency_scene);
+    CHECK(!p.decks[0].preview_scene.has_value());
+    const Scene* live = p.scene(fixed_id(0x50));
     REQUIRE(live != nullptr);
     const Node& group = live->roots[0];
     CHECK(group.blend.mode == BlendMode::Multiply);
@@ -678,6 +681,12 @@ LTEST_CASE(reading_the_fixture_and_writing_it_back_is_a_fixed_point) {
 
     const auto committed = lc::read_file(fixture_dir() / "project.json");
     REQUIRE(committed.has_value());
+    // Open deliberately replaces on-air state (it starts on the emergency scene), so put the
+    // committed deck back before comparing everything else.
+    auto file = project_from_json(*committed);
+    REQUIRE(file.has_value());
+    opened->project.decks[0].program_scene = file->project.decks[0].program_scene;
+    opened->project.decks[0].preview_scene = file->project.decks[0].preview_scene;
     CHECK_EQ(project_to_json(opened->project), *committed);
 }
 

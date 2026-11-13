@@ -101,6 +101,51 @@ std::expected<void, std::string> Journal::record(const Command& command,
     return {};
 }
 
+std::expected<void, std::string> Journal::rotate(const std::filesystem::path& retired) {
+    if (fd_ < 0)
+        return std::unexpected("the journal is not open");
+    std::error_code ec;
+    // A previous background save that failed left its entries in `retired`. Keep them by
+    // appending the current file after them, rather than overwriting.
+    if (std::filesystem::exists(retired, ec)) {
+        const auto current = lc::read_file(path_);
+        if (current && !current->empty()) {
+            const int out = ::open(retired.c_str(), O_WRONLY | O_APPEND | O_CLOEXEC);
+            if (out < 0)
+                return std::unexpected(why("open", retired));
+            const char* p = current->data();
+            std::size_t left = current->size();
+            while (left > 0) {
+                const ssize_t n = ::write(out, p, left);
+                if (n < 0 && errno == EINTR) continue;
+                if (n < 0) { ::close(out); return std::unexpected(why("write", retired)); }
+                p += n;
+                left -= static_cast<std::size_t>(n);
+            }
+            const bool synced = ::fsync(out) == 0;
+            ::close(out);
+            if (!synced)
+                return std::unexpected(why("fsync", retired));
+        }
+        if (::ftruncate(fd_, 0) != 0 || ::fsync(fd_) != 0)
+            return std::unexpected(why("truncate", path_));
+        return {};
+    }
+    if (::rename(path_.c_str(), retired.c_str()) != 0)
+        return std::unexpected(why("rename", path_));
+    const int fd = ::open(path_.c_str(), O_WRONLY | O_CREAT | O_APPEND | O_CLOEXEC, 0644);
+    if (fd < 0)
+        return std::unexpected(why("open", path_));
+    ::close(fd_);
+    fd_ = fd;
+    if (const int dir = ::open(path_.parent_path().c_str(), O_RDONLY | O_DIRECTORY | O_CLOEXEC);
+        dir >= 0) {
+        (void)::fsync(dir);
+        ::close(dir);
+    }
+    return {};
+}
+
 std::expected<void, std::string> Journal::clear() {
     if (fd_ < 0)
         return std::unexpected("the journal is not open");

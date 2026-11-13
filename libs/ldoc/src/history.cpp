@@ -60,11 +60,35 @@ std::string DocumentHistory::redo_description() const {
     return future_.empty() ? std::string{} : future_.front().description;
 }
 
+namespace {
+// Program and preview are on-air state, not document content (takes are not undo steps). An
+// undo or redo of a deck edit restores the deck's settings but must not rewind what is on air.
+Command keep_on_air(const Project& project, Command command) {
+    const auto fix = [&](Command& c) {
+        if (auto* set = std::get_if<SetDeck>(&c)) {
+            for (const Deck& live : project.decks)
+                if (live.id == set->value.id) {
+                    set->value.program_scene = live.program_scene;
+                    set->value.preview_scene = live.preview_scene;
+                }
+        }
+    };
+    if (auto* batch = std::get_if<Batch>(&command); batch && batch->body) {
+        auto steps = batch->body->commands;
+        for (auto& step : steps) fix(step);
+        return make_batch(std::move(steps), batch->description);
+    }
+    fix(command);
+    return command;
+}
+} // namespace
+
 std::expected<Command, std::string> DocumentHistory::undo() {
     if (past_.empty())
         return std::unexpected("there is nothing to undo");
 
-    const Step step = past_.back();
+    Step step = past_.back();
+    step.undo = keep_on_air(project_, std::move(step.undo));
     auto applied = apply(project_, step.undo);
     if (!applied) {
         // The stack and the document have disagreed, which should be impossible: every inverse
@@ -86,7 +110,8 @@ std::expected<Command, std::string> DocumentHistory::redo() {
     if (future_.empty())
         return std::unexpected("there is nothing to redo");
 
-    const Step step = future_.front();
+    Step step = future_.front();
+    step.undo = keep_on_air(project_, std::move(step.undo));
     auto applied = apply(project_, step.undo);
     if (!applied)
         return std::unexpected(

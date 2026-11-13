@@ -252,7 +252,7 @@ LTEST_CASE(unsaved_work_survives_the_process_dying) {
           std::string::npos);
 }
 
-LTEST_CASE(a_save_clears_the_journal_so_nothing_is_applied_twice) {
+LTEST_CASE(a_saved_journal_entry_is_never_applied_twice) {
     const ScratchDir sd{"twice"};
     REQUIRE(create_project(starter(), sd.project()).has_value());
 
@@ -270,7 +270,9 @@ LTEST_CASE(a_save_clears_the_journal_so_nothing_is_applied_twice) {
         REQUIRE(j->record(c, p.generation).has_value());
     }
     REQUIRE(save_project(p, sd.project()).has_value());
-    CHECK_EQ(Journal::read(journal_path(sd.project()))->entries.size(), std::size_t{0});
+    // save_project leaves the journal to its owner (the session clears or rotates it); the
+    // entry is tagged with the old generation, so reopening must still not apply it twice.
+    CHECK_EQ(Journal::read(journal_path(sd.project()))->entries.size(), std::size_t{1});
 
     auto reopened = open_project(sd.project());
     REQUIRE(reopened.has_value());

@@ -49,6 +49,12 @@ public:
     /// project.
     std::expected<void, std::string> clear();
 
+    /// Start a fresh log for a save that runs in the background. The current file is renamed to
+    /// `retired` (any older one there is first folded in, so nothing is dropped) and a new empty
+    /// file is opened at the original path for commands made while the save runs. The caller
+    /// deletes `retired` once the save commits; until then replay reads both.
+    std::expected<void, std::string> rotate(const std::filesystem::path& retired);
+
     struct Entry {
         std::uint64_t base_generation = 0;
         Command command;

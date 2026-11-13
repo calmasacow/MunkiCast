@@ -32,6 +32,7 @@ constexpr std::string_view kLockFile = "lock";
 constexpr std::string_view kQuarantineDir = "quarantine";
 constexpr std::string_view kStagingPrefix = "staging-";
 constexpr std::string_view kJournalFile = "journal.jsonl";
+constexpr std::string_view kSavingJournalFile = "journal.saving.jsonl";
 
 std::string why(std::string_view what, const fs::path& p) {
     return std::format("{} {}: {}", what, p.string(), std::strerror(errno));
@@ -421,7 +422,18 @@ std::expected<OpenResult, std::string> open_project(const fs::path& dir) {
     // Replay anything the journal holds for exactly this generation. Entries tagged with an
     // older one are already in the saved project -- a journal left behind by a crash *after* a
     // save -- and replaying them would apply the same edits twice.
-    const auto replayed = Journal::read(journal_path(dir));
+    auto replayed = Journal::read(saving_journal_path(dir));
+    if (replayed) {
+        if (auto live = Journal::read(journal_path(dir))) {
+            replayed->entries.insert(replayed->entries.end(),
+                                     std::make_move_iterator(live->entries.begin()),
+                                     std::make_move_iterator(live->entries.end()));
+            replayed->truncated_tail = replayed->truncated_tail || live->truncated_tail;
+            replayed->unreadable += live->unreadable;
+        }
+    } else {
+        replayed = Journal::read(journal_path(dir));
+    }
     if (!replayed) {
         result.problems.push_back(
             Problem{Severity::Warning,
@@ -465,6 +477,8 @@ std::expected<OpenResult, std::string> open_project(const fs::path& dir) {
                         Id::nil()});
     }
 
+    // On-air state is never stored: every open starts each canvas on its emergency scene.
+    start_on_emergency(result.project);
     auto validation = validate(result.project);
     result.validation_problem_count = validation.size();
     for (Problem& p : validation)
@@ -489,6 +503,7 @@ std::expected<void, std::string> save_project(Project& project, const fs::path& 
 
     Project staged = project;
     staged.generation = gen;
+    clear_on_air(staged);
 
     for (const Scene& s : staged.scenes) {
         const auto r = write_sync(scene_file(staging / kScenesDir, s.id),
@@ -515,10 +530,9 @@ std::expected<void, std::string> save_project(Project& project, const fs::path& 
     if (const auto text = lc::read_file(dir / kProjectFile)) {
         if (const auto pf = project_from_json(*text); pf && pf->project.generation == gen) {
             project.generation = gen;
-            // Everything the journal held is now in the project, so it starts again from empty.
-            // Clearing it before the commit would lose the work if the commit then failed.
-            if (auto j = Journal::open(journal_path(dir)))
-                (void)j->clear();
+            // The journal is the session's to empty, not this function's: a second descriptor
+            // truncating it here would race the session appending to its own. The session clears
+            // it (or deletes the rotated copy) once this returns.
         }
     }
     return {};
@@ -526,6 +540,36 @@ std::expected<void, std::string> save_project(Project& project, const fs::path& 
 
 std::filesystem::path journal_path(const fs::path& dir) {
     return private_dir(dir) / kJournalFile;
+}
+
+std::filesystem::path saving_journal_path(const fs::path& dir) {
+    return private_dir(dir) / kSavingJournalFile;
+}
+
+void clear_on_air(Project& project) {
+    for (Deck& deck : project.decks) {
+        deck.program_scene.reset();
+        deck.preview_scene.reset();
+    }
+}
+
+void start_on_emergency(Project& project) {
+    for (Deck& deck : project.decks) {
+        const Canvas* canvas = project.canvas(deck.canvas);
+        deck.preview_scene.reset();
+        deck.program_scene.reset();
+        if (!canvas) continue;
+        if (canvas->emergency_scene && project.scene(*canvas->emergency_scene)) {
+            deck.program_scene = canvas->emergency_scene;
+            continue;
+        }
+        // No emergency scene: open on the canvas's first scene so there is still a picture.
+        for (const Scene& scene : project.scenes)
+            if (scene.canvas == canvas->id) {
+                deck.program_scene = scene.id;
+                break;
+            }
+    }
 }
 
 std::expected<void, std::string> create_project(const Project& project, const fs::path& dir) {

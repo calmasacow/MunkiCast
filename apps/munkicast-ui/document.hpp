@@ -700,6 +700,12 @@ public:
     Q_INVOKABLE void undo();
     Q_INVOKABLE void redo();
     Q_INVOKABLE void save();
+    /// Recording or streaming. While live nothing is saved -- edits stay safe in the journal --
+    /// and a save asked for meanwhile happens once this goes false.
+    void setLive(bool live);
+    [[nodiscard]] bool live() const { return live_; }
+    /// Finish any background save; used before quitting and before switching collections.
+    void flushSaves();
     static void configureCollections(std::filesystem::path root, std::filesystem::path catalog);
     static std::filesystem::path lastCollection();
     QVariantList collections() const { return collection_items_; }
@@ -832,6 +838,9 @@ private:
     QString current_canvas_;
     QTimer autosave_;
     QTimer countdown_actions_;
+    bool live_ = false;
+    bool save_when_idle_ = false;
+    void saveInBackground();
 };
 
 } // namespace munkicast::ui

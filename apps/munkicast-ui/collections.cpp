@@ -171,6 +171,8 @@ bool Document::rememberCollection() {
 
 void Document::installSession(std::unique_ptr<lsession::Session> session) {
     autosave_.stop();
+    if (session_)
+        session_->wait_for_save();
     session_ = std::move(session);
     selected_scene_.clear();
     selected_node_.clear();
@@ -190,6 +192,10 @@ void Document::installSession(std::unique_ptr<lsession::Session> session) {
 }
 
 bool Document::saveCurrentCollection() {
+    if (live_) {
+        emit notice(QStringLiteral("Stop recording and streaming before switching collections."));
+        return false;
+    }
     if (!collection_catalog_error_.isEmpty()) {
         emit notice(collection_catalog_error_);
         return false;

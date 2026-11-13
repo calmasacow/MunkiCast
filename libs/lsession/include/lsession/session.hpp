@@ -119,6 +119,15 @@ public:
     [[nodiscard]] virtual std::filesystem::path path() const = 0;
     virtual std::expected<void, std::string> save() = 0;
 
+    /// Save without blocking the caller: the project is snapshotted now, written on a worker
+    /// thread, and `done` is called back on the caller's thread through `post` once it commits
+    /// or fails. Commands made meanwhile keep journaling and stay dirty. Only one save runs at a
+    /// time; asking again while one is in flight queues exactly one more.
+    using Post = std::function<void(std::function<void()>)>;
+    virtual void save_async(Post post, std::function<void(std::expected<void, std::string>)> done) = 0;
+    /// Block until any background save has finished (quit, collection switch, tests).
+    virtual void wait_for_save() = 0;
+
     // ---- notification -----------------------------------------------------------------------
 
     /// Returns a token for `unsubscribe`. Listeners are called in the order they subscribed,

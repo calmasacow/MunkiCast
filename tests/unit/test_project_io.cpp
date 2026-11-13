@@ -110,9 +110,11 @@ LTEST_CASE(a_project_can_be_created_opened_and_saved) {
     CHECK_EQ(scene_names(opened->project),
              (std::vector<std::string>{"Gameplay", "Intro"}));
 
-    // The model that comes back is the one that went in, generation aside.
+    // The model that comes back is the one that went in, generation aside. On-air state (each
+    // deck's program and preview) is never written; every open starts on the emergency scene.
     Project expected = original;
     expected.generation = opened->project.generation;
+    start_on_emergency(expected);
     CHECK_MSG(opened->project == expected, "the project changed on the way through the disk");
 }
 

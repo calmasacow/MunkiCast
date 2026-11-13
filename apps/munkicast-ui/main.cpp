@@ -23,6 +23,7 @@
 #include <QCommandLineParser>
 #include <QCoreApplication>
 #include <QDir>
+#include <QDateTime>
 #include <QElapsedTimer>
 #include <QEventLoop>
 #include <QFile>
@@ -343,6 +344,17 @@ int main(int argc, char** argv) {
                          follow_live();
                      });
     preview.publish(document.projectForBindings());
+    // Nothing is saved while recording or streaming (or about to); a save asked for meanwhile
+    // runs once both have stopped.
+    const auto sync_live = [&preview, &document] {
+        document.setLive(preview.recording() || preview.streaming() ||
+                         preview.recordingPending() || preview.streamingPending());
+    };
+    QObject::connect(&preview, &munkicast::ui::Preview::recordingChanged, &app, sync_live);
+    sync_live();
+    // A background save still running at quit finishes rather than being cut off.
+    QObject::connect(&app, &QCoreApplication::aboutToQuit, &document,
+                     [&document] { document.flushSaves(); });
     follow_live();
 
     engine.load(QUrl(QStringLiteral("qrc:/qt/qml/MunkiCast/qml/Main.qml")));
@@ -365,6 +377,14 @@ int main(int argc, char** argv) {
         // real event loop, with the real QML tree instantiated -- the parts the headless llayout
         // tests deliberately do not cover -- without putting a window on anyone's screen.
         int rc = 0;
+        // The show without what is on air: takes change program/preview but are not edits, so
+        // "undo restored the project" compares this.
+        const auto same_show = [](ldoc::Project a, ldoc::Project b) {
+            ldoc::clear_on_air(a);
+            ldoc::clear_on_air(b);
+            a.generation = b.generation;
+            return a == b;
+        };
         const auto report = [&rc](bool ok, const char* what) {
             std::fprintf(stderr, "  %-4s %s\n", ok ? "ok" : "FAIL", what);
             if (!ok)
@@ -2537,13 +2557,14 @@ int main(int argc, char** argv) {
                     scene.id = ldoc::Id::generate();
                     scene.canvas = canvas.id;
                     scene.roots = {sound, background};
-                    auto deck = graphProject.decks.front();
-                    deck.program_scene = scene.id;
+                    const auto deck = graphProject.decks.front();
                     document.runCommand(ldoc::make_batch({
                         ldoc::AddSource{red, graphProject.sources.size()},
                         ldoc::AddSource{tone, graphProject.sources.size() + 1},
-                        ldoc::AddScene{scene, graphProject.scenes.size()}, ldoc::SetDeck{deck}},
+                        ldoc::AddScene{scene, graphProject.scenes.size()}},
                         "Preview continuity check"));
+                    // Putting it on air is a take: live state, separate from the edit above.
+                    document.runCommand(ldoc::SetDeckProgram{deck.id, scene.id});
                     const auto busId = QString::fromStdString(graphProject.buses.front().id.to_string());
                     const auto sampleRed = [&] {
                         const auto* thumbnail = thumbnails.front();
@@ -2578,6 +2599,8 @@ int main(int argc, char** argv) {
                     report(continuous, "the Encode thumbnail stays painted throughout live meter updates");
                     if (parser.isSet(shot_opt))
                         grab().save(parser.value(shot_opt) + QStringLiteral("/encode-live.png"));
+                    // Take back off air, then undo the edit.
+                    document.runCommand(ldoc::SetDeckProgram{deck.id, deck.program_scene});
                     document.undo();
                     settle();
                     // Autosave may advance storage generations during the live check.
@@ -2662,13 +2685,13 @@ int main(int argc, char** argv) {
             workspace.openPanel(QStringLiteral("favourites"));
             workspace.activate(QStringLiteral("favourites"));
             settle();
+            const auto undoBeforeTake = document.undoDescription();
+            const auto dirtyBeforeTake = document.dirty();
             report(clickScene("favouriteRow", blueScene) && programSceneFor(mainCanvas) == blueScene &&
                        document.selectedScene() == blueScene && renderedColour(false),
                    "clicking Favourites activates and renders Program immediately");
-            document.undo();
-            settle();
-            report(programSceneFor(mainCanvas) == redScene && renderedColour(true),
-                   "a scene activation undoes in one step");
+            report(document.undoDescription() == undoBeforeTake && document.dirty() == dirtyBeforeTake,
+                   "a scene activation is live state: not an undo step and nothing to save");
             document.addCanvas(QStringLiteral("Click portrait"), true);
             const auto portraitCanvas = document.currentCanvas();
             document.addScene(QStringLiteral("Portrait favourite"));
@@ -2677,15 +2700,27 @@ int main(int argc, char** argv) {
             workspace.activate(QStringLiteral("favourites"));
             settle();
             report(clickScene("favouriteRow", portraitScene) && programSceneFor(portraitCanvas) == portraitScene &&
-                       programSceneFor(mainCanvas) == redScene && document.currentCanvas() == portraitCanvas,
+                       programSceneFor(mainCanvas) == blueScene && document.currentCanvas() == portraitCanvas,
                    "secondary-canvas favourites activate their own Program and preserve Main");
             document.undo();
             settle();
             report(programSceneFor(portraitCanvas).isEmpty(), "first activation's deck creation is undoable");
             int undoGuard = 0;
-            while (document.projectForBindings() != original && document.canUndo() && undoGuard++ < 30)
+            while (!same_show(document.projectForBindings(), original) && document.canUndo() &&
+                   undoGuard++ < 30)
                 document.undo();
-            report(document.projectForBindings() == original, "scene-click fixtures undo completely");
+            report(same_show(document.projectForBindings(), original),
+                   "scene-click fixtures undo completely");
+            // Takes are not undone, so put back what was on air before these clicks; later
+            // checks act on the program scene.
+            for (const auto& deck : original.decks) {
+                const auto id = QString::fromStdString(deck.id.to_string());
+                document.setDeckProgram(id, deck.program_scene
+                    ? QString::fromStdString(deck.program_scene->to_string()) : QString{});
+                document.setDeckPreview(id, deck.preview_scene
+                    ? QString::fromStdString(deck.preview_scene->to_string()) : QString{});
+            }
+            settle();
             document.selectScene(originalSelection);
             workspace.closePanel(QStringLiteral("favourites"));
             workspace.activate(QStringLiteral("scenes"));
@@ -7308,12 +7343,14 @@ int main(int argc, char** argv) {
                     target_on_air = target_on_air ||
                                     deck_at(row, "programSceneId").toString() == other_target;
                 report(target_on_air, "re-clicking Main restores a manually changed target");
-                // Restore these activations before checking the link move's own undo step.
-                document.undo();
-                document.undo();
-                document.undo();
+                // Takes are live state, not undo steps. The first linked activation also created
+                // the target canvas deck; that is structural, so undo it to reach the link move.
                 document.selectCanvas(vertical_id);
                 settle();
+                if (document.undoDescription() == QStringLiteral("Switch program scene")) {
+                    document.undo();
+                    settle();
+                }
                 document.undo();
                 settle();
                 report(document.sceneLinkCount(vertical_scene) == 1 &&
@@ -7871,7 +7908,10 @@ int main(int argc, char** argv) {
             std::get<ldoc::SourceData>(node.data).source = green.id;
             active.roots.push_back(node);
             project.scenes.push_back(active);
-            project.decks.front().program_scene = active.id;
+            // On-air state is never saved: every open starts on the emergency scene. Make the
+            // second scene the emergency one so opening must pick it over list order.
+            canvas.emergency_scene = active.id;
+            project.decks.front().program_scene = firstScene;
             project.decks.front().preview_scene = firstScene;
             project.scenes.front().name = "Elgato";
             auto secondCanvas = canvas;
@@ -7887,6 +7927,7 @@ int main(int argc, char** argv) {
             activeVertical.canvas = secondCanvas.id;
             activeVertical.roots.clear();
             project.scenes.push_back(activeVertical);
+            project.canvases.back().emergency_scene = activeVertical.id;
             auto verticalDeck = project.decks.front();
             verticalDeck.id = ldoc::Id::generate();
             verticalDeck.canvas = secondCanvas.id;
@@ -7896,15 +7937,15 @@ int main(int argc, char** argv) {
             const auto activeId = QString::fromStdString(active.id.to_string());
             const auto canvasId = QString::fromStdString(project.canvases.front().id.to_string());
             const auto verticalId = QString::fromStdString(secondCanvas.id.to_string());
-            report(ldoc::create_project(project, path).has_value(), "startup alignment fixture saves second-scene Program");
+            report(ldoc::create_project(project, path).has_value(), "startup alignment fixture saves a second-scene emergency scene");
             munkicast::ui::Document::configure(path);
             {
                 munkicast::ui::Document boot;
                 report(boot.selectedScene() == activeId && boot.nodesModel()->rowCount() == 1 &&
                     boot.nodesModel()->data(boot.nodesModel()->index(0, 0), role_of(boot.nodesModel(), "sourceName")).toString() == QString::fromStdString(green.name),
-                    "boot selects saved Program and its sources instead of first scene or Preview");
+                    "boot starts on the emergency scene and selects its sources, not the first scene");
                 report(boot.selectedSceneOn(verticalId) == QString::fromStdString(activeVertical.id.to_string()),
-                    "boot aligns secondary canvas selection with its own saved Program");
+                    "boot aligns secondary canvas selection with its own emergency scene");
                 report(!boot.dirty(), "boot alignment changes UI selection without changing the saved show");
             }
             munkicast::ui::Document::configure(original.toStdString());
@@ -7918,7 +7959,7 @@ int main(int argc, char** argv) {
                     selected = row->property("selected").toBool() && row->property("isProgram").toBool();
             report(selected && document.nodesModel()->rowCount() == 1 &&
                 document.nodesModel()->data(document.nodesModel()->index(0, 0), role_of(document.nodesModel(), "sourceName")).toString() == QString::fromStdString(green.name),
-                "GUI selected scene and Sources panel agree with saved Program after opening");
+                "GUI selected scene and Sources panel agree with the emergency scene after opening");
             workspace.openPanel("sources");
             workspace.activate("sources");
             settle();
@@ -8589,6 +8630,23 @@ int main(int argc, char** argv) {
                      theme.dark() ? "dark" : "light", qPrintable(workspace.layoutSource()));
         std::fprintf(stderr, "  %s\n", rc == 0 ? "shell self-check passed" : "SHELL CHECK FAILED");
         return rc;
+    }
+
+    // MUNKICAST_BENCHMARK: the preview is painted on this thread, so a stall here freezes the
+    // preview while the renderer and recording carry on. A 10 ms timer that fires late by more
+    // than 40 ms means the event loop was busy; log how long and when.
+    if (qEnvironmentVariableIsSet("MUNKICAST_BENCHMARK")) {
+        auto* watchdog = new QTimer(&app);
+        watchdog->setTimerType(Qt::PreciseTimer);
+        auto* since = new QElapsedTimer;
+        since->start();
+        QObject::connect(watchdog, &QTimer::timeout, [since] {
+            const auto late = since->restart() - 10;
+            if (late > 40)
+                std::fprintf(stderr, "UI_STALL ms=%lld at_ms=%lld\n", static_cast<long long>(late),
+                             static_cast<long long>(QDateTime::currentMSecsSinceEpoch() % 100000000));
+        });
+        watchdog->start(10);
     }
 
     return QGuiApplication::exec();
