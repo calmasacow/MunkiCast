@@ -37,7 +37,10 @@ Item {
     Connections {
         target: Document
         function onChanged() { panel.refreshSelection(); }
-        function onSelectionChanged() { panel.refreshSelection(); }
+        function onSelectionChanged() {
+            panel.refreshSelection();
+            panel.refreshPreview();
+        }
     }
 
     /// Make this panel's canvas the one the shell is working on, before doing something to
@@ -49,6 +52,19 @@ Item {
     }
 
     objectName: "sourcesPanel"
+
+    /// Canvas key of the hidden canvas the renderer draws the selected node into, or empty.
+    /// One slot per panel instance, so "Sources: Vertical" previewing its own selection does
+    /// not take the key out from under Main's panel. Released when the panel goes away, or the
+    /// renderer would keep compositing a preview nobody is looking at.
+    property string previewKey: ""
+    readonly property string previewSlot: "sources:" + panel.canvasId
+    function refreshPreview() {
+        panel.previewKey = Preview.setPreviewTarget(panel.previewSlot,
+                                                    panel.visible ? Document.selectedNode : "");
+    }
+    onVisibleChanged: panel.refreshPreview()
+    Component.onDestruction: Preview.setPreviewTarget(panel.previewSlot, "")
 
     /// The add menu is open. Closed by picking something, or by the + again.
     property bool adding: false
@@ -496,8 +512,39 @@ Item {
                 }
             }
 
+            // A picture of the row's own source, so a scene of six camera angles can be told
+            // apart without clicking each one. Only the selected row is live: each live preview
+            // costs the renderer one composite per tick, and a panel of them would cost as much
+            // as the programme itself. The rest keep the last frame they were given.
+            Rectangle {
+                id: shot
+
+                visible: row.sourceName !== "" && !row.isGroup
+                x: eye.x + eye.width + 6
+                anchors.verticalCenter: parent.verticalCenter
+                width: visible ? 44 : 0
+                height: 26
+                color: Theme.c.panelHeader
+                radius: 2
+
+                readonly property string key: row.selected ? panel.previewKey : ""
+
+                Image {
+                    objectName: "sourceThumb"
+                    anchors.fill: parent
+                    anchors.margins: 1
+                    fillMode: Image.PreserveAspectFit
+                    // The provider hands back an image it already holds, so an asynchronous
+                    // reload would only add a frame of blank.
+                    asynchronous: false
+                    cache: false
+                    source: shot.key !== "" && Preview.hasFrame(shot.key)
+                            ? "image://program/" + shot.key + "/" + Preview.generation : ""
+                }
+            }
+
             Column {
-                anchors.left: eye.right
+                anchors.left: shot.visible ? shot.right : eye.right
                 anchors.leftMargin: 6
                 anchors.right: badges.left
                 anchors.rightMargin: 4

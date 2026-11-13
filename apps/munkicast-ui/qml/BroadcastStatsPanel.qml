@@ -91,9 +91,18 @@ Item {
                         bottomPadding: 4
                     }
 
+                    // The bar carries the machine figure; this panel is where the two are told
+                    // apart, which is the question once the bar has said the box is busy.
                     StatRow {
                         width: parent.width
-                        label: qsTr("CPU usage")
+                        label: qsTr("CPU usage (machine)")
+                        value: Telemetry.systemCpuAvailable
+                            ? Telemetry.systemCpuPercent.toFixed(1) + " %" : panel.unavailable
+                    }
+
+                    StatRow {
+                        width: parent.width
+                        label: qsTr("CPU usage (MunkiCast)")
                         value: Telemetry.cpuAvailable
                             ? Telemetry.cpuPercent.toFixed(1) + " %" : panel.unavailable
                     }

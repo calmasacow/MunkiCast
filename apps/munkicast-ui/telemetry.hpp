@@ -36,6 +36,11 @@ class Telemetry : public QObject {
     /// Of one core, like every other tool reports it; this process only, not the machine.
     Q_PROPERTY(double cpuPercent READ cpuPercent NOTIFY sampled)
     Q_PROPERTY(bool cpuAvailable READ cpuAvailable NOTIFY sampled)
+    /// The whole machine across all cores, 0-100, which is what an operator means by "CPU" and
+    /// what a system monitor beside us shows. Kept alongside the per-process figure rather than
+    /// replacing it, so a gauge can draw both: our own share against everything running.
+    Q_PROPERTY(double systemCpuPercent READ systemCpuPercent NOTIFY sampled)
+    Q_PROPERTY(bool systemCpuAvailable READ systemCpuAvailable NOTIFY sampled)
     Q_PROPERTY(double memoryBytes READ memoryBytes NOTIFY sampled)
     Q_PROPERTY(bool memoryAvailable READ memoryAvailable NOTIFY sampled)
 
@@ -70,6 +75,8 @@ public:
     static void configure(QString disk_path);
 
     [[nodiscard]] double cpuPercent() const { return cpu_percent_; }
+    [[nodiscard]] double systemCpuPercent() const { return system_cpu_percent_; }
+    [[nodiscard]] bool systemCpuAvailable() const { return system_cpu_ok_; }
     [[nodiscard]] bool cpuAvailable() const { return cpu_ok_; }
     [[nodiscard]] double memoryBytes() const { return static_cast<double>(memory_bytes_); }
     [[nodiscard]] bool memoryAvailable() const { return memory_ok_; }
@@ -96,6 +103,7 @@ signals:
 
 private:
     void read_cpu();
+    void read_system_cpu();
     void read_memory();
     void read_disk();
     void read_gpu();
@@ -106,6 +114,10 @@ private:
     bool cpu_ok_ = false;
     std::uint64_t last_cpu_ticks_ = 0;
     std::int64_t last_cpu_wall_ms_ = 0;
+    double system_cpu_percent_ = 0.0;
+    bool system_cpu_ok_ = false;
+    std::uint64_t last_system_busy_ = 0;
+    std::uint64_t last_system_total_ = 0;
 
     std::uint64_t memory_bytes_ = 0;
     bool memory_ok_ = false;

@@ -54,41 +54,81 @@ Item {
         anchors.right: actions.left
         anchors.rightMargin: 20
         anchors.verticalCenter: parent.verticalCenter
-        spacing: 22
+        spacing: 16
 
-        Column {
+        // One column per figure, built from the same two-line shape so adding a figure later
+        // costs a line. Machine load lives here rather than in Broadcast Stats because an
+        // operator wants to see a core saturating without opening a panel to look for it.
+        component Gauge: Column {
+            required property string label
+            required property string value
             spacing: 1
 
             Text {
-                text: Telemetry.diskAvailable
-                      ? bar.bytesLabel(Telemetry.diskFreeBytes)
-                      : "—"
+                text: parent.value
                 font.pixelSize: 12
                 color: "#7AA2F7"
             }
 
             Text {
-                text: qsTr("Disk space")
+                text: parent.label
                 font.pixelSize: 9
                 color: Theme.c.textMuted
             }
         }
 
-        Column {
-            spacing: 1
-
-            Text {
-                // Target rate of the first canvas, rather than a measured encoding rate.
-                text: canvasFps.value > 0 ? canvasFps.value.toFixed(1) : "—"
-                font.pixelSize: 12
-                color: "#7AA2F7"
+        // The machine, not this process. Our own share is in the tooltip: during a show the
+        // question is whether the box is keeping up, and only then whose fault it is.
+        Gauge {
+            label: qsTr("CPU")
+            value: Telemetry.systemCpuAvailable
+                   ? Math.round(Telemetry.systemCpuPercent) + "%"
+                   : "—"
+            ToolTipText {
+                text: Telemetry.cpuAvailable
+                      ? qsTr("MunkiCast is using %1% of one core").arg(Telemetry.cpuPercent.toFixed(0))
+                      : qsTr("MunkiCast's own usage is unavailable")
+                visible: cpuHover.containsMouse
+                hoverArea: cpuHover
             }
-
-            Text {
-                text: qsTr("FPS")
-                font.pixelSize: 9
-                color: Theme.c.textMuted
+            MouseArea {
+                id: cpuHover
+                anchors.fill: parent
+                hoverEnabled: true
             }
+        }
+
+        Gauge {
+            label: qsTr("GPU")
+            value: Telemetry.gpuAvailable ? Math.round(Telemetry.gpuPercent) + "%" : "—"
+            ToolTipText {
+                text: Telemetry.encoderAvailable
+                      ? qsTr("Encoder %1%").arg(Telemetry.encoderPercent.toFixed(0))
+                      : Telemetry.gpuNote
+                visible: gpuHover.containsMouse
+                hoverArea: gpuHover
+            }
+            MouseArea {
+                id: gpuHover
+                anchors.fill: parent
+                hoverEnabled: true
+            }
+        }
+
+        Gauge {
+            label: qsTr("Memory")
+            value: Telemetry.memoryAvailable ? bar.bytesLabel(Telemetry.memoryBytes) : "—"
+        }
+
+        Gauge {
+            label: qsTr("Disk space")
+            value: Telemetry.diskAvailable ? bar.bytesLabel(Telemetry.diskFreeBytes) : "—"
+        }
+
+        Gauge {
+            label: qsTr("FPS")
+            // Target rate of the first canvas, rather than a measured encoding rate.
+            value: canvasFps.value > 0 ? canvasFps.value.toFixed(1) : "—"
         }
     }
 

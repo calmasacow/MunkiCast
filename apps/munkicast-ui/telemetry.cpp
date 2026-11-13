@@ -1,6 +1,7 @@
 // SPDX-FileCopyrightText: MunkiCast contributors
 // SPDX-License-Identifier: GPL-3.0-or-later
 
+#include <algorithm>
 #include "telemetry.hpp"
 
 #include <QDateTime>
@@ -163,6 +164,7 @@ void Telemetry::setDiskPath(const QString& path) {
 
 void Telemetry::sample() {
     read_cpu();
+    read_system_cpu();
     read_memory();
     read_disk();
     read_gpu();
@@ -206,6 +208,41 @@ void Telemetry::read_cpu() {
     }
     last_cpu_ticks_ = ticks;
     last_cpu_wall_ms_ = now_ms;
+}
+
+/// The machine, from the aggregate line of /proc/stat. Idle is `idle + iowait`: a disk-bound
+/// recording is not CPU load, and counting iowait as busy would read 100% while the cores wait.
+void Telemetry::read_system_cpu() {
+    QFile stat{QStringLiteral("/proc/stat")};
+    if (!stat.open(QIODevice::ReadOnly))
+        return;
+    const QList<QByteArray> fields = stat.readLine().simplified().split(' ');
+    // "cpu" then user, nice, system, idle, iowait, irq, softirq, steal, guest, guest_nice.
+    if (fields.size() < 9 || fields[0] != "cpu")
+        return;
+    std::uint64_t total = 0;
+    std::uint64_t idle = 0;
+    for (int i = 1; i < fields.size(); ++i) {
+        bool ok = false;
+        const std::uint64_t value = fields[i].toULongLong(&ok);
+        if (!ok)
+            return;
+        // Guest time is already counted inside user and nice, so adding it would double it.
+        if (i >= 9)
+            break;
+        total += value;
+        if (i == 4 || i == 5)
+            idle += value;
+    }
+    const std::uint64_t busy = total - idle;
+    if (last_system_total_ != 0 && total > last_system_total_) {
+        const double span = static_cast<double>(total - last_system_total_);
+        system_cpu_percent_ =
+            std::clamp(static_cast<double>(busy - last_system_busy_) / span * 100.0, 0.0, 100.0);
+        system_cpu_ok_ = true;
+    }
+    last_system_busy_ = busy;
+    last_system_total_ = total;
 }
 
 void Telemetry::read_memory() {

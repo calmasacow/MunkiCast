@@ -4414,6 +4414,31 @@ int main(int argc, char** argv) {
                            : sources_panels.front()->property("renaming").toString();
             };
 
+            {
+                // A row's thumbnail is its own source drawn into a hidden canvas that the
+                // renderer composites like any other, so there is no separate thumbnail path
+                // to check -- only that the row asks for one, and that just the selected row
+                // asks for a live one.
+                bool has_thumb = false;
+                int keyed = 0;
+                for (QQuickItem* item : collect(window->contentItem(), QStringLiteral("sourceThumb"))) {
+                    auto* holder = item->parentItem();
+                    if (holder == nullptr || !holder->isVisible())
+                        continue;
+                    has_thumb = true;
+                    if (!holder->property("key").toString().isEmpty())
+                        ++keyed;
+                }
+                report(has_thumb, "every source row carries a thumbnail");
+                report(keyed <= 1, "at most one source row holds a live preview key at a time");
+                const auto node = document.selectedNode();
+                const auto key = preview.setPreviewTarget(QStringLiteral("check"), node);
+                report(!key.isEmpty() && key != preview.canvasKey(QString{}),
+                       "previewing a node yields its own canvas key, not the programme's");
+                report(preview.setPreviewTarget(QStringLiteral("check"), QString{}).isEmpty(),
+                       "releasing a preview slot clears its key");
+            }
+
             QQuickItem* bound = row_for(browser_node);
             report(bound != nullptr, "the browser's row is on screen to be double-clicked");
             if (bound != nullptr && !panels.isEmpty() && !sources_panels.isEmpty()) {
@@ -6193,6 +6218,13 @@ int main(int argc, char** argv) {
             telemetry.sample();
             report(telemetry.cpuAvailable() && telemetry.cpuPercent() >= 0.0,
                    "and the second has an interval to measure against");
+            // The machine figure is what the toolbar shows, and it is a share of all cores,
+            // so unlike the per-process one it cannot exceed 100.
+            report(!telemetry.systemCpuAvailable() || (telemetry.systemCpuPercent() >= 0.0 &&
+                                                       telemetry.systemCpuPercent() <= 100.0),
+                   "machine CPU is a percentage of the whole machine, not of one core");
+            report(telemetry.systemCpuAvailable(),
+                   "machine CPU is read from /proc/stat once there is an interval");
 
             report(telemetry.memoryAvailable() && telemetry.memoryBytes() > 1024 * 1024,
                    "memory is read from /proc and is a plausible size");
