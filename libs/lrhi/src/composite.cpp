@@ -219,7 +219,7 @@ struct GpuCompositor::Impl {
     VkCommandPool pool = VK_NULL_HANDLE;
     VkCommandBuffer cmd = VK_NULL_HANDLE;
     VkFence fence = VK_NULL_HANDLE;
-    // MUNKICAST_BENCHMARK only: GPU timestamps splitting the fence wait into upload, compute
+    // MUNKICAST_GPU_TIMING only: GPU timestamps splitting the fence wait into upload, compute
     // and readback time. Uploads are interleaved with draws, so they are summed per copy.
     VkQueryPool timestamps = VK_NULL_HANDLE;
     std::uint32_t stamp_at = 0;
@@ -481,7 +481,11 @@ struct GpuCompositor::Impl {
             arena(memory_type(*c, req.memoryTypeBits, VK_MEMORY_PROPERTY_DEVICE_LOCAL_BIT), false)
                 .grow(0);
         }
-        if (std::getenv("MUNKICAST_BENCHMARK") && device_props.limits.timestampComputeAndGraphics) {
+        // Its own variable, not MUNKICAST_BENCHMARK. This prints a line per frame per canvas --
+        // about 700k lines in a two-hour show, which buries the UI_STALL and SLOW_FRAME lines
+        // that a long diagnostic run is actually watching for. Anyone who wants per-frame GPU
+        // timings is looking at one short run and can ask for them.
+        if (std::getenv("MUNKICAST_GPU_TIMING") && device_props.limits.timestampComputeAndGraphics) {
             VkQueryPoolCreateInfo qi{};
             qi.sType = VK_STRUCTURE_TYPE_QUERY_POOL_CREATE_INFO;
             qi.queryType = VK_QUERY_TYPE_TIMESTAMP;

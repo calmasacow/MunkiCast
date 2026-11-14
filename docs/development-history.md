@@ -162,8 +162,10 @@ were 13.2-13.8 ms; mask upload caching delivered the largest final reduction.
 Reproduce without touching the operator's collection: copy it to a temporary
 folder, close the production app to release devices, then run
 `MUNKICAST_RENDER_BACKEND=gpu MUNKICAST_BENCH_PROJECT=/tmp/copy MUNKICAST_BENCH_SCENE=FS.W.CAM build-make/tests/unit/test_preview`.
-`MUNKICAST_BENCHMARK=1` additionally logs per-canvas cumulative render stats and GPU
-preparation/fence-wait samples. Full warning-free build and all 30 tests pass,
+`MUNKICAST_BENCHMARK=1` additionally logs per-canvas cumulative render stats, and
+`MUNKICAST_GPU_TIMING=1` the per-frame GPU preparation/fence-wait samples -- the latter
+separately, because a line per frame per canvas is about 700k lines in a two-hour show and
+buries the stall lines a long run is watching for. Full warning-free build and all 30 tests pass,
 including real monitoring, GPU/CPU equivalence, mask replacement, alpha animation,
 alpha audio, nested preview playback and the non-neutral eight-filter stress case.
 
