@@ -10,6 +10,9 @@
 #include <algorithm>
 #include <random>
 #include <set>
+#include <string>
+#include <utility>
+#include <vector>
 
 using namespace llayout;
 
@@ -835,6 +838,221 @@ LTEST_CASE(a_tight_window_refuses_drops_without_corrupting_anything) {
     std::fprintf(stderr, "       refused %d of 2000\n", refused);
     CHECK_MSG(refused > 100, "only {} drops were refused; the refusal path is barely tested",
               refused);
+}
+
+// ---- DPI and window sizes (issue #25) ------------------------------------------------------
+//
+// The checks above measure one viewport at a time. These sweep the window sizes the shell is
+// actually run at. The scene-graph half of this coverage lived in the shell self-check and was
+// removed as a timing assumption; this is the half that can be asserted without a window.
+//
+// **There is deliberately no scale-factor sweep.** The engine is fed QML `width` and `height`,
+// which are *logical* pixels (`Main.qml:165`), and `Viewport::divider_px`, `tab_bar_px` and the
+// `ZoneMetrics` floors keep their logical defaults -- `Workspace` never touches them
+// (`workspace.cpp:706` sets `bounds` and nothing else). Qt scales the whole scene graph
+// afterwards, so a 2x screen does not change a single number the engine sees. What it changes is
+// how many logical pixels the window has: a 4K panel at 200% is a 1920x1080 workspace. So DPI
+// coverage *is* window-size coverage, and a test that scaled the viewport and the minimums
+// together would assert a property the shell has no code to rely on.
+//
+// Two tests of exactly that were written and deleted. They failed, correctly: `centre_min_px`
+// and `centre_max_px` are absolute, so drop zones are not scale-invariant -- and they should not
+// be, because a tab drop target wants to stay 56 logical pixels at any DPI.
+
+namespace {
+
+/// The two arrangements the shell ships, by the name a failure should print.
+std::vector<std::pair<const char*, Layout>> shipped_layouts() {
+    return {{"build", Layout::default_build()}, {"live", Layout::default_live()}};
+}
+
+/// Window sizes a real operator runs at, in logical pixels: a 4K desktop at 100% down to
+/// Main.qml's `minimumWidth` x `minimumHeight` (960 x 620), the smallest the window can be
+/// dragged to. The middle of the list doubles as the DPI coverage -- 1920x1080 is also a 4K
+/// screen at 200%, and 1280x800 a 1600x1000 one at 125%.
+const std::vector<std::pair<double, double>>& window_sizes() {
+    static const std::vector<std::pair<double, double>> sizes{
+        {3840, 2160}, {2560, 1440}, {1920, 1080}, {1600, 900}, {1440, 900},
+        {1366, 768},  {1280, 800},  {1280, 720},  {1152, 648}, {1024, 768},
+        {960, 620}};
+    return sizes;
+}
+
+} // namespace
+
+LTEST_CASE(every_panel_keeps_its_minimum_at_every_window_size_the_shell_allows) {
+    // The guard this exists for: raising one PanelMin in studio_defaults() can make the shipped
+    // window minimum infeasible, and the symptom is a panel drawn smaller than it can draw
+    // itself -- not a crash, so nothing else catches it. Both arrangements are checked because
+    // `default_live` holds a different tree and could regress on its own.
+    for (const auto& [name, l] : shipped_layouts()) {
+        for (const auto& [w, h] : window_sizes()) {
+            const Constraints cs = Constraints::studio_defaults();
+            const Viewport vp = vp_of(w, h);
+            CHECK_MSG(l.fits(vp, cs), "{} does not fit at {:.0f}x{:.0f}", name, w, h);
+            for (const LeafRect& lf : l.leaves(vp, cs)) {
+                const Node* n = l.find(lf.node);
+                REQUIRE(n != nullptr);
+                for (const std::string& p : n->tabs) {
+                    const PanelMin m = cs.get(p);
+                    CHECK_MSG(lf.rect.w + 1e-6 >= m.w,
+                              "{} at {:.0f}x{:.0f}: '{}' got width {:.2f}, minimum {:.2f}", name,
+                              w, h, p, lf.rect.w, m.w);
+                    CHECK_MSG(lf.rect.h + 1e-6 >= m.h,
+                              "{} at {:.0f}x{:.0f}: '{}' got height {:.2f}, minimum {:.2f}", name,
+                              w, h, p, lf.rect.h, m.h);
+                }
+            }
+        }
+    }
+}
+
+LTEST_CASE(leaves_tile_without_overlap_at_every_window_size) {
+    // `leaves_tile_the_viewport_exactly` proves this at 2560x1440 with the divider and tab bar
+    // zeroed. Those two are absolute pixels, so their share of the window grows as the window
+    // shrinks -- from 0.7% of a 4K desktop to 3% at the window minimum. This checks the
+    // arithmetic holds with them present, all the way down.
+    const Constraints cs = Constraints::studio_defaults();
+    for (const auto& [name, l] : shipped_layouts()) {
+        for (const auto& [w, h] : window_sizes()) {
+            const Viewport vp = vp_of(w, h);
+            const std::vector<LeafRect> lf = l.leaves(vp, cs);
+            double area = 0.0;
+            for (const LeafRect& a : lf) {
+                CHECK_MSG(a.rect.w > 0.0 && a.rect.h > 0.0,
+                          "{} at {:.0f}x{:.0f}: empty leaf {}", name, w, h, a.node);
+                CHECK_MSG(a.rect.x >= -1e-9 && a.rect.y >= -1e-9,
+                          "{} at {:.0f}x{:.0f}: leaf {} starts outside the window", name, w, h,
+                          a.node);
+                CHECK_MSG(a.rect.right() <= w + 1e-6 && a.rect.bottom() <= h + 1e-6,
+                          "{} at {:.0f}x{:.0f}: leaf {} runs past the window", name, w, h,
+                          a.node);
+                area += a.rect.w * a.rect.h;
+            }
+            // Dividers and tab bars take real space, so the leaves cannot fill the window --
+            // but they must not leave more than that behind either.
+            CHECK_MSG(area < w * h, "{} at {:.0f}x{:.0f}: leaves fill the whole window", name, w,
+                      h);
+            CHECK_MSG(area > 0.9 * w * h,
+                      "{} at {:.0f}x{:.0f}: leaves cover only {:.1f}% of the window", name, w, h,
+                      100.0 * area / (w * h));
+            for (std::size_t i = 0; i < lf.size(); ++i)
+                for (std::size_t j = i + 1; j < lf.size(); ++j)
+                    CHECK_MSG(!overlaps(lf[i].rect, lf[j].rect),
+                              "{} at {:.0f}x{:.0f}: leaves {} and {} overlap", name, w, h,
+                              lf[i].node, lf[j].node);
+        }
+    }
+}
+
+LTEST_CASE(every_point_in_the_window_is_either_a_drop_target_or_a_divider) {
+    // Hit testing mixes proportions with absolute distances -- `Viewport::edge_px` and the
+    // `ZoneMetrics` centre floor and ceiling -- so a small window is where a dead region is most
+    // likely to appear. A point inside the workspace that answers neither a drop nor a divider
+    // is a gesture the operator cannot complete, with no feedback to say why.
+    //
+    // The divider half is not an afterthought: the divider gaps are the one place `hit_test`
+    // legitimately answers nothing, because the panel rects are the gap's two sides and the gap
+    // is for dragging the divider instead. A point there must be claimed by
+    // `hit_test_divider`, with the same slop the shell passes.
+    const Constraints cs = Constraints::studio_defaults();
+    for (const auto& [name, l] : shipped_layouts()) {
+        for (const auto& [w, h] : window_sizes()) {
+            const Viewport vp = vp_of(w, h);
+            for (const double fx : {0.01, 0.08, 0.25, 0.5, 0.75, 0.92, 0.99}) {
+                for (const double fy : {0.01, 0.08, 0.3, 0.5, 0.7, 0.92, 0.99}) {
+                    const double x = w * fx;
+                    const double y = h * fy;
+                    const auto hit = l.hit_test(x, y, vp, cs);
+                    if (!hit.has_value()) {
+                        CHECK_MSG(l.hit_test_divider(x, y, vp, cs).has_value(),
+                                  "{} at {:.0f}x{:.0f}: ({:.2f}, {:.2f}) is neither a drop "
+                                  "target nor a divider",
+                                  name, w, h, fx, fy);
+                        continue;
+                    }
+                    CHECK_MSG(hit->is_edge || hit->zone != Zone::None,
+                              "{} at {:.0f}x{:.0f}: ({:.2f}, {:.2f}) names a panel with no zone",
+                              name, w, h, fx, fy);
+                    CHECK_MSG(hit->preview.w > 0.0 && hit->preview.h > 0.0,
+                              "{} at {:.0f}x{:.0f}: ({:.2f}, {:.2f}) previews an empty rect", name,
+                              w, h, fx, fy);
+                    CHECK_MSG(hit->preview.right() <= w + 1e-6 &&
+                                  hit->preview.bottom() <= h + 1e-6,
+                              "{} at {:.0f}x{:.0f}: ({:.2f}, {:.2f}) previews past the window",
+                              name, w, h, fx, fy);
+                }
+            }
+        }
+    }
+}
+
+LTEST_CASE(a_hit_test_answer_can_be_docked_at_every_window_size) {
+    // Weaker than it looks and deliberately so: at the small end a drop is often *refused*,
+    // because the tree no longer fits once a panel is split off (ADR-0016 rule 8). What this
+    // forbids is the engine naming a target that `dock` then rejects as malformed -- an
+    // invalid node, a zone the target cannot take -- which would be the engine disagreeing with
+    // itself about the same point.
+    const Constraints cs = Constraints::studio_defaults();
+    for (const auto& [name, base] : shipped_layouts()) {
+        for (const auto& [w, h] : window_sizes()) {
+            const Viewport vp = vp_of(w, h);
+            for (const double fx : {0.08, 0.5, 0.92}) {
+                for (const double fy : {0.08, 0.5, 0.92}) {
+                    const auto hit = base.hit_test(w * fx, h * fy, vp, cs);
+                    if (!hit.has_value() || hit->is_edge)
+                        continue;
+                    Layout l = base;
+                    const DockResult r = l.dock("log", hit->node, hit->zone, vp, cs);
+                    CHECK_MSG(!r.reason.starts_with("unknown") &&
+                                  !r.reason.starts_with("invalid"),
+                              "{} at {:.0f}x{:.0f}: ({:.2f}, {:.2f}) named a target dock calls "
+                              "malformed: {}",
+                              name, w, h, fx, fy, r.reason);
+                    const auto bad = l.validate();
+                    CHECK_MSG(!bad.has_value(), "{} at {:.0f}x{:.0f}: ({:.2f}, {:.2f}) left the "
+                                                "tree invalid: {}",
+                              name, w, h, fx, fy, bad.value_or(""));
+                }
+            }
+        }
+    }
+}
+
+LTEST_CASE(a_window_too_small_for_the_layout_still_draws_something_sane) {
+    // Below the root minimum the engine cannot honour every panel, and `fits` says so. What it
+    // must not do is answer with rubbish: the shell draws whatever comes back, so a negative
+    // extent or an overlap is a visual corruption rather than a refused gesture. The window
+    // cannot be dragged this small, but a restored layout file, a tiny virtual screen, or a
+    // very high scale factor on a small panel can all get here.
+    //
+    // 878x466 is the build layout's own root minimum, so it is the last size that fits; the rest
+    // are below it. 0x0 is the pre-resize state the shell starts in.
+    const Constraints cs = Constraints::studio_defaults();
+    for (const auto& [name, l] : shipped_layouts()) {
+        const std::size_t expected = l.leaves(vp_of(1920, 1080), cs).size();
+        for (const auto& [w, h] : std::vector<std::pair<double, double>>{
+                 {878, 466}, {800, 600}, {640, 480}, {320, 240}, {64, 64}, {1, 1}, {0, 0}}) {
+            const Viewport vp = vp_of(w, h);
+            const std::vector<LeafRect> lf = l.leaves(vp, cs);
+            CHECK_MSG(lf.size() == expected, "{} at {:.0f}x{:.0f} lost a panel group", name, w, h);
+            for (const LeafRect& a : lf) {
+                CHECK_MSG(a.rect.w >= 0.0 && a.rect.h >= 0.0,
+                          "{} at {:.0f}x{:.0f}: negative extent {:.2f}x{:.2f}", name, w, h,
+                          a.rect.w, a.rect.h);
+                CHECK_MSG(a.rect.x >= -1e-9 && a.rect.y >= -1e-9,
+                          "{} at {:.0f}x{:.0f}: negative origin", name, w, h);
+            }
+            for (std::size_t i = 0; i < lf.size(); ++i)
+                for (std::size_t j = i + 1; j < lf.size(); ++j)
+                    CHECK_MSG(!overlaps(lf[i].rect, lf[j].rect),
+                              "{} at {:.0f}x{:.0f}: leaves {} and {} overlap", name, w, h,
+                              lf[i].node, lf[j].node);
+            for (const DividerHandle& d : l.dividers(vp, cs))
+                CHECK_MSG(d.rect.w >= 0.0 && d.rect.h >= 0.0,
+                          "{} at {:.0f}x{:.0f}: negative divider handle", name, w, h);
+        }
+    }
 }
 
 LTEST_MAIN("layout")
