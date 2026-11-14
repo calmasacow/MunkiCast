@@ -28,6 +28,10 @@ namespace munkicast::ui {
 /// is being dropped", which is a different and much more dangerous claim than "nothing is
 /// running". ADR-0020 is why they will arrive per-canvas and per-output rather than as one
 /// number: a hitch in one canvas must not be hidden inside another's average.
+///
+/// Whether a renderer is attached at all is `Preview.rendererAttached`, since Preview owns that
+/// channel. This class had a second copy of it that was hardcoded false and so would have said
+/// "no renderer" through an entire show.
 class Telemetry : public QObject {
     Q_OBJECT
     QML_ELEMENT
@@ -62,10 +66,6 @@ class Telemetry : public QObject {
     /// Why the GPU figures are missing, when they are. Shown rather than swallowed.
     Q_PROPERTY(QString gpuNote READ gpuNote NOTIFY sampled)
 
-    /// False until a render process reports in. Everything the renderer owns reads as
-    /// unavailable while this is false.
-    Q_PROPERTY(bool rendererAttached READ rendererAttached NOTIFY sampled)
-
 public:
     explicit Telemetry(QObject* parent = nullptr);
     ~Telemetry() override;
@@ -92,7 +92,6 @@ public:
     [[nodiscard]] double vramUsedBytes() const { return static_cast<double>(vram_used_); }
     [[nodiscard]] double vramTotalBytes() const { return static_cast<double>(vram_total_); }
     [[nodiscard]] QString gpuNote() const { return gpu_note_; }
-    [[nodiscard]] bool rendererAttached() const { return false; }
 
     /// Take a reading now, rather than waiting for the timer. Used by the self-check.
     Q_INVOKABLE void sample();

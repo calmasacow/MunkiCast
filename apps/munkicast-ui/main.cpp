@@ -6261,9 +6261,17 @@ int main(int argc, char** argv) {
                        "a machine with no GPU telemetry says why rather than showing zeroes");
             }
 
-            // The renderer's figures are not invented while there is no renderer.
-            report(!telemetry.rendererAttached(),
-                   "no render process is claimed while none exists");
+            // Telemetry used to carry its own rendererAttached that was hardcoded false, so it
+            // would have claimed "no renderer" throughout a show, and the old check here passed
+            // only by agreeing with that constant. Preview owns the channel and is the only
+            // thing that can answer.
+            //
+            // What is asserted is the implication, not the attachment: a published picture
+            // *proves* a live channel, while a renderer that has not drawn its first frame yet
+            // proves nothing either way. Asserting attachment outright made this check depend
+            // on the renderer winning a race, which it lost one run in three.
+            report(preview.generation() == 0 || preview.rendererAttached(),
+                   "a published picture means the renderer is reported as attached");
         }
 
         // ---- the controls panel: decks and outputs ---------------------------------------
