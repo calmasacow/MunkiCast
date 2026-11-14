@@ -4,6 +4,9 @@
 #include <lcapture/video_buffer.hpp>
 #include "../../libs/lcapture/src/video_signal.hpp"
 #include "ltest.hpp"
+#include <cstdint>
+#include <optional>
+#include <vector>
 #include <algorithm>
 #include <chrono>
 #include <condition_variable>
@@ -407,6 +410,97 @@ LTEST_CASE(buffered_video_rejects_invalid_driver_timestamps_without_flushing_goo
         REQUIRE(sample.frame);
         CHECK_EQ(sample.frame->sequence, static_cast<std::uint32_t>(output));
     }
+}
+
+// ---- HDR capture (issue #20) ----------------------------------------------------------------
+//
+// Measured against an Elgato 4K X fed a continuous HDR 10-bit loop, because the premise the
+// earlier HDR work was built on does not hold for that card: it reports Colorspace sRGB and
+// Transfer Function Rec.709 even on a PQ signal, so `signal_colour` sees plain SDR and every
+// colorimetry-keyed branch is dead. The numbers below are from that card's own frames.
+
+LTEST_CASE(pq_code_values_decode_to_the_luminances_the_standard_defines) {
+    using munkicast::capture::detail::pq_nits;
+    // ST 2084's own anchors.
+    CHECK_NEAR(pq_nits(0.0), 0.0, 1e-9);
+    CHECK_NEAR(pq_nits(1.0), 10000.0, 1.0);
+    // 0.5 is a touch under SDR white, which is what makes 100 nits sit near the middle of the
+    // range rather than at the top: there is room above it for highlights.
+    CHECK(pq_nits(0.5) > 85.0);
+    CHECK(pq_nits(0.5) < 100.0);
+    // The measured frame: median luma 518 of 1023, peak 593. Read as PQ these are 98 and 201
+    // nits -- ordinary picture content against a 100-nit SDR white, which is how the signal was
+    // identified as genuinely PQ rather than mislabelled SDR.
+    CHECK_NEAR(pq_nits(518.0 / 1023.0), 98.3, 1.0);
+    CHECK_NEAR(pq_nits(593.0 / 1023.0), 201.0, 2.0);
+}
+
+LTEST_CASE(tone_mapping_pq_to_sdr_never_makes_a_brighter_input_darker) {
+    using munkicast::capture::detail::pq_to_sdr;
+    // The bug this guards against was written and measured: a linear ramp below reference with a
+    // Reinhard shoulder above it is not monotonic. 100 nits came out at 0.999 and 201 nits at
+    // 0.682, so on a real frame a highlight would have turned into a dark patch.
+    double previous = -1.0;
+    for (int step = 0; step <= 1023; ++step) {
+        const double mapped = pq_to_sdr(static_cast<double>(step) / 1023.0);
+        CHECK_MSG(mapped >= previous, "code {} fell from {} to {}", step, previous, mapped);
+        CHECK(mapped >= 0.0 && mapped <= 1.0);
+        previous = mapped;
+    }
+}
+
+LTEST_CASE(tone_mapping_output_is_a_display_signal_not_linear_light) {
+    using munkicast::capture::detail::linear_to_display;
+    using munkicast::capture::detail::pq_to_sdr;
+    CHECK_NEAR(pq_to_sdr(0.0), 0.0, 1e-9);
+    // The OETF is the half that was missing at first, and the live feed is what caught it. With
+    // the roll off alone the tone-mapped frame put 50% of its pixels in the bottom eighth of the
+    // range, against 14.6% for the card's own 8-bit conversion of the same signal, and its mean
+    // luma came out 50 where the card gave 72. The output is a display signal, so a 100-nit
+    // input belongs near 0.7, not at the 0.5 that linear light would put it at.
+    const double white = pq_to_sdr(518.0 / 1023.0);
+    CHECK(white > 0.66 && white < 0.75);
+    // The frame's own peak is brighter than white but short of clipping: it has somewhere to go.
+    const double peak = pq_to_sdr(593.0 / 1023.0);
+    CHECK(peak > white);
+    CHECK(peak < 0.95);
+    // Far above the assumed source peak everything lands on white, which is a roll off reaching
+    // its end rather than content being thrown away.
+    CHECK_NEAR(pq_to_sdr(0.95), 1.0, 0.01);
+    // The curve's own anchors, so a change to it has to be deliberate rather than incidental.
+    CHECK_NEAR(linear_to_display(0.0), 0.0, 1e-9);
+    CHECK_NEAR(linear_to_display(1.0), 1.0, 1e-6);
+    CHECK(linear_to_display(0.5) > 0.70 && linear_to_display(0.5) < 0.76);
+}
+
+LTEST_CASE(a_ten_bit_plane_is_told_from_eight_bit_values_padded_into_one) {
+    using munkicast::capture::detail::plane_is_truly_ten_bit;
+    // Why this exists: the signal's bit depth cannot be asked for. The 4K X answers
+    // VIDIOC_QUERY_DV_TIMINGS with ENOTTY and enumerates P010 from a static USB descriptor at
+    // every size whatever is plugged in, so only the data itself says what arrived.
+    std::vector<std::uint16_t> padded(4096);
+    for (std::size_t i = 0; i < padded.size(); ++i)
+        // An 8-bit value widened into P010's layout: ten significant bits at the top, and the
+        // low two of those ten always zero because the source had no such detail.
+        padded[i] = static_cast<std::uint16_t>((i % 256) << 8);
+    CHECK_EQ(plane_is_truly_ten_bit(padded.data(), padded.size()), std::optional<bool>(false));
+
+    std::vector<std::uint16_t> real(4096);
+    for (std::size_t i = 0; i < real.size(); ++i)
+        real[i] = static_cast<std::uint16_t>((((i * 7) % 1024) & 0x3ffu) << 6);
+    CHECK_EQ(plane_is_truly_ten_bit(real.data(), real.size()), std::optional<bool>(true));
+
+    // Nothing to look at is no answer at all, rather than an answer of "8-bit".
+    CHECK(!plane_is_truly_ten_bit(nullptr, 0).has_value());
+    CHECK(!plane_is_truly_ten_bit(real.data(), 0).has_value());
+
+    // The bug the live feed caught: this card sends two blank frames before the first real one,
+    // and a black frame's low bits are zero at either depth. Deciding on it answered "8-bit" for
+    // every signal, PQ included, so a flat frame must abstain and let the next one answer.
+    const std::vector<std::uint16_t> black(4096, 0);
+    CHECK(!plane_is_truly_ten_bit(black.data(), black.size()).has_value());
+    const std::vector<std::uint16_t> flat_grey(4096, static_cast<std::uint16_t>(512u << 6));
+    CHECK(!plane_is_truly_ten_bit(flat_grey.data(), flat_grey.size()).has_value());
 }
 
 LTEST_MAIN("video")

@@ -14,6 +14,7 @@
 #include <fcntl.h>
 #include <linux/videodev2.h>
 #include <optional>
+#include <vector>
 #include <poll.h>
 #include <sys/ioctl.h>
 #include <sys/mman.h>
@@ -159,6 +160,18 @@ struct VideoCapture::State {
     std::string colour_range;
     VideoLayout raw = VideoLayout::Bgra;
     bool bt709 = false, full_range = false;
+    /// Set once the first P010 frame has been looked at: whether its pixels really carry ten
+    /// bits, and so whether the PQ roll off below applies. Undecided until then, because the
+    /// signal's depth cannot be asked for -- see `plane_is_truly_ten_bit`.
+    std::optional<bool> ten_bit;
+    /// PQ code value (ten bits) to an SDR component. Built once; the alternative is a `pow` per
+    /// component, and a 4K frame has 25 million of them.
+    std::vector<std::uint8_t> pq_lut;
+    /// 16-bit RGBA scratch for the tone-mapped path, and the converter that fills it.
+    std::vector<std::uint16_t> deep;
+    SwsContext* deep_converter = nullptr;
+    /// The device path, for the one line said when the PQ decision is made.
+    std::string path_for_log;
     std::chrono::nanoseconds timeout{};
     std::atomic<bool> stopping{false};
     std::thread thread;
@@ -173,6 +186,7 @@ struct VideoCapture::State {
         for (auto& buffer : buffers)
             if (buffer.data != MAP_FAILED) ::munmap(buffer.data, buffer.size);
         sws_freeContext(converter);
+        sws_freeContext(deep_converter);
         av_packet_free(&packet);
         av_frame_free(&decoded);
         avcodec_free_context(&decoder);
@@ -339,10 +353,58 @@ struct VideoCapture::State {
                     if (call(fd, VIDIOC_QBUF, &buffer) < 0) break;
                     continue;
                 }
-                std::uint8_t* dst[4] = {(*free)->pixels.data(), nullptr, nullptr, nullptr};
-                int dst_stride[4] = {static_cast<int>(f.width) * 4, 0, 0, 0};
-                if (valid && sws_scale(converter, src, stride, 0, static_cast<int>(f.height), dst, dst_stride)
-                    == static_cast<int>(f.height)) callback(*free);
+                // A PQ signal is decided once, from the first frame's own low bits, because the
+                // card will not say: the 4K X reports Rec.709 on a PQ feed and answers
+                // VIDIOC_QUERY_DV_TIMINGS with ENOTTY (issue #20). Only P010 is asked, since an
+                // 8-bit format cannot be carrying ten bits to begin with.
+                // Asked of every frame until one has a picture in it: this card sends two blank
+                // frames first, and a blank frame's low bits are zero whatever the depth.
+                if (f.pixelformat == V4L2_PIX_FMT_P010 && !ten_bit) {
+                    ten_bit = detail::plane_is_truly_ten_bit(
+                        reinterpret_cast<const std::uint16_t*>(src[0]),
+                        static_cast<std::size_t>(f.width) * f.height);
+                    if (ten_bit && *ten_bit) {
+                        pq_lut.resize(1024);
+                        for (int code = 0; code < 1024; ++code)
+                            pq_lut[static_cast<std::size_t>(code)] = static_cast<std::uint8_t>(
+                                detail::pq_to_sdr(code / 1023.0) * 255.0 + 0.5);
+                        lc::info("video capture: 10-bit PQ content on {}; tone-mapping to SDR",
+                                 path_for_log);
+                    } else if (ten_bit) {
+                        lc::info("video capture: P010 on {} carries 8-bit values; no tone-mapping",
+                                 path_for_log);
+                    }
+                }
+                const bool tone_map = ten_bit.value_or(false) && !pq_lut.empty();
+                if (tone_map) {
+                    // Through 16-bit RGBA first. swscale does the matrix and the range, never a
+                    // transfer curve, so what lands here is still PQ-coded -- which is exactly
+                    // what the LUT wants. Measured 11.3 ms for a 4K frame.
+                    deep.resize(static_cast<std::size_t>(f.width) * f.height * 4u);
+                    std::uint8_t* deep_dst[4] = {reinterpret_cast<std::uint8_t*>(deep.data()),
+                                                 nullptr, nullptr, nullptr};
+                    int deep_stride[4] = {static_cast<int>(f.width) * 8, 0, 0, 0};
+                    if (valid && sws_scale(deep_converter, src, stride, 0,
+                                           static_cast<int>(f.height), deep_dst, deep_stride) ==
+                                     static_cast<int>(f.height)) {
+                        auto* out = (*free)->pixels.data();
+                        const auto* in = deep.data();
+                        const auto count = static_cast<std::size_t>(f.width) * f.height;
+                        for (std::size_t i = 0; i < count; ++i) {
+                            // BGRA out, RGBA in; the ten significant bits sit at the top.
+                            out[i * 4 + 0] = pq_lut[in[i * 4 + 2] >> 6];
+                            out[i * 4 + 1] = pq_lut[in[i * 4 + 1] >> 6];
+                            out[i * 4 + 2] = pq_lut[in[i * 4 + 0] >> 6];
+                            out[i * 4 + 3] = 255;
+                        }
+                        callback(*free);
+                    }
+                } else {
+                    std::uint8_t* dst[4] = {(*free)->pixels.data(), nullptr, nullptr, nullptr};
+                    int dst_stride[4] = {static_cast<int>(f.width) * 4, 0, 0, 0};
+                    if (valid && sws_scale(converter, src, stride, 0, static_cast<int>(f.height), dst, dst_stride)
+                        == static_cast<int>(f.height)) callback(*free);
+                }
             }
             if (call(fd, VIDIOC_QBUF, &buffer) < 0) break;
         }
@@ -495,9 +557,14 @@ std::unique_ptr<VideoCapture> VideoCapture::open(const std::string& path,
     state->timeout = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::duration<double>(timeout_seconds));
     // An HDR signal is captured rather than refused (ADR-0071). A 4K X fed by a console or a
     // modern PC sees HDR on the wire as a matter of course, and refusing it left the operator
-    // turning HDR off at the source. Delivery is still SDR, and the conversion here is the
-    // matrix and the range only -- see the note at the converter below for why the transfer
-    // curve is not touched and where the roll off belongs.
+    // turning HDR off at the source. Delivery is still SDR.
+    //
+    // The transfer curve *is* now handled, for P010 (issue #20). Measured on a 4K X fed a PQ
+    // loop: the card reports Colorspace sRGB and Transfer Function Rec.709 regardless, so none
+    // of the colorimetry below fires, and decoding PQ code values as Rec.709 gamma returned a
+    // frame spanning 27-154 of 255 where the card's own 8-bit conversion of the same signal gave
+    // 0-230 -- flat and dark. The roll off is applied per frame at the converter, keyed on the
+    // frame's own low bits rather than on anything the card claims.
     //
     // Rec.2100 HLG carries no V4L2 transfer code of its own -- it is BT.2020 primaries with the
     // HLG curve -- so the two HDR curves are told apart by `xfer_func`, and BT.2020 primaries
@@ -531,6 +598,20 @@ std::unique_ptr<VideoCapture> VideoCapture::open(const std::string& path,
         else if (range == "Partial") full = 0;
         state->bt709 = matrix == SWS_CS_ITU709;
         state->full_range = full;
+        state->path_for_log = path;
+        // A second converter to 16-bit RGBA, used only if the first P010 frame proves to carry
+        // ten bits. Built here rather than on that frame so the decision costs no allocation on
+        // the capture thread; a P010 feed that turns out to be 8-bit simply never uses it.
+        if (f.pixelformat == V4L2_PIX_FMT_P010) {
+            state->deep_converter =
+                sws_getContext(width, height, pixel_format(f.pixelformat), width, height,
+                               AV_PIX_FMT_RGBA64LE, SWS_BILINEAR, nullptr, nullptr, nullptr);
+            if (!state->deep_converter) return fail("cannot create 10-bit capture converter");
+            const int* deep_coefficients = sws_getCoefficients(matrix);
+            if (sws_setColorspaceDetails(state->deep_converter, deep_coefficients, full,
+                                         deep_coefficients, 1, 0, 1 << 16, 1 << 16) < 0)
+                return fail("invalid colour range");
+        }
         // Even sizes keep chroma planes whole; P010 and RGB stay on the CPU path.
         if (options.raw_yuv && width % 2 == 0 && height % 2 == 0)
             state->raw = f.pixelformat == V4L2_PIX_FMT_YUYV ? VideoLayout::Yuyv
