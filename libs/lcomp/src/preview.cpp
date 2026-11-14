@@ -428,7 +428,7 @@ std::expected<PreviewEvent, std::string> PreviewLink::decode(lipc::Message messa
         return event;
     }
     if (kind == Kind::RecordState) {
-        if (payload.size() < 47)
+        if (payload.size() < 47 + lc::kUlidLength + 8)
             return std::unexpected(std::string{"a recording state was cut short"});
         PreviewEvent event;
         event.kind = PreviewEvent::Kind::Record;
@@ -452,6 +452,18 @@ std::expected<PreviewEvent, std::string> PreviewLink::decode(lipc::Message messa
             return std::unexpected(std::string{"invalid replay state"});
         event.record.clip_path.assign(reinterpret_cast<const char*>(payload.data() + at), path_size);
         at += path_size;
+        if (payload.size() - at < lc::kUlidLength + 8)
+            return std::unexpected(std::string{"a recording state carried no destination"});
+        const std::string id{reinterpret_cast<const char*>(payload.data() + at), lc::kUlidLength};
+        at += lc::kUlidLength;
+        // A nil id is how "nothing is running" is said, and parse rejects it, so it is not an
+        // error here -- only an unparseable non-nil id is.
+        if (const auto parsed = ldoc::Id::parse(id); parsed)
+            event.record.output = *parsed;
+        else if (id != ldoc::Id::nil().to_string())
+            return std::unexpected(std::string{"a recording state carried an invalid destination"});
+        if (!take_u64(payload, at, event.record.bytes))
+            return std::unexpected(std::string{"a recording state carried no byte count"});
         event.record.error.assign(reinterpret_cast<const char*>(payload.data() + at),
                                   payload.size() - at);
         return event;
@@ -677,6 +689,8 @@ std::expected<void, std::string> serve_preview(lipc::Channel channel, FrameSourc
         append_u64(reply, state.replay_duration_ms);
         append_u32(reply, static_cast<std::uint32_t>(state.clip_path.size()));
         for (char c : state.clip_path) reply.push_back(static_cast<std::byte>(c));
+        for (char c : state.output.to_string()) reply.push_back(static_cast<std::byte>(c));
+        append_u64(reply, state.bytes);
         for (char c : state.error)
             reply.push_back(static_cast<std::byte>(c));
         return channel.send(reply);

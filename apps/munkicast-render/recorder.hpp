@@ -143,8 +143,12 @@ class Recorder {
         }
 
         auto& target = replay ? replay_output_ : streaming ? streaming_output_ : recording_output_;
+        auto& target_id = replay ? replay_id_ : streaming ? streaming_id_ : recording_id_;
         if (target)
             return status(running(), "That destination is already running.");
+        // A recording is addressed by its encode, not by a destination row (ADR-0029), so for
+        // that case the encode's id is the most specific thing there is to attribute to.
+        target_id = request.output.is_nil() ? request.encode : request.output;
         const auto audio_id = audio ? audio->id : ldoc::Id::nil();
         if (encoder_) {
             if (encode->id != encode_ || audio_id != audio_encode_)
@@ -335,7 +339,19 @@ class Recorder {
             state.replay_saving = replay.saving;
             state.replay_bytes = replay.bytes;
             state.replay_duration_ms = replay.duration_ms;
+            // Video and audio together: what a destination row means by "sent" is everything
+            // that went down the wire, not the video track alone.
+            const auto& stats = munkicast::encode::encoder_stats(*encoder_);
+            state.bytes = stats.video_bytes + stats.audio_bytes;
         }
+        // Streaming first: while both run they share the one encoder, and the live destination
+        // is the row an operator is watching.
+        if (streaming_output_)
+            state.output = streaming_id_;
+        else if (recording_output_)
+            state.output = recording_id_;
+        else if (replay_output_)
+            state.output = replay_id_;
         return state;
     }
 
@@ -350,6 +366,11 @@ class Recorder {
     AudioSources& audio_;
     munkicast::encode::EncoderPtr encoder_;
     std::optional<std::size_t> recording_output_, streaming_output_, replay_output_;
+    /// The document destination each sink was started for. The indices above are the encoder's
+    /// own sink slots, which say nothing about which row in Outputs asked for them, so a panel
+    /// cannot attribute counters without these. `streaming_id_` was already kept for the live
+    /// destination; recording and replay now say the same thing about themselves.
+    ldoc::Id recording_id_ = ldoc::Id::nil(), replay_id_ = ldoc::Id::nil();
     ldoc::Id encode_ = ldoc::Id::nil(), audio_encode_ = ldoc::Id::nil();
     ldoc::Id streaming_id_ = ldoc::Id::nil();
     ldoc::Id canvas_ = ldoc::Id::nil();

@@ -293,16 +293,38 @@ QVariantList Preview::captureStats() const {
 }
 
 QVariantMap Preview::outputStats() const {
+    const auto bytes = output_bytes_ - base_output_bytes_;
+    // Averaged over the whole run rather than since the last report: a per-report rate would
+    // swing with however often the renderer happened to speak, which is not a property of the
+    // stream. Bytes over milliseconds times eight is kilobits per second exactly.
+    const auto elapsed = output_since_.time_since_epoch().count() == 0
+                             ? 0
+                             : std::chrono::duration_cast<std::chrono::milliseconds>(
+                                   std::chrono::steady_clock::now() - output_since_)
+                                   .count();
     return {{"available", output_stats_available_},
             {"frames", QVariant::fromValue<qulonglong>(output_frames_ - base_output_frames_)},
             {"missed", QVariant::fromValue<qulonglong>(output_missed_ - base_output_missed_)},
+            {"bytes", QVariant::fromValue<qulonglong>(bytes)},
+            {"owner", output_owner_},
+            {"bitrateKbps", elapsed > 0 && output_stats_available_
+                                ? QVariant::fromValue(double(bytes) * 8.0 / double(elapsed))
+                                : QVariant{}},
             {"lag", QVariant::fromValue<qulonglong>(output_lag_ - base_output_lag_)}};
+}
+
+QVariantMap Preview::outputStatsFor(const QString& outputId) const {
+    if (outputId.isEmpty() || output_owner_ != outputId || !output_stats_available_)
+        return {};
+    return outputStats();
 }
 
 void Preview::resetStats() {
     base_output_frames_ = output_frames_;
     base_output_missed_ = output_missed_;
+    base_output_bytes_ = output_bytes_;
     base_output_lag_ = output_lag_;
+    output_since_ = std::chrono::steady_clock::now();
     {
         std::lock_guard lock(state_->mu);
         render_baselines_.clear();
@@ -719,10 +741,19 @@ Preview::Spot& Preview::spot(const QString& slot) {
     return spots_[slot];
 }
 
+/// Whether a preview should drive the live clock by itself.
+///
+/// Only the two dialogs do. Someone with Filters or a camera's settings open is judging a
+/// moving picture and is looking right at it, and both close in a moment. A thumbnail in the
+/// source list is not that: the panel is open for the whole show, and polling for it would mean
+/// the renderer compositing forever behind an idle, static scene -- which is the cost the
+/// "nothing refreshes while nothing is live" checks exist to catch. Thumbnails instead take
+/// whatever the renderer publishes anyway, which is every document change plus every frame of
+/// an actually live scene.
 bool Preview::previewing() const {
     for (const auto& [name, spot] : spots_) {
-        (void)name;
-        if (!spot.target.isEmpty())
+        if (!spot.target.isEmpty() &&
+            (name == QStringLiteral("filters") || name == QStringLiteral("settings")))
             return true;
     }
     return false;
@@ -978,12 +1009,24 @@ void Preview::on_received(Received& item) {
                 replay_saving_ != got.record.replay_saving || !got.record.clip_path.empty() ||
                 (recording_pending_ && got.record.control_reply);
             if (got.record.frames < base_output_frames_ ||
-                got.record.missed < base_output_missed_ || got.record.encode_lag < base_output_lag_)
-                base_output_frames_ = base_output_missed_ = base_output_lag_ = 0;
+                got.record.missed < base_output_missed_ || got.record.encode_lag < base_output_lag_ ||
+                got.record.bytes < base_output_bytes_)
+                base_output_frames_ = base_output_missed_ = base_output_lag_ = base_output_bytes_ = 0;
             output_stats_available_ = got.record.running || got.record.frames > 0;
             output_frames_ = got.record.frames;
             output_missed_ = got.record.missed;
             output_lag_ = got.record.encode_lag;
+            output_bytes_ = got.record.bytes;
+            // A new destination starts its own clock, or its first seconds would be divided by
+            // the whole of the previous one's run and read far too low.
+            const auto owner = got.record.output.is_nil()
+                                   ? QString{}
+                                   : QString::fromStdString(got.record.output.to_string());
+            if (owner != output_owner_) {
+                output_owner_ = owner;
+                output_since_ = std::chrono::steady_clock::now();
+                base_output_bytes_ = 0;
+            }
             if (got.record.control_reply) recording_pending_ = false;
             const bool was_recording = recording_, was_streaming = streaming_;
             const bool was_replay_saving = replay_saving_;

@@ -54,6 +54,26 @@ Item {
         return "file://" + encodeURI(absolute);
     }
 
+    /// The renderer draws this source into a hidden canvas; this is that canvas's key, or
+    /// empty. Live, so a camera's framing can be judged while its mode is being chosen.
+    ///
+    /// It shows the source as it is *now*, not as the unsaved edits would make it: settings
+    /// reach the worker only when OK is pressed, and republishing on every keystroke would
+    /// reconfigure the worker -- blanking the picture -- on the way to each digit of a
+    /// resolution. The colour and image cards below stay as they are, because those two can be
+    /// drawn from `pending` directly and so can preview an edit before it is applied.
+    property string previewKey: ""
+    /// Types whose picture the renderer has to make. A colour or an image file is drawn in QML
+    /// from the pending values, which also previews the edit, so neither belongs here.
+    readonly property bool renderPreview: ["source.v4l2", "source.blackmagic", "source.media",
+                                           "source.slideshow", "source.playlist", "source.screen",
+                                           "source.window", "source.game", "source.browser"]
+                                          .indexOf(dialog.typeId) >= 0
+    function refreshPreview() {
+        dialog.previewKey = Preview.setPreviewTarget(
+            "settings", dialog.visible && dialog.renderPreview ? dialog.sourceId : "");
+    }
+
     signal closed
 
     anchors.fill: parent
@@ -73,11 +93,13 @@ Item {
         dialog.pendingName = found.name;
         dialog.visible = true;
         dialog.forceActiveFocus();
+        dialog.refreshPreview();
     }
 
     function close() {
         dialog.visible = false;
         dialog.sourceId = "";
+        dialog.refreshPreview();
         dialog.details = ({});
         dialog.schema = [];
         dialog.pending = ({});
@@ -249,10 +271,36 @@ Item {
                         ? dialog.localFileUrl(dialog.pendingFile) : ""
             }
 
-            // A screen cannot be shown as pixels here without opening a second capture session
-            // for a source that may still be cancelled, so the card says which monitor and how
-            // big instead. That is what is being chosen, which is the rule the colour and the
-            // image in this card already follow.
+            // The live picture, for the types whose pixels only the renderer has. Same card and
+            // the same letterboxing as the colour and image previews, so one rule covers all.
+            Image {
+                id: live
+                objectName: "sourceSettingsLive"
+
+                anchors.fill: parent
+                anchors.margins: 1
+                visible: dialog.renderPreview && live.status === Image.Ready
+                fillMode: Image.PreserveAspectFit
+                // The provider hands back an image it already holds; an asynchronous reload
+                // would only add a frame of blank between updates.
+                asynchronous: false
+                cache: false
+                source: dialog.previewKey !== "" && Preview.hasFrame(dialog.previewKey)
+                        ? "image://program/" + dialog.previewKey + "/" + Preview.generation : ""
+            }
+
+            // What the card says before the first frame: a camera still opening, or one that
+            // cannot open at all.
+            Text {
+                anchors.centerIn: parent
+                visible: dialog.renderPreview && !live.visible
+                text: dialog.previewKey === "" ? qsTr("no preview") : qsTr("waiting for a picture")
+                font.pixelSize: 10
+                color: Theme.c.textMuted
+            }
+
+            // A screen keeps its written description for when the monitor is unplugged or was
+            // never found, which a blank picture would not explain.
             Column {
                 readonly property var screen: dialog.typeId === "source.screen"
                     ? Document.screenDetails(String(dialog.pending["output"] === undefined
@@ -261,7 +309,7 @@ Item {
                 readonly property bool known: screen && screen.name !== undefined
 
                 anchors.centerIn: parent
-                visible: dialog.typeId === "source.screen"
+                visible: dialog.typeId === "source.screen" && !live.visible
                 spacing: 3
 
                 Text {

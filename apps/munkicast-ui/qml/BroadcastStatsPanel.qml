@@ -121,11 +121,25 @@ Item {
                             ? panel.bytesLabel(Telemetry.diskFreeBytes) : panel.unavailable
                     }
 
+                    // Only meaningful while something is being written, and only for a local
+                    // disk: the figure divides free space by the rate it is actually filling
+                    // at, so with nothing recording there is no rate and no answer.
                     StatRow {
                         width: parent.width
                         label: qsTr("Disk full in (approx.)")
-                        // Needs a recording bitrate to divide by, and there is no recording.
-                        value: panel.unavailable
+                        value: {
+                            if (!Telemetry.diskAvailable || !Preview.recording)
+                                return panel.unavailable;
+                            const kbps = panel.output.bitrateKbps;
+                            if (kbps === undefined || kbps <= 0)
+                                return panel.unavailable;
+                            const seconds = Telemetry.diskFreeBytes / (kbps * 125);
+                            if (seconds < 90)
+                                return qsTr("%1 s").arg(Math.round(seconds));
+                            if (seconds < 5400)
+                                return qsTr("%1 min").arg(Math.round(seconds / 60));
+                            return qsTr("%1 h").arg((seconds / 3600).toFixed(1));
+                        }
                     }
 
                 }
@@ -354,6 +368,21 @@ Item {
 
                     required property string name
                     required property bool isEnabled
+                    required property string outputId
+
+                    /// Figures for this row, or empty when this is not the destination that is
+                    /// running. One encoder runs at a time (ADR-0029), so at most one row has
+                    /// numbers; the others are not at zero, they are unknown.
+                    readonly property var stats: panel.output && panel.output.owner !== undefined
+                                                 ? Preview.outputStatsFor(row.outputId) : ({})
+                    readonly property bool live: row.stats.available === true
+                    readonly property string dropped:
+                        row.live ? String(row.stats.missed) : panel.unavailable
+                    readonly property string sent:
+                        row.live ? panel.bytesLabel(row.stats.bytes) : panel.unavailable
+                    readonly property string rate:
+                        row.live && row.stats.bitrateKbps !== undefined
+                        ? Math.round(row.stats.bitrateKbps) + " kbps" : panel.unavailable
 
                     objectName: "broadcastStatRow"
                     width: body.width
@@ -378,11 +407,12 @@ Item {
                         anchors.left: parent.left
                         anchors.bottom: parent.bottom
                         visible: !panel.wideEnough
-                        text: (row.isEnabled ? qsTr("Enabled") : qsTr("Off")) +
+                        text: (row.live ? qsTr("Running")
+                                        : row.isEnabled ? qsTr("Enabled") : qsTr("Off")) +
                               " · " + qsTr("dropped %1 · sent %2 · %3")
-                                  .arg(panel.unavailable)
-                                  .arg(panel.unavailable)
-                                  .arg(panel.unavailable)
+                                  .arg(row.dropped)
+                                  .arg(row.sent)
+                                  .arg(row.rate)
                         font.pixelSize: 9
                         color: Theme.c.textMuted
                         elide: Text.ElideRight
@@ -394,9 +424,10 @@ Item {
                         anchors.leftMargin: parent.width * 0.30
                         anchors.verticalCenter: parent.verticalCenter
                         width: parent.width * 0.18
-                        // "Inactive" would claim this was asked to run and is not. Nothing has
-                        // been asked to run, so the honest word is that it is only configured.
-                        text: row.isEnabled ? qsTr("Enabled") : qsTr("Off")
+                        // "Inactive" would claim this was asked to run and is not. A row that
+                        // was never asked is only configured, which is what Enabled says.
+                        text: row.live ? qsTr("Running")
+                                       : row.isEnabled ? qsTr("Enabled") : qsTr("Off")
                         font.pixelSize: 10
                         color: Theme.c.textMuted
                     }
@@ -406,7 +437,7 @@ Item {
                         anchors.left: parent.left
                         anchors.leftMargin: parent.width * 0.48
                         anchors.verticalCenter: parent.verticalCenter
-                        text: panel.unavailable
+                        text: row.dropped
                         font.pixelSize: 10
                         color: Theme.c.textMuted
                     }
@@ -416,7 +447,7 @@ Item {
                         anchors.left: parent.left
                         anchors.leftMargin: parent.width * 0.70
                         anchors.verticalCenter: parent.verticalCenter
-                        text: panel.unavailable
+                        text: row.sent
                         font.pixelSize: 10
                         color: Theme.c.textMuted
                     }
@@ -426,7 +457,7 @@ Item {
                         anchors.left: parent.left
                         anchors.leftMargin: parent.width * 0.86
                         anchors.verticalCenter: parent.verticalCenter
-                        text: panel.unavailable
+                        text: row.rate
                         font.pixelSize: 10
                         color: Theme.c.textMuted
                     }

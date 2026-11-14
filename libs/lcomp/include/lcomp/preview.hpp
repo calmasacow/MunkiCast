@@ -18,7 +18,7 @@
 
 namespace lcomp {
 
-/// The preview protocol. Version 12.
+/// The preview protocol. Version 13.
 ///
 /// Whole messages on a `lipc::Channel`, bulk in sealed memfds. The bytes are little-endian and
 /// carry no padding, so a reader does not depend on the writer's struct layout.
@@ -47,8 +47,10 @@ namespace lcomp {
 ///   path.
 ///            Client to renderer. A stop carries the id and an empty path.
 ///   RecState u8 kind, u8 running, u64 encoded frames, u64 missed output slots, u64 encoding
-///            lag, u8 flags (recording=1, streaming=2, control reply=4), then UTF-8 error text.
-///            One per Record, counters with requested previews,
+///            lag, u8 flags (recording=1, streaming=2, control reply=4, replay=8,
+///            replay saving=16), u64 replay bytes, u64 replay ms, u32 clip path length and
+///            that path, 26-byte destination id (nil when nothing runs), u64 bytes written,
+///            then UTF-8 error text. One per Record, counters with requested previews,
 ///            and one unprompted if an output stops on its own.
 ///
 ///   Projector u8 kind, bounded UTF-8 JSON control (at most 4096 bytes).
@@ -60,7 +62,7 @@ namespace lcomp {
 ///
 /// An empty payload cannot be sent (ADR-0026), and every message here starts with its kind, so
 /// none of them are empty.
-inline constexpr std::uint16_t kPreviewProtocol = 12;
+inline constexpr std::uint16_t kPreviewProtocol = 13;
 
 /// Capture packet: u32 count, then source ULID, negotiated/received milli-FPS,
 /// u16 error byte length and UTF-8 error. Rates describe arrivals, not unique images.
@@ -106,6 +108,14 @@ struct RecordState {
     bool replay = false, replay_saving = false;
     std::uint64_t replay_bytes = 0, replay_duration_ms = 0;
     std::string clip_path = {};
+    /// Which destination these counters belong to, or nil when nothing is running. One encoder
+    /// runs at a time (ADR-0029), so this names that one rather than keying a map: a panel can
+    /// then show real figures on the active row and "Off" on the others, instead of showing one
+    /// set of numbers against every row as if they all applied.
+    ldoc::Id output = ldoc::Id::nil();
+    /// Video and audio bytes written or sent so far. Bitrate is this over elapsed time, which
+    /// the asker is better placed to measure than the renderer is.
+    std::uint64_t bytes = 0;
 };
 
 /// One frame: owned pixels, or a retained read-only immutable mapping.

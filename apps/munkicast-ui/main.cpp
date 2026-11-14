@@ -3498,6 +3498,14 @@ int main(int argc, char** argv) {
                 report(control("settingInput_videoFormat") && control("settingInput_buffering") &&
                            control("settingInput_autoReset") && control("settingInput_timeoutFrames"),
                        "capture settings draw all four requested controls");
+                // A camera's framing cannot be judged from its settings alone, so the card
+                // shows the renderer's own picture of it. Headless there is no renderer to
+                // fill it in, so what is checked is that the dialog asks.
+                report(dialog->property("renderPreview").toBool() &&
+                           !dialog->property("previewKey").toString().isEmpty(),
+                       "opening a capture source's settings asks for a live preview");
+                report(control("sourceSettingsLive") != nullptr,
+                       "and the card has somewhere to draw it");
                 for (const char* key : {"settingInput_deactivateWhenHidden", "settingInput_buffering",
                                         "settingInput_autoReset"}) {
                     auto* checkbox = control(key);
@@ -3535,6 +3543,9 @@ int main(int argc, char** argv) {
                 document.applySourceSettings(camera, {}, {{"timeoutFrames", 2.5}});
                 report(document.revision() == revision, "invalid capture timeout settings are refused");
                 QMetaObject::invokeMethod(dialog, "close");
+                settle();
+                report(dialog->property("previewKey").toString().isEmpty(),
+                       "closing the settings releases the preview, so nothing keeps compositing it");
                 if (saved != defaults) document.undo();
             }
             document.undo();
@@ -6769,6 +6780,19 @@ int main(int argc, char** argv) {
                                        after_ui_pause.value("missed").toULongLong() <=
                                            before_ui_pause.value("missed").toULongLong() + 2,
                                    "blocking the UI for 700 ms does not pause output or lose its frames");
+                            // Counters have to name the destination they belong to, or a panel
+                            // shows one set of numbers against every row as if they all applied.
+                            const auto owner = after_ui_pause.value("owner").toString();
+                            report(!owner.isEmpty(),
+                                   "a running output's counters say which destination they are for");
+                            report(after_ui_pause.value("bytes").toULongLong() >
+                                       before_ui_pause.value("bytes").toULongLong(),
+                                   "and how many bytes it has written");
+                            report(after_ui_pause.value("bitrateKbps").toDouble() > 0.0,
+                                   "which gives the row a real bitrate instead of a placeholder");
+                            report(!preview.outputStatsFor(owner).isEmpty() &&
+                                       preview.outputStatsFor(owner + QStringLiteral("x")).isEmpty(),
+                                   "only the running destination's row has figures");
                             if (parser.isSet(shot_opt))
                                 grab().save(parser.value(shot_opt) + QStringLiteral("/persistent-recording.png"));
                             click(record_button);

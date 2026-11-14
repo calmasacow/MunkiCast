@@ -70,6 +70,10 @@ class Preview : public QObject {
     Q_INVOKABLE [[nodiscard]] QVariantMap renderStats(const QString& canvasId) const;
     Q_INVOKABLE void resetStats();
     Q_INVOKABLE [[nodiscard]] QVariantMap outputStats() const;
+    /// Figures for one destination row, or an empty map when that row is not the one running.
+    /// Carries `bitrateKbps` as well: the renderer reports bytes, and the rate is measured here
+    /// against the wall clock rather than sent per frame.
+    Q_INVOKABLE [[nodiscard]] QVariantMap outputStatsFor(const QString& outputId) const;
     Q_INVOKABLE [[nodiscard]] QVariantList captureStats() const;
     /// Stops the render process and starts a fresh one with the latest document, so settings
     /// read at its start (Edit > Preferences) take effect.
@@ -203,6 +207,13 @@ class Preview : public QObject {
     bool output_stats_available_ = false;
     std::uint64_t output_frames_ = 0, output_missed_ = 0, output_lag_ = 0;
     std::uint64_t base_output_frames_ = 0, base_output_missed_ = 0, base_output_lag_ = 0;
+    /// Which destination the counters above belong to, and the bytes it has sent. One encoder
+    /// runs at a time (ADR-0029), so this is the active row's id rather than a map: a row that
+    /// is not this one has no figures, which is a different thing from having zeroes.
+    QString output_owner_;
+    std::uint64_t output_bytes_ = 0, base_output_bytes_ = 0;
+    /// When the active destination's byte count started, for a rate rather than a total.
+    std::chrono::steady_clock::time_point output_since_{};
     bool program_live_ = false;
     std::chrono::steady_clock::time_point transition_until_{};
     QProcess* key_lookup_ = nullptr;
