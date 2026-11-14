@@ -419,6 +419,17 @@ LTEST_CASE(buffered_video_rejects_invalid_driver_timestamps_without_flushing_goo
 // Transfer Function Rec.709 even on a PQ signal, so `signal_colour` sees plain SDR and every
 // colorimetry-keyed branch is dead. The numbers below are from that card's own frames.
 
+LTEST_CASE(ten_bit_is_a_setting_rather_than_something_asked_of_the_card) {
+    // Default off: an ordinary camera pays nothing for a feature it does not need, and the
+    // measured 8-bit preference (YUV420 1.19 ms against NV12's 7.80 ms at 1440p) is untouched.
+    CHECK(!munkicast::capture::VideoOptions{}.ten_bit);
+    // Part of what makes a capture mode, so toggling it reopens the device rather than leaving
+    // the old format running -- `same_video_mode` in the renderer compares whole options.
+    munkicast::capture::VideoOptions ten;
+    ten.ten_bit = true;
+    CHECK(!(ten == munkicast::capture::VideoOptions{}));
+}
+
 LTEST_CASE(pq_code_values_decode_to_the_luminances_the_standard_defines) {
     using munkicast::capture::detail::pq_nits;
     // ST 2084's own anchors.

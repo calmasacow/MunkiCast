@@ -2160,6 +2160,13 @@ constexpr FieldSpec kCamera[] = {
          "be within 0.5% of the input rate. If the device cannot report its input timing, select "
          "an explicit mode. Use current device mode keeps its existing USB capture settings.", "note"},
     {"colourRange", "Colour range", "choice", "Default", false, 0, "Default|Partial|Full"},
+    {"tenBit", "Capture 10-bit (HDR)", "bool", "", false},
+    {"",
+     "Ask the card for 10-bit instead of 8-bit, and tone-map an HDR signal down to SDR. For a "
+     "console or PC sending HDR. Off is right for an ordinary camera, and a card that cannot do "
+     "10-bit ignores it. Costs about 11 ms a frame at 4K, so leave it off unless the source is "
+     "really HDR.",
+     "note"},
     {"buffering", "Use buffering", "bool", "", true},
     {"",
      "Buffering smooths capture delivery with a two-frame delay (about 33 ms at 60 fps) "

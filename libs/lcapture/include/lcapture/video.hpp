@@ -24,6 +24,15 @@ struct VideoOptions {
     int timeout_frames = 5;
     /// Deliver YUYV/I420/NV12 untouched for the GPU to convert, instead of BGRA from swscale.
     bool raw_yuv = false;
+    /// Prefer a 10-bit capture format, and tone-map a PQ signal to SDR.
+    ///
+    /// Operator-set rather than detected, because the depth of the incoming signal cannot be
+    /// asked for: the one HDR card tested answers VIDIOC_QUERY_DV_TIMINGS with ENOTTY and
+    /// enumerates P010 from a static USB descriptor whatever is plugged in (issue #20). Asking
+    /// the card and then checking a frame would mean reopening every ordinary camera that turned
+    /// out to be 8-bit, so this is a setting instead. A card with no 10-bit format ignores it,
+    /// and a 10-bit format carrying 8-bit values is left alone rather than tone-mapped.
+    bool ten_bit = false;
     friend bool operator==(const VideoOptions&, const VideoOptions&) = default;
 };
 /// Raw camera layouts the GPU compositor converts itself. Bgra is already converted.

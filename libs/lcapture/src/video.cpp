@@ -359,7 +359,7 @@ struct VideoCapture::State {
                 // 8-bit format cannot be carrying ten bits to begin with.
                 // Asked of every frame until one has a picture in it: this card sends two blank
                 // frames first, and a blank frame's low bits are zero whatever the depth.
-                if (f.pixelformat == V4L2_PIX_FMT_P010 && !ten_bit) {
+                if (f.pixelformat == V4L2_PIX_FMT_P010 && options.ten_bit && !ten_bit) {
                     ten_bit = detail::plane_is_truly_ten_bit(
                         reinterpret_cast<const std::uint16_t*>(src[0]),
                         static_cast<std::size_t>(f.width) * f.height);
@@ -483,8 +483,6 @@ std::unique_ptr<VideoCapture> VideoCapture::open(const std::string& path,
     }
     if (width <= 0 || height <= 0 || width > 8192 || height > 8192 || width % 2 || height % 2)
         return fail("unsupported capture dimensions");
-    // Planar 4:2:0 keeps NV12's USB bandwidth but uses swscale's fast unscaled RGB converter.
-    // Measured at 1440p: YUV420 1.19 ms, NV12 7.80 ms. Retain NV12 for devices without YU12.
     bool found = false;
     std::uint32_t selected = 0;
     if (!options.format.empty() && options.format != "Auto") {
@@ -493,9 +491,18 @@ std::unique_ptr<VideoCapture> VideoCapture::open(const std::string& path,
             selected |= static_cast<std::uint32_t>(static_cast<unsigned char>(options.format[i])) << (8 * i);
         if (!supported(selected)) return fail("unsupported video format");
     }
-    for (auto code : {V4L2_PIX_FMT_YUV420, V4L2_PIX_FMT_NV12, V4L2_PIX_FMT_BGR24,
-                      V4L2_PIX_FMT_YUYV, V4L2_PIX_FMT_RGB24, V4L2_PIX_FMT_MJPEG,
-                      V4L2_PIX_FMT_YVU420, V4L2_PIX_FMT_P010}) {
+    // Planar 4:2:0 keeps NV12's USB bandwidth but uses swscale's fast unscaled RGB converter:
+    // measured at 1440p, YUV420 1.19 ms against NV12's 7.80 ms, and NV12 is retained for devices
+    // without YU12. So 8-bit comes first. `ten_bit` puts P010 at the front instead, for a source the operator has said is HDR -- the card cannot be asked
+    // what depth is arriving (issue #20), so this is the answer rather than a probe. A card with
+    // no P010 falls through to the same 8-bit order it would have used anyway.
+    const std::uint32_t preference[] = {
+        options.ten_bit ? V4L2_PIX_FMT_P010 : V4L2_PIX_FMT_YUV420,
+        options.ten_bit ? V4L2_PIX_FMT_YUV420 : V4L2_PIX_FMT_NV12,
+        options.ten_bit ? V4L2_PIX_FMT_NV12 : V4L2_PIX_FMT_BGR24,
+        V4L2_PIX_FMT_YUYV, V4L2_PIX_FMT_RGB24, V4L2_PIX_FMT_MJPEG, V4L2_PIX_FMT_YVU420,
+        options.ten_bit ? V4L2_PIX_FMT_BGR24 : V4L2_PIX_FMT_P010};
+    for (auto code : preference) {
         if (selected && code != selected) continue;
         fmt.fmt.pix.width = static_cast<std::uint32_t>(width);
         fmt.fmt.pix.height = static_cast<std::uint32_t>(height);

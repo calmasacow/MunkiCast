@@ -545,7 +545,8 @@ class Renderer {
         munkicast::capture::VideoOptions options;
         options.format = setting(source, "videoFormat");
         for (auto [key, value] : {std::pair{"buffering", &options.buffering},
-                                 std::pair{"autoReset", &options.auto_reset}}) {
+                                 std::pair{"autoReset", &options.auto_reset},
+                                 std::pair{"tenBit", &options.ten_bit}}) {
             const auto it = source.settings.find(key);
             if (it != source.settings.end())
                 if (const auto* flag = std::get_if<bool>(&it->second)) *value = *flag;
