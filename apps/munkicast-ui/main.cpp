@@ -2021,6 +2021,32 @@ int main(int argc, char** argv) {
                         settle();
                         report(bitrate->property("value").toInt() == original.encoder.bitrate_kbps,
                                "undo refreshes Encode properties");
+                        // Half-typed input is incomplete, so it is worth nothing and the last
+                        // committed value is worth keeping. A draft started against one value must
+                        // never be written over a different one that arrived meanwhile -- here an
+                        // undo, but a collection switch or a remote command does the same thing.
+                        if (auto* input = bitrate->findChild<QObject*>(QStringLiteral("numberInput"))) {
+                            auto* typed = qobject_cast<QQuickItem*>(input);
+                            typed->forceActiveFocus();
+                            QKeyEvent select_all{QEvent::KeyPress, Qt::Key_A, Qt::ControlModifier};
+                            QCoreApplication::sendEvent(window, &select_all);
+                            QKeyEvent digits{QEvent::KeyPress, 0, Qt::NoModifier, QStringLiteral("9500")};
+                            QCoreApplication::sendEvent(window, &digits);
+                            settle();
+                            report(typed->property("text").toString() == QStringLiteral("9500"),
+                                   "a number field holds a draft while it is being typed into");
+                            document.redo();
+                            settle();
+                            report(typed->property("text").toString() == QStringLiteral("40000"),
+                                   "a value arriving underneath replaces the draft rather than queueing behind it");
+                            typed->setFocus(false);
+                            settle();
+                            report(document.encodeSettings(id).value("bitrate").toInt() == 40000 &&
+                                       bitrate->property("value").toInt() == 40000,
+                                   "leaving a field whose value moved keeps that value, not the abandoned draft");
+                            document.undo();
+                            settle();
+                        }
                     }
                     if (auto* scale = field("encodeRescale")) {
                         QMetaObject::invokeMethod(scale, "committed", Q_ARG(QString, QStringLiteral("lanczos")));

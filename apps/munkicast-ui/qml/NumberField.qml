@@ -182,14 +182,32 @@ Item {
             // number gets replaced the moment anything else changes.
             text: activeFocus ? text : field.value.toFixed(field.decimals)
 
+            // Same rule as TextLine: a half-typed number is only committed over the value it was
+            // started from. If the stored value moves underneath -- a collection switch, an undo, a
+            // remote command -- the draft describes a value that is gone, so it is dropped rather
+            // than written over a known-good one when focus leaves.
+            property bool dirty: false
+            property real base: 0
+            onTextEdited: { if (!dirty) base = field.value; dirty = true; }
+            Connections {
+                target: field
+                function onValueChanged() {
+                    if (!input.dirty || field.value === input.base) return;
+                    input.dirty = false;
+                    input.text = field.value.toFixed(field.decimals);
+                }
+            }
+
             onEditingFinished: {
                 const parsed = parseFloat(text);
+                dirty = false;
                 if (acceptableInput && !isNaN(parsed) && parsed !== field.value)
                     field.committed(parsed);
                 else
                     text = field.value.toFixed(field.decimals);
             }
             Keys.onEscapePressed: {
+                dirty = false;
                 text = field.value.toFixed(field.decimals);
                 focus = false;
             }

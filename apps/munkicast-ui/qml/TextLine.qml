@@ -135,6 +135,22 @@ Item {
 
             property bool dirty: false
             property string draft: ""
+
+            // A half-typed draft is only ever committed over the value it was started from. If the
+            // stored value moves underneath -- a collection switch, an undo, a remote command --
+            // the draft is incomplete input about a value that no longer exists, so it is dropped
+            // and the field shows what is actually stored. Keeping it would write a stale edit over
+            // a known-good value on the next focus change.
+            property string base: ""
+            onDirtyChanged: if (dirty) base = field.value
+            Connections {
+                target: field
+                function onValueChanged() {
+                    if (!input.dirty || field.value === input.base) return;
+                    input.dirty = false;
+                    input.text = field.value;
+                }
+            }
             function finishEdit() {
                 if (!dirty) return;
                 const value = draft;
