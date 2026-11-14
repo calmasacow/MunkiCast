@@ -133,12 +133,38 @@ asks the card for 10-bit and is never tone-mapped.
 
 ### 5. Output carries 10-bit only when it can
 
-`main10` becomes real: the compositor exports 10-bit, and the encoder is fed P010 rather than
-upconverted RGBA. The GPU fast path hard-fails on anything but NV12 today, so it either gains a
-P010 path or falls back to the CPU path with that stated.
+*Implemented 2026-11-14, by widening the readback rather than the zero-copy path -- see below for
+why that is the whole of it and not a first step.*
+
+`main10` is real: the GPU compositor reads its full-size export back as `R16G16B16A16_UNORM`
+instead of `R8G8B8A8_UNORM`, `Picture::format` says so, and `encoder_video` takes those pixels as
+`RGBA64LE`. The compositor already held RGBA16F internally, so the extra depth costs one wider
+readback and no new conversion. Depth follows the *encoder's own* pixel format, asked of the
+FFmpeg descriptor rather than matched against a list of profile names, so a codec that falls back
+from `P010` to `YUV420P10` still gets wide pixels and one that falls back to `NV12` stops getting
+them. `high10` is accepted beside `main10`, being H.264's spelling of the same thing.
+
+Three places deliberately stay 8-bit:
+
+- **The NVENC zero-copy path.** It exists only for `h264_nvenc`, which has no 10-bit profile, so
+  a 10-bit encode never reaches it: the two are mutually exclusive by construction rather than by
+  a check. NV12 is 8-bit in its name, so `nv12_output` wins when both are asked.
+- **The preview.** It goes to a UI on an SDR desktop. Sending it wide would double the IPC for
+  pixels nothing can show, and the preview protocol can already carry `Rgba16` when a Wayland HDR
+  surface makes that worth doing (section 6).
+- **The CPU compositor.** `execute_cpu` blends through a 256-entry sRGB table and has no wider
+  intermediate to export. A 10-bit encode on the CPU fallback is therefore honestly 8-bit data in
+  a 10-bit container, and the Encode panel says so rather than claiming the better case.
 
 If a 10-bit encode cannot be satisfied, it fails with the reason. It does not silently produce a
-10-bit container full of 8-bit pixels, which is what happens now.
+10-bit container full of 8-bit pixels.
+
+One thing a test on one driver cannot certify: the 16-bit store needs its own compiled shader,
+because dispatching an `rgba8`-qualified store into an RGBA16 image is undefined behaviour. The
+NVIDIA driver here produces byte-identical output either way, so the separate pipeline is spec
+conformance that no measurement from this machine can distinguish. `preview.comp` is therefore
+compiled twice from one source -- the transfer curve stays in one place -- rather than relying on
+what one driver happens to tolerate.
 
 ### 6. The preview declares its format
 

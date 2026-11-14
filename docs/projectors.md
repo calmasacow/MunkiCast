@@ -60,9 +60,11 @@ state. End-to-end HDMI latency needs a hardware measurement under the real show.
 - Up to four projectors, 8192 pixels per edge, a shared 384 MiB display-buffer budget
   (nominal pixel bytes). Allocation/import/setup failures are reported; setup times
   out after five seconds. Existing compositor render-memory limits also apply.
-- Output is 8-bit SDR sRGB, matching the current canvas export. Independent HDR/10-bit
-  display signaling, dedicated audio-over-HDMI routing, source-only projectors,
-  multiview and OBS projector geometry restoration are separate work.
+- Output is 8-bit SDR sRGB. A projector presents into an 8-bit swapchain and shares the
+  compositor's 8-bit full-size image, so it stays 8-bit even when the encoder is taking 16-bit
+  pixels for a 10-bit stream (ADR-0071). Independent HDR/10-bit display signaling, dedicated
+  audio-over-HDMI routing, source-only projectors, multiview and OBS projector geometry
+  restoration are separate work.
 - Windowed resizing/decorations follow the compositor. Fullscreen physical pixels
   are independent of windowed desktop scaling. HDMI display mode/refresh selection
   remains in the desktop's monitor settings.

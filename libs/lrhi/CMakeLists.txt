@@ -23,6 +23,7 @@ add_library(lrhi STATIC
 include(CompileShader)
 munkicast_compile_shader(lrhi shaders/composite.comp)
 munkicast_compile_shader(lrhi shaders/preview.comp)
+munkicast_compile_shader(lrhi shaders/preview.comp NAME preview_wide DEFINES WIDE)
 munkicast_compile_shader(lrhi shaders/filter.comp)
 munkicast_compile_shader(lrhi shaders/yuv.comp)
 munkicast_compile_shader(lrhi shaders/nv12.comp)

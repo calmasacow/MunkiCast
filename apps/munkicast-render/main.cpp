@@ -251,7 +251,8 @@ class Renderer {
                 std::vector<munkicast::rhi::PresentationTarget>{};
             const auto t_render = std::chrono::steady_clock::now();
             auto result = gpu->render(plan, max_edge, error, full_output, displays,
-                                      full_output && device_output && device_output());
+                                      full_output && device_output && device_output(),
+                                      full_output && wide_output && wide_output());
             const auto t_present = std::chrono::steady_clock::now();
             projectors_.present(canvas, result && result->status != lcomp::PictureStatus::Unsupported);
             if (static const bool bench = std::getenv("MUNKICAST_BENCHMARK") != nullptr; bench) {
@@ -290,6 +291,11 @@ class Renderer {
 
     /// Whether full-size output should stay on the GPU as NV12 for the encoder.
     std::function<bool()> device_output;
+
+    /// Whether the encoder keeps more than 8 bits a component, so the full-size readback is worth
+    /// doing at 16. Only the GPU path can answer it: `execute_cpu` is 8-bit by construction, so a
+    /// 10-bit encode on the CPU compositor stays honestly 8-bit data in a 10-bit container.
+    std::function<bool()> wide_output;
 
     std::array<std::uint8_t, 16> gpu_uuid() {
         return !cpu_ && !gpu_failed_ && device() ? munkicast::rhi::vk_device_uuid(*device_)
@@ -813,6 +819,7 @@ int main() {
     Recorder recorder(audio);
     recorder.gpu_uuid = [&renderer] { return renderer.gpu_uuid(); };
     renderer.device_output = [&recorder] { return recorder.takes_device_frames(); };
+    renderer.wide_output = [&recorder] { return recorder.takes_wide_pixels(); };
     lcomp::RecordHooks record;
     record.control = [&recorder](const lcomp::RecordRequest& request, const ldoc::Project& p) {
         return recorder.control(request, p);

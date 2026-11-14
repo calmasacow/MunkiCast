@@ -49,6 +49,7 @@ extern "C" {
 #endif
 #include <libavutil/imgutils.h>
 #include <libavutil/opt.h>
+#include <libavutil/pixdesc.h>
 #include <libswresample/swresample.h>
 #include <libswscale/swscale.h>
 }
@@ -476,10 +477,14 @@ AVCodecContext* try_video(const char* name, const RuntimeConfig& cfg, AVFormatCo
     // produces, and what a Vulkan video encode surface will be (G8_B8R8_2PLANE_420_UNORM). A
     // codec that cannot take it falls back to I420, and the GPU convert path is then refused
     // rather than silently feeding it the wrong layout.
-    c->pix_fmt =
-        cfg.video_options.contains("profile") && cfg.video_options.at("profile") == "main10"
-            ? AV_PIX_FMT_P010LE
-            : AV_PIX_FMT_NV12;
+    // `main10` is HEVC's and `high10` is H.264's name for the same thing, so the depth follows
+    // the profile naming ten bits rather than one spelling of it. The UI offers only main10
+    // today, but an operator can reach high10 through custom options, and a 10-bit profile
+    // opened at 8-bit depth is exactly the dishonest case ADR-0071 is about.
+    const auto profile = cfg.video_options.contains("profile")
+                             ? cfg.video_options.at("profile")
+                             : std::string{};
+    c->pix_fmt = profile == "main10" || profile == "high10" ? AV_PIX_FMT_P010LE : AV_PIX_FMT_NV12;
     // AVCodec::pix_fmts was removed in FFmpeg 7; avcodec_get_supported_config is the current
     // way to ask, and it can answer "no list", which means the codec accepts anything.
     {
@@ -990,8 +995,9 @@ bool encoder_remove_output(Encoder& enc, std::size_t id, std::string& error) {
 }
 
 bool encoder_video(Encoder& enc, const std::uint8_t* bgra, std::size_t stride, std::int64_t pts_ns,
-                   std::string& error) {
-    if (!bgra || stride < static_cast<std::size_t>(enc.cfg.source_width) * 4 ||
+                   std::string& error, bool wide) {
+    const std::size_t bytes_per_pixel = wide ? 8u : 4u;
+    if (!bgra || stride < static_cast<std::size_t>(enc.cfg.source_width) * bytes_per_pixel ||
         stride > static_cast<std::size_t>(std::numeric_limits<int>::max())) {
         error = "invalid video frame stride or pixels";
         return false;
@@ -1008,7 +1014,12 @@ bool encoder_video(Encoder& enc, const std::uint8_t* bgra, std::size_t stride, s
     // not in the number at all. A stage that is not measured must not appear in the label.
     const auto t_convert = std::chrono::steady_clock::now();
     AVFrame source{};
-    source.format = enc.cfg.source_rgba ? AV_PIX_FMT_RGBA : AV_PIX_FMT_BGRA;
+    // RGBA64LE is the only 16-bit order worth carrying: it is what Vulkan's
+    // R16G16B16A16_UNORM reads back as on a little-endian host, so the wide path needs no
+    // byte-swap anywhere. There is no BGRA64 equivalent in swscale, so a wide frame is always
+    // RGBA order and the compositor writes it that way.
+    source.format = wide ? AV_PIX_FMT_RGBA64LE
+                         : enc.cfg.source_rgba ? AV_PIX_FMT_RGBA : AV_PIX_FMT_BGRA;
     source.width = static_cast<int>(enc.cfg.source_width);
     source.height = static_cast<int>(enc.cfg.source_height);
     source.data[0] = const_cast<std::uint8_t*>(bgra);
@@ -1185,6 +1196,17 @@ bool encoder_video_nv12(Encoder& enc, const std::uint8_t* y, int y_stride, const
 
 bool encoder_is_nv12(Encoder& enc) {
     return enc.vctx->pix_fmt == AV_PIX_FMT_NV12;
+}
+
+bool encoder_wants_wide_pixels(const Encoder& enc) {
+    if (!enc.vctx)
+        return false;
+    const auto* d = av_pix_fmt_desc_get(enc.vctx->pix_fmt == AV_PIX_FMT_CUDA ? AV_PIX_FMT_NV12
+                                                                             : enc.vctx->pix_fmt);
+    // Asked of the descriptor rather than listed by name, so a codec that falls back from P010
+    // to YUV420P10 -- or to plain NV12 because it could do neither -- answers correctly without
+    // this function knowing which formats the ladder can land on.
+    return d != nullptr && d->comp[0].depth > 8;
 }
 
 bool encoder_takes_device_frames(const Encoder& enc) {

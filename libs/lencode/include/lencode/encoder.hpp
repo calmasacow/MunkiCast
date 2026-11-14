@@ -113,8 +113,19 @@ std::optional<ReplayResult> encoder_poll_replay(Encoder& enc);
 /// Submits one BGRA frame, or RGBA when source_rgba is set in RuntimeConfig.
 /// `pts_ns` is on the SAME clock as encoder_audio's - see ADR-0017: the
 /// muxer does not care which clock, only that there is exactly one.
+///
+/// With `wide`, the pixels are 16 bits a component rather than 8, and always in RGBA order
+/// whatever `source_rgba` says, because swscale has no 16-bit BGRA to convert from. A 10-bit
+/// encode fed 8-bit pixels still works and is still accepted,
+/// because the CPU compositor has no wider output to give; it just carries no more information
+/// than an 8-bit encode would. `encoder_wants_wide_pixels` says when the wider frame is worth
+/// producing.
 bool encoder_video(Encoder& enc, const std::uint8_t* bgra, std::size_t stride, std::int64_t pts_ns,
-                   std::string& error);
+                   std::string& error, bool wide = false);
+
+/// Whether this encoder's own pixel format keeps more than 8 bits a component, so a 16-bit frame
+/// reaches the stream instead of being thrown away in the conversion.
+bool encoder_wants_wide_pixels(const Encoder& enc);
 
 /// Submits interleaved float32 audio. `frames` is sample-frames, not bytes.
 bool encoder_audio(Encoder& enc, const float* interleaved, std::uint32_t frames,

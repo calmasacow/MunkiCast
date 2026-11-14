@@ -3,6 +3,7 @@
 // Explicit hardware check: MUNKICAST_TEST_GPU=1. No fallback is allowed to pass this check.
 #include "ltest.hpp"
 
+#include <array>
 #include <chrono>
 #include <algorithm>
 #include <condition_variable>
@@ -13,6 +14,7 @@
 #include <lencode/encoder.hpp>
 #include <lrhi/composite.hpp>
 #include <libdrm/drm_fourcc.h>
+#include <ranges>
 #include <mutex>
 extern "C" {
 #include <libavcodec/avcodec.h>
@@ -983,4 +985,57 @@ LTEST_CASE(camera_yuv_converts_on_the_gpu_like_swscale) {
             CHECK_MSG(maximum <= 24, "layout {} matrix {}: max channel error {}", int(layout), matrix,
                       maximum);
         }
+}
+
+LTEST_CASE(a_wide_export_carries_precision_an_eight_bit_one_rounds_away) {
+    auto d = device();
+    std::string error;
+    auto gpu = munkicast::rhi::GpuCompositor::create(*d, error);
+    REQUIRE_MSG(gpu, "{}", error);
+    auto project = show(48, 32);
+    // The compositor blends in linear light and applies the sRGB OETF on the way out, so the
+    // true result for a given input almost never lands on an 8-bit code. An 8-bit export has to
+    // round it to one; a 16-bit export keeps where it actually fell. That difference is the whole
+    // point of the wide path, and it is visible as a low byte that is neither 0x00 nor a copy of
+    // the high one -- which is all a widened 8-bit value could ever be.
+    std::vector<std::uint8_t> pixels(48 * 32 * 4);
+    std::array<std::uint16_t, 4> seen{};
+    constexpr std::array<std::uint8_t, 4> levels{64, 65, 128, 200};
+    for (std::size_t band = 0; band < levels.size(); ++band) {
+        for (std::size_t i = 0; i < pixels.size(); i += 4) {
+            pixels[i] = pixels[i + 1] = pixels[i + 2] = levels[band];
+            pixels[i + 3] = 255;
+        }
+        const auto plan =
+            lcomp::plan_canvas(project, project.canvases[0].id, [&](const ldoc::Source&) {
+                return lcomp::CapturedPicture{48, 32, pixels.data(), pixels.size()};
+            });
+        lcomp::Picture full;
+        const auto preview = gpu->render(plan, 12, error, &full, {}, false, true);
+        REQUIRE_MSG(preview, "{}", error);
+        REQUIRE(full.format == lcomp::PixelFormat::Rgba16);
+        REQUIRE(full.stride == static_cast<std::uint32_t>(full.width) * 8);
+        REQUIRE(full.pixels.size() == static_cast<std::size_t>(full.stride) * full.height);
+        // The preview stays 8-bit: it goes to a UI on an SDR desktop, and sending it wide would
+        // double the IPC for pixels nothing can show.
+        CHECK(preview->format == lcomp::PixelFormat::Rgba8);
+        seen[band] = *reinterpret_cast<const std::uint16_t*>(full.pixels.data());
+    }
+    for (std::size_t band = 1; band < seen.size(); ++band)
+        CHECK_MSG(seen[band] > seen[band - 1], "level {} exported as {}, no brighter than {}",
+                  levels[band], seen[band], seen[band - 1]);
+    // Two adjacent 8-bit inputs stay apart, so the export did not quantise back to 8 bits.
+    CHECK(seen[1] - seen[0] > 0 && seen[1] - seen[0] < 512);
+    const auto padded = [](std::uint16_t v) {
+        const auto low = static_cast<std::uint8_t>(v & 0xff);
+        return low == 0 || low == static_cast<std::uint8_t>(v >> 8);
+    };
+    CHECK_MSG(std::ranges::none_of(seen, padded),
+              "every exported level looks like a widened 8-bit value: {} {} {} {}", seen[0],
+              seen[1], seen[2], seen[3]);
+    // What this does *not* check: that the 16-bit store pipeline is the one that ran. Dispatching
+    // the rgba8-qualified shader into an RGBA16 image is undefined behaviour, and measured on this
+    // NVIDIA driver it produces byte-for-byte the same output as the rgba16 one -- so no
+    // observation from here can tell the two apart. The separate pipeline is spec conformance,
+    // which a test on one driver cannot stand in for.
 }

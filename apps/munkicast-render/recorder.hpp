@@ -41,6 +41,12 @@ class Recorder {
         return encoder_ && munkicast::encode::encoder_takes_device_frames(*encoder_);
     }
 
+    /// Whether the running encoder keeps more than 8 bits a component, so the compositor's
+    /// full-size readback is worth doing at 16 (ADR-0071).
+    [[nodiscard]] bool takes_wide_pixels() const {
+        return encoder_ && munkicast::encode::encoder_wants_wide_pixels(*encoder_);
+    }
+
     /// Which canvas is being recorded, or nil. The preview loop asks this to decide whether a
     /// canvas has to be composited at full size as well as preview size.
     [[nodiscard]] const ldoc::Id& canvas() const { return canvas_; }
@@ -228,8 +234,9 @@ class Recorder {
                 if (gpu ? munkicast::encode::encoder_video_device(*encoder_, gpu->fd, gpu->size,
                                                                  gpu->id, gpu->pitch, gpu, pts,
                                                                  error)
-                        : munkicast::encode::encoder_video(*encoder_, pixels, picture.stride, pts,
-                                                          error)) {
+                        : munkicast::encode::encoder_video(
+                              *encoder_, pixels, picture.stride, pts, error,
+                              picture.format == lcomp::PixelFormat::Rgba16)) {
                     last_video_slot_ = slot;
                     ++frames_;
                 }

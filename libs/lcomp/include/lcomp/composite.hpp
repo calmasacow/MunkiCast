@@ -102,19 +102,28 @@ struct DeviceNv12 {
     std::uint32_t pitch = 0;
 };
 
-/// One canvas, straight sRGB8, tightly packed, top-left origin.
+/// One canvas, straight sRGB, tightly packed, top-left origin.
 ///
-/// Not the encode target. ADR-0006 still composites in scene-linear RGBA16F on a VkDevice;
-/// this is the view the Program panel shows, and it is the oracle the tests read. Opaque black
-/// where nothing was drawn, because that is what would go to air.
+/// ADR-0006 still composites in scene-linear RGBA16F on a VkDevice; this is the view the Program
+/// panel shows, and the oracle the tests read. Opaque black where nothing was drawn, because that
+/// is what would go to air.
+///
+/// It is also what a CPU-input encoder is fed, and `format` says at what depth: the GPU
+/// compositor exports `Rgba16` for a 10-bit encode (ADR-0071), while `execute_cpu` writes `Rgba8`
+/// always. That is a deliberate limit rather than an omission -- the CPU path blends through a
+/// 256-entry sRGB table and has no wider intermediate to export -- so a 10-bit encode on the CPU
+/// fallback is honestly 8-bit data in a 10-bit container, and widening it would cost every SDR
+/// composition to deliver no more information.
 struct Picture {
     std::int32_t width = 0;
     std::int32_t height = 0;
-    /// What `pixels` holds. Every compositor path writes `Rgba8` today.
+    /// What `pixels` holds; see the note above on which path writes which.
     PixelFormat format = PixelFormat::Rgba8;
-    /// Bytes from one row to the next. Width times 4; there is no padding to discover.
+    /// Bytes from one row to the next. Width times `bytes_per_pixel(format)`; no padding to
+    /// discover.
     std::uint32_t stride = 0;
-    /// `stride * height` bytes, R, G, B, A in that order. Empty when `status` is Unsupported.
+    /// `stride * height` bytes, R, G, B, A in that order -- 8 or 16 bits each per `format`, and
+    /// 16-bit components are little-endian. Empty when `status` is Unsupported.
     std::vector<std::uint8_t> pixels;
     /// When set, the pixels to read are these rather than `pixels` -- a buffer owned by someone
     /// else for the length of one call. Used for a captured frame, which is 33 MB at 4K and must

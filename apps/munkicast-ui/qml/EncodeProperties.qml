@@ -520,17 +520,17 @@ Item {
                            : (panel.encode.codec === "h264") ? ["baseline", "main", "high"]
                            : (panel.encode.codec === "hevc") ? ["main", "main10"] : ["main"]
                     choiceLabels: ({"": qsTr("Encoder default"), "baseline": qsTr("Baseline"), "main": qsTr("Main"),
-                                    "high": qsTr("High"), "main10": qsTr("Main 10 (8-bit source)")})
+                                    "high": qsTr("High"), "main10": qsTr("Main 10")})
                     value: String(panel.extra[panel.implementation + ".profile"] ??
                                   (panel.encode.codec === "h264" ? "high" : "main"))
                     onCommitted: value => panel.setExtra(panel.implementation + ".profile", value)
                 }
 
-                // Main 10 opens a real 10-bit encode, but the compositor still hands the
-                // encoder 8-bit pixels, so the extra bits carry nothing (ADR-0071). Said here
-                // because the alternative is an operator choosing it, seeing "10-bit" in the
-                // stream, and believing the picture improved. Removed when the output path
-                // carries 10-bit end to end.
+                // Main 10 now carries real 10-bit pixels off the GPU compositor (ADR-0071), but
+                // only off the GPU one: execute_cpu is 8-bit by construction, so a machine on the
+                // CPU fallback still gets 8-bit data in a 10-bit container. The UI cannot see
+                // which compositor the renderer ended up on, so the note states both rather than
+                // claiming the better case.
                 Text {
                     objectName: "profileMain10Note"
                     width: parent.width
@@ -538,7 +538,7 @@ Item {
                     wrapMode: Text.WordWrap
                     font.pixelSize: 10
                     color: Theme.c.textMuted
-                    text: qsTr("Main 10 writes a 10-bit stream, but the compositor output is still 8-bit, so this adds depth the picture does not have. Useful only where a platform requires a 10-bit profile.")
+                    text: qsTr("Main 10 writes a real 10-bit stream from the GPU compositor. On a machine that has fallen back to CPU compositing the pixels are still 8-bit, so the extra depth carries nothing there.")
                 }
 
                 Item { width: 1; height: 4 }

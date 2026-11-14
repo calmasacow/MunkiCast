@@ -20,6 +20,7 @@
 extern "C" {
 #include <libavcodec/avcodec.h>
 #include <libavformat/avformat.h>
+#include <libavutil/pixdesc.h>
 }
 
 using namespace munkicast::encode;
@@ -662,5 +663,85 @@ LTEST_CASE(replay_memory_is_bounded_and_recording_can_stop_without_stopping_the_
     CHECK(encoder_replay_stats(*encoder).active);
     REQUIRE(encoder_finish(*encoder, error));
     encoder.reset();
+    std::filesystem::remove(cfg.path);
+}
+
+LTEST_CASE(a_ten_bit_encode_carries_the_extra_bits_a_wide_frame_brings) {
+    // The point of the wide path: a value that cannot be said in 8 bits has to survive to the
+    // decoder. 8-bit code 128 is 32896 of 65535; the ramp below steps by 64, a quarter of the
+    // distance to code 129, so an 8-bit source could not have produced the middle two steps at
+    // all. If the conversion narrowed anywhere, adjacent steps would decode identically.
+    // libx264 rather than HEVC: it is the one 10-bit-capable encoder every machine running these
+    // tests has, and `high10` is H.264's spelling of what HEVC calls main10.
+    auto cfg = configured("x264");
+    cfg.width = cfg.height = cfg.source_width = cfg.source_height = 64;
+    cfg.video_options = {{"preset", "ultrafast"}, {"crf", "0"}, {"profile", "high10"}};
+    cfg.custom_options.clear();
+    std::string error;
+    auto encoder = encoder_open(cfg, error);
+    REQUIRE_MSG(encoder, "{}", error);
+    REQUIRE(encoder_wants_wide_pixels(*encoder));
+
+    constexpr std::size_t stride = 64 * 8;
+    std::vector<std::uint8_t> pixels(stride * 64, 0);
+    const auto put = [&](std::size_t x, std::size_t y, std::uint16_t v) {
+        auto* p = pixels.data() + y * stride + x * 8;
+        for (int c = 0; c < 3; ++c) {
+            p[c * 2] = static_cast<std::uint8_t>(v & 0xff);
+            p[c * 2 + 1] = static_cast<std::uint8_t>(v >> 8);
+        }
+        p[6] = p[7] = 0xff;
+    };
+    for (std::size_t y = 0; y < 64; ++y)
+        for (std::size_t x = 0; x < 64; ++x)
+            put(x, y, static_cast<std::uint16_t>(32896 + (x / 16) * 64));
+
+    // A stride too short for 16-bit pixels is refused even though it would pass for 8-bit ones.
+    CHECK(!encoder_video(*encoder, pixels.data(), 64 * 4, 0, error, true));
+    error.clear();
+    REQUIRE_MSG(encoder_video(*encoder, pixels.data(), stride, 0, error, true), "{}", error);
+    REQUIRE_MSG(encoder_finish(*encoder, error), "{}", error);
+    encoder.reset();
+
+    AVFormatContext* file = nullptr;
+    REQUIRE(avformat_open_input(&file, cfg.path.c_str(), nullptr, nullptr) >= 0);
+    REQUIRE(avformat_find_stream_info(file, nullptr) >= 0);
+    const int stream = av_find_best_stream(file, AVMEDIA_TYPE_VIDEO, -1, -1, nullptr, 0);
+    REQUIRE(stream >= 0);
+    auto* decoder = avcodec_alloc_context3(
+        avcodec_find_decoder(file->streams[stream]->codecpar->codec_id));
+    REQUIRE(decoder);
+    REQUIRE(avcodec_parameters_to_context(decoder, file->streams[stream]->codecpar) >= 0);
+    REQUIRE(avcodec_open2(decoder, decoder->codec, nullptr) >= 0);
+    auto* packet = av_packet_alloc();
+    auto* frame = av_frame_alloc();
+    REQUIRE(packet && frame);
+    bool decoded = false;
+    while (av_read_frame(file, packet) >= 0) {
+        if (packet->stream_index == stream) {
+            REQUIRE(avcodec_send_packet(decoder, packet) >= 0);
+            decoded = avcodec_receive_frame(decoder, frame) >= 0;
+        }
+        av_packet_unref(packet);
+        if (decoded)
+            break;
+    }
+    REQUIRE(decoded);
+    const auto* desc = av_pix_fmt_desc_get(static_cast<AVPixelFormat>(frame->format));
+    REQUIRE(desc);
+    CHECK(desc->comp[0].depth > 8);
+    const auto luma = [&](int band) {
+        const auto* row = reinterpret_cast<const std::uint16_t*>(
+            frame->data[0] + 32 * frame->linesize[0]);
+        return row[band * 16 + 8];
+    };
+    for (int band = 1; band < 4; ++band)
+        CHECK_MSG(luma(band) > luma(band - 1),
+                  "band {} decoded to {}, no brighter than band {} at {}", band, luma(band),
+                  band - 1, luma(band - 1));
+    av_frame_free(&frame);
+    av_packet_free(&packet);
+    avcodec_free_context(&decoder);
+    avformat_close_input(&file);
     std::filesystem::remove(cfg.path);
 }

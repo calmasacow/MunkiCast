@@ -2,7 +2,17 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #version 450
 layout(local_size_x=16, local_size_y=16) in;
+// Compiled twice, once per store width: the 8-bit preview and encoder export, and the 16-bit one
+// a 10-bit encode reads (ADR-0071). The maths is identical -- unpremultiply, then the sRGB OETF --
+// so one source serves both and there is no second copy of the transfer curve to keep in step.
+// Two explicit qualifiers rather than none, because a format-less store needs
+// `shaderStorageImageWriteWithoutFormat`, and gating 10-bit output on an optional device feature
+// buys nothing over compiling the same eight lines a second time.
+#ifdef WIDE
+layout(binding=0, rgba16) uniform writeonly image2D target;
+#else
 layout(binding=0, rgba8) uniform writeonly image2D target;
+#endif
 layout(binding=1) uniform sampler2D source;
 void main() {
     ivec2 pos=ivec2(gl_GlobalInvocationID.xy), size=imageSize(target);

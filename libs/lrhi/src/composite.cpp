@@ -4,6 +4,7 @@
 #include "shaders/filter_spv.h"
 #include "shaders/nv12_spv.h"
 #include "shaders/preview_spv.h"
+#include "shaders/preview_wide_spv.h"
 #include "shaders/yuv_spv.h"
 #include "vk_ctx_internal.hpp"
 
@@ -233,10 +234,12 @@ struct GpuCompositor::Impl {
     static constexpr std::uint32_t kStamps = 256;
     VkDescriptorSetLayout set_layout = VK_NULL_HANDLE;
     VkPipelineLayout layout = VK_NULL_HANDLE;
-    VkPipeline composite = VK_NULL_HANDLE, preview = VK_NULL_HANDLE, filter = VK_NULL_HANDLE,
-               yuv = VK_NULL_HANDLE, nv12 = VK_NULL_HANDLE;
+    VkPipeline composite = VK_NULL_HANDLE, preview = VK_NULL_HANDLE,
+               preview_wide = VK_NULL_HANDLE, filter = VK_NULL_HANDLE, yuv = VK_NULL_HANDLE,
+               nv12 = VK_NULL_HANDLE;
     std::vector<std::unique_ptr<Nv12Slot>> nv12_slots;
     bool nv12_broken = false, nv12_exhausted_warned = false;
+    bool wide_readback = false;
     VkDescriptorPool descriptors = VK_NULL_HANDLE;
     VkSampler sampler = VK_NULL_HANDLE;
     std::vector<std::unique_ptr<Image>> images;
@@ -373,6 +376,8 @@ struct GpuCompositor::Impl {
             vkDestroyDescriptorPool(c->device, descriptors, nullptr);
         if (preview)
             vkDestroyPipeline(c->device, preview, nullptr);
+        if (preview_wide)
+            vkDestroyPipeline(c->device, preview_wide, nullptr);
         if (yuv)
             vkDestroyPipeline(c->device, yuv, nullptr);
         if (nv12)
@@ -426,6 +431,13 @@ struct GpuCompositor::Impl {
             VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT | VK_FORMAT_FEATURE_SAMPLED_IMAGE_BIT;
         if ((props.optimalTilingFeatures & required) != required)
             throw std::runtime_error("device lacks RGBA16F storage/sampling");
+        // RGBA16 UNORM storage is mandatory in Vulkan, but asked anyway: a wide readback is an
+        // optional improvement to one output path, so a device that somehow lacks it should fall
+        // back to 8-bit rather than fail every composition.
+        vkGetPhysicalDeviceFormatProperties(c->phys, VK_FORMAT_R16G16B16A16_UNORM, &props);
+        wide_readback = (props.optimalTilingFeatures &
+                         (VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT | VK_FORMAT_FEATURE_TRANSFER_SRC_BIT)) ==
+                        (VK_FORMAT_FEATURE_STORAGE_IMAGE_BIT | VK_FORMAT_FEATURE_TRANSFER_SRC_BIT);
         VkCommandPoolCreateInfo pi{};
         pi.sType = VK_STRUCTURE_TYPE_COMMAND_POOL_CREATE_INFO;
         pi.queueFamilyIndex = c->queue_family;
@@ -516,6 +528,7 @@ struct GpuCompositor::Impl {
         checked(vkCreatePipelineLayout(c->device, &li, nullptr, &layout), "create pipeline layout");
         composite = pipeline(kCompositeSpv, sizeof(kCompositeSpv));
         preview = pipeline(kPreviewSpv, sizeof(kPreviewSpv));
+        preview_wide = pipeline(kPreviewWideSpv, sizeof(kPreviewWideSpv));
         filter = pipeline(kFilterSpv, sizeof(kFilterSpv));
         yuv = pipeline(kYuvSpv, sizeof(kYuvSpv));
         nv12 = pipeline(kNv12Spv, sizeof(kNv12Spv));
@@ -1108,7 +1121,7 @@ struct GpuCompositor::Impl {
 
     lcomp::Picture render(const lcomp::DrawPlan& plan, std::uint32_t max_edge,
                           lcomp::Picture* full_output, std::span<const PresentationTarget> displays,
-                          bool nv12_output) {
+                          bool nv12_output, bool wide_output) {
         const auto begin = std::chrono::steady_clock::now();
         lcomp::Picture out;
         out.width = plan.width;
@@ -1188,7 +1201,8 @@ struct GpuCompositor::Impl {
         // Export both sizes from this composition before releasing captured-frame leases.
         Image* full_rgba = nullptr;
         const auto export_picture = [&](lcomp::Picture& picture, std::uint32_t max_size,
-                                        std::unique_ptr<Buffer>& destination, bool read = true) {
+                                        std::unique_ptr<Buffer>& destination, bool read = true,
+                                        bool wide = false) {
             const auto edge = static_cast<std::uint32_t>(std::max(plan.width, plan.height));
             if (max_size && max_size < edge) {
                 picture.width = std::max(
@@ -1196,14 +1210,22 @@ struct GpuCompositor::Impl {
                 picture.height = std::max(
                     1, static_cast<int>(static_cast<std::uint64_t>(plan.height) * max_size / edge));
             }
-            Image& reduced = target(picture.width, picture.height, VK_FORMAT_R8G8B8A8_UNORM);
+            picture.format = wide ? lcomp::PixelFormat::Rgba16 : lcomp::PixelFormat::Rgba8;
+            Image& reduced = target(picture.width, picture.height,
+                                    wide ? VK_FORMAT_R16G16B16A16_UNORM : VK_FORMAT_R8G8B8A8_UNORM);
             barrier(reduced, VK_IMAGE_LAYOUT_UNDEFINED, VK_IMAGE_LAYOUT_GENERAL);
-            dispatch(reduced, canvas, preview, {}, picture.width, picture.height);
-            if (picture.width == plan.width && picture.height == plan.height)
+            dispatch(reduced, canvas, wide ? preview_wide : preview, {}, picture.width,
+                     picture.height);
+            // An NV12 conversion and a projector blit both read `full_rgba`, and neither takes a
+            // 16-bit source: the NV12 shader stores packed bytes, and the presented images are
+            // 8-bit swapchain formats. A wide export therefore never becomes the shared full-size
+            // image, and whichever of those paths needs one asks for its own 8-bit export.
+            if (!wide && picture.width == plan.width && picture.height == plan.height)
                 full_rgba = &reduced;
             if (!read)
                 return;
-            picture.stride = static_cast<std::uint32_t>(picture.width) * 4;
+            picture.stride =
+                static_cast<std::uint32_t>(picture.width) * lcomp::bytes_per_pixel(picture.format);
             const auto size =
                 static_cast<std::size_t>(picture.stride) * static_cast<std::size_t>(picture.height);
             buffer(destination, size);
@@ -1222,7 +1244,9 @@ struct GpuCompositor::Impl {
             auto* slot = nv12_output && plan.width % 2 == 0 && plan.height % 2 == 0
                              ? nv12_slot(plan.width, plan.height)
                              : nullptr;
-            export_picture(*full_output, 0, full_readback, slot == nullptr);
+            // 16 bits a component is only worth reading back when the encode keeps them.
+            export_picture(*full_output, 0, full_readback, slot == nullptr,
+                           wide_output && wide_readback && slot == nullptr);
             if (slot) {
                 convert_nv12(*full_rgba, *slot);
                 full_output->nv12 = slot->frame;
@@ -1395,9 +1419,9 @@ std::optional<lcomp::Picture> GpuCompositor::render(const lcomp::DrawPlan& plan,
                                                     std::uint32_t max_edge, std::string& error,
                                                     lcomp::Picture* full_output,
                                                     std::span<const PresentationTarget> displays,
-                                                    bool nv12_output) {
+                                                    bool nv12_output, bool wide_output) {
     try {
-        return impl_->render(plan, max_edge, full_output, displays, nv12_output);
+        return impl_->render(plan, max_edge, full_output, displays, nv12_output, wide_output);
     } catch (const std::exception& e) {
         error = e.what();
         return std::nullopt;
