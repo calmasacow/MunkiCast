@@ -7,10 +7,19 @@ SPDX-License-Identifier: GPL-3.0-or-later
 - **Status:** accepted, measured
 - **Amended by:** ADR-0071, in scope only. Everything below was measured with **HDR disabled on
   the wire**, and all of it still holds for that case. What has changed since is that an HDR
-  signal is no longer refused outright: it is captured, decoded with the BT.2020 matrix, and
-  left for the compositor to tone-map. The format table in Finding 1 is what decides whether a
-  10-bit capture is possible at all -- `P010` is offered at 60 fps at 1440p and 30 at 2160p, so
-  10-bit and a high frame rate cannot both be had on this card.
+  signal is no longer refused outright: it is captured and tone-mapped to SDR inside `lcapture`
+  (ADR-0071 section 4), so the compositor still receives an SDR frame. The format table in
+  Finding 1 is what decides whether a 10-bit capture is possible at all -- `P010` is offered at
+  60 fps at 1440p and 30 at 2160p, so 10-bit and a high frame rate cannot both be had on this
+  card.
+- **Measured again with HDR enabled**, 2026-11-14, same card fed 3840x2160 10-bit PQ from
+  Windows: the card's reporting is *worse* than Finding 2b records, not merely unreliable. Over a
+  PQ feed it still reports `Colorspace: sRGB` and `Transfer Function: Rec. 709`, and it
+  enumerates `P010` at every frame size from a static USB descriptor whatever is plugged in --
+  including with no cable attached. `VIDIOC_QUERY_DV_TIMINGS` returns `ENOTTY`. So neither the
+  depth of the signal nor whether it is HDR can be read from the device at all. Both are
+  measurable only from the pixels, which is why ADR-0071 makes 10-bit capture an operator setting
+  rather than a probe.
 - **Date:** 2026-10-12
 - **Extends:** ADR-0013 (capture is damage-driven)
 - **Hardware:** Elgato 4K X on `argus`, fed from the dev box's HDMI-A-1

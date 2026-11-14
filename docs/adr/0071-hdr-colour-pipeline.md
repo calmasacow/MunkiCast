@@ -75,6 +75,15 @@ canvas.
 
 ### 4. Capture accepts HDR instead of refusing it
 
+*Implemented 2026-11-14, with one deliberate departure from what this section first said: the
+tone-map happens **in `lcapture`**, not in the compositor, so a capture still hands the
+compositor an SDR frame. Section 2's rule is unchanged -- the conversion still happens once, at
+the edge -- but the edge turned out to be the capture device rather than the canvas, because
+section 1's HDR canvas does not exist yet and a half-converted frame travelling through a
+compositor that blends SDR-correctly is worse than a converted one. When an HDR canvas lands,
+the tone-map moves to the canvas exit and capture delivers linear light; nothing above this
+paragraph changes.*
+
 The refusal in `libs/lcapture/src/video.cpp` becomes a conversion. The measured constraint from
 ADR-0014 decides what is worth asking the card for, and it is unforgiving on the reference
 hardware:
@@ -91,6 +100,36 @@ configured output rate, not the peak -- already covers this, and it means a 10-b
 
 ADR-0014's own measurements were taken with HDR disabled on the wire. They remain valid for that
 case; what is added is that an HDR signal is no longer rejected outright.
+
+**10-bit is an operator setting, not a probe.** Measuring the live card with HDR on the wire
+(recorded on ADR-0014) found it cannot be asked anything true: it reports `Colorspace: sRGB` and
+`Transfer Function: Rec. 709` over a PQ feed, enumerates `P010` at every size from a static USB
+descriptor with nothing plugged in, and answers `ENOTTY` to `VIDIOC_QUERY_DV_TIMINGS`. Depth and
+HDR-ness are therefore only measurable from pixels, and measuring them at startup means opening
+the device and capturing before anything is on screen. So a camera source carries `tenBit`
+("Capture 10-bit (HDR)"), which puts `P010` first in the format preference; unticked, the measured
+8-bit order stands (YUV420 1.19 ms against NV12 7.80 ms at 1440p).
+
+**The transfer curve is handled, and the matrix deliberately is not.** For `P010` the chain is
+swscale for matrix and range only -- never a curve -- into `RGBA64LE`, then the ST 2084 EOTF, a
+Reinhard roll off at a 100-nit reference and a 1000-nit assumed source peak, the Rec.709 OETF,
+and an 8-bit LUT. 11.33 ms a frame at 4K against a 33.3 ms budget at 30 fps. The OETF is not
+optional: PQ decodes to *luminance*, and delivering that as a display signal put 50% of pixels in
+the lowest octile against the card's own 14.6%.
+
+Two things are left as judgement rather than fixed. The deep converter uses the **Rec.709 matrix
+on a Rec.2100 signal**, which is wrong on paper; measured on this content it moves mean saturation
+by 0.4% (0.2153 against 0.2144), and adding the correct matrix with a gamut map takes it to 0.2657
+-- worsening the oversaturation an operator actually reported. And the 1000-nit source peak is a
+guess for any source other than the one measured; on that one the brightest delivered component
+was 221/255 over 26 frames, so nothing clips.
+
+Tone-mapping runs only when the setting is ticked **and** the pixels prove ten significant bits.
+`P010` keeps those bits at the top of a 16-bit word, so `(word >> 6) & 3` is zero throughout a
+padded 8-bit frame and scattered in a real one (76% of pixels on the measured feed). The test
+abstains on a frame flatter than four codes, because the card sends two blank frames before the
+first real one and black is low-bit-zero at either depth. A mis-ticked ordinary camera therefore
+asks the card for 10-bit and is never tone-mapped.
 
 ### 5. Output carries 10-bit only when it can
 
