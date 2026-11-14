@@ -5,6 +5,8 @@
 // pass with the process boundary broken, which is the boundary this preview exists to prove.
 
 #include "lcomp/preview.hpp"
+#include "lipc/channel.hpp"
+#include "lipc/fd.hpp"
 #include "ltest.hpp"
 
 #include <arpa/inet.h>
@@ -20,6 +22,7 @@
 #include <ldoc/project_io.hpp>
 #include <ldoc/json.hpp>
 #include <mutex>
+#include <span>
 #include <sys/socket.h>
 #include <sys/wait.h>
 #include <thread>
@@ -2076,6 +2079,100 @@ LTEST_CASE(measure_saved_scene_through_real_renderer) {
     link.quit();
     link.close();
     CHECK_EQ(reap(*child, 3000), 0);
+}
+
+/// A Frame message built by hand, so the decoder can be asked about headers the renderer does not
+/// currently produce. The real cross-process cases above cover the happy path; this covers the
+/// format field's reason for existing, which is refusing what this build cannot read.
+std::vector<std::byte> frame_message(const ldoc::Id& canvas, std::uint32_t width,
+                                     std::uint32_t height, std::uint32_t stride,
+                                     std::uint8_t format) {
+    std::vector<std::byte> out{static_cast<std::byte>(6)}; // Kind::Frame
+    for (char c : canvas.to_string())
+        out.push_back(static_cast<std::byte>(c));
+    const auto u32 = [&out](std::uint32_t v) {
+        for (int i = 0; i < 4; ++i)
+            out.push_back(static_cast<std::byte>((v >> (8 * i)) & 0xffu));
+    };
+    const auto u64 = [&out](std::uint64_t v) {
+        for (int i = 0; i < 8; ++i)
+            out.push_back(static_cast<std::byte>((v >> (8 * i)) & 0xffu));
+    };
+    u32(width);
+    u32(height);
+    u32(stride);
+    out.push_back(static_cast<std::byte>(lcomp::PictureStatus::Complete));
+    out.push_back(static_cast<std::byte>(format));
+    u32(0);       // gap count
+    u64(1);       // render ns
+    u64(1);       // rendered frames
+    u64(0);       // render lag frames
+    u32(60);      // fps numerator
+    u32(1);       // denominator
+    return out;
+}
+
+/// Sends `payload` down one end of a pair and returns what the link made of it.
+std::expected<std::optional<lcomp::PreviewEvent>, std::string> decoded(
+    std::span<const std::byte> payload, lipc::Fd attachment = {}) {
+    auto ends = lipc::Channel::pair();
+    REQUIRE_MSG(ends.has_value(), "{}", ends.error());
+    lcomp::PreviewLink link{std::move(ends->first)};
+    if (attachment.get() >= 0) {
+        const int raw = attachment.get();
+        const auto sent = ends->second.send(payload, std::span<const int>(&raw, 1));
+        REQUIRE_MSG(sent.has_value(), "{}", sent.error());
+    } else {
+        const auto sent = ends->second.send(payload);
+        REQUIRE_MSG(sent.has_value(), "{}", sent.error());
+    }
+    return link.receive(1000);
+}
+
+LTEST_CASE(a_frame_says_what_format_its_pixels_are_in) {
+    const auto canvas = ldoc::Id::generate();
+    // 8-bit, which is what every frame is today: accepted, and reported as such rather than
+    // left to be inferred from the stride. The memfd is what a real frame carries; without one
+    // the decoder refuses it before it ever reaches the format.
+    auto memory = lipc::make_memfd("preview-format-8", 16u * 2u);
+    REQUIRE_MSG(memory.has_value(), "{}", memory.error());
+    auto event = decoded(frame_message(canvas, 4, 2, 16, 0), std::move(*memory));
+    REQUIRE_MSG(event.has_value(), "{}", event.error());
+    REQUIRE(event->has_value());
+    CHECK_EQ((*event)->kind, lcomp::PreviewEvent::Kind::Frame);
+    CHECK_EQ((*event)->frame.format, lcomp::PixelFormat::Rgba8);
+    CHECK_EQ(lcomp::bytes_per_pixel(lcomp::PixelFormat::Rgba8), 4u);
+    CHECK_EQ(lcomp::bytes_per_pixel(lcomp::PixelFormat::Rgba16), 8u);
+}
+
+LTEST_CASE(a_frame_in_a_format_this_build_does_not_know_is_refused) {
+    // The point of the field. An older build must not read a newer format's pixels at the wrong
+    // width and show a plausible-looking wrong picture; it must say it cannot.
+    const auto event = decoded(frame_message(ldoc::Id::generate(), 4, 2, 16, 200));
+    CHECK(!event.has_value());
+    if (!event.has_value())
+        CHECK(event.error().contains("pixel format"));
+}
+
+LTEST_CASE(the_stride_rule_follows_the_format_rather_than_a_constant_four) {
+    const auto canvas = ldoc::Id::generate();
+    // 16 bytes is a legal row for four 8-bit pixels and half a row for four 16-bit ones. The
+    // same stride must therefore be accepted in one format and refused in the other; checking
+    // against a constant 4 bytes would accept both.
+    const auto narrow = decoded(frame_message(canvas, 4, 2, 16, 1));
+    CHECK(!narrow.has_value());
+    if (!narrow.has_value())
+        CHECK(narrow.error().contains("stride"));
+
+    // Wide enough for 16-bit, with a memfd to map, so it gets past the stride check and is
+    // accepted as a frame.
+    auto memory = lipc::make_memfd("preview-format-check", 32u * 2u);
+    REQUIRE_MSG(memory.has_value(), "{}", memory.error());
+    const auto wide = decoded(frame_message(canvas, 4, 2, 32, 1), std::move(*memory));
+    REQUIRE_MSG(wide.has_value(), "{}", wide.error());
+    REQUIRE(wide->has_value());
+    CHECK_EQ((*wide)->frame.format, lcomp::PixelFormat::Rgba16);
+    CHECK_EQ((*wide)->frame.stride, 32u);
 }
 
 int main() {

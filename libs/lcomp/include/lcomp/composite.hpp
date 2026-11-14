@@ -65,6 +65,26 @@ enum class PictureStatus : std::uint8_t {
     Unsupported,
 };
 
+/// What a byte in a `Picture` or a `PreviewFrame` means.
+///
+/// Carried rather than assumed. Preview has been straight sRGB8 everywhere since there was only
+/// one compositor output, and an HDR canvas needs more than eight bits per component to be worth
+/// showing -- so the consumer has to be told which, not guess from the stride. Numbered because
+/// these values cross a process boundary: an older build must reject a format it does not know
+/// rather than read 16-bit pixels as 8-bit ones.
+enum class PixelFormat : std::uint8_t {
+    /// R, G, B, A bytes in that order, 4 bytes per pixel. What every build before this one sent.
+    Rgba8 = 0,
+    /// R, G, B, A as 16-bit unsigned little-endian components, 8 bytes per pixel. The shape an
+    /// HDR canvas reaches the preview in; nothing produces it yet.
+    Rgba16 = 1,
+};
+
+/// Bytes one pixel of `format` occupies. The stride rule is `stride >= width * this`.
+[[nodiscard]] constexpr std::uint32_t bytes_per_pixel(PixelFormat format) {
+    return format == PixelFormat::Rgba16 ? 8u : 4u;
+}
+
 struct Gap {
     ldoc::Id node;
     std::string name;
@@ -90,6 +110,8 @@ struct DeviceNv12 {
 struct Picture {
     std::int32_t width = 0;
     std::int32_t height = 0;
+    /// What `pixels` holds. Every compositor path writes `Rgba8` today.
+    PixelFormat format = PixelFormat::Rgba8;
     /// Bytes from one row to the next. Width times 4; there is no padding to discover.
     std::uint32_t stride = 0;
     /// `stride * height` bytes, R, G, B, A in that order. Empty when `status` is Unsupported.

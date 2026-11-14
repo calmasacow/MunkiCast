@@ -45,7 +45,8 @@ QImage image_from(lcomp::PreviewFrame& frame) {
         return {};
     if (frame.stride > static_cast<std::uint32_t>(std::numeric_limits<int>::max()))
         return {};
-    if (frame.stride < static_cast<std::uint32_t>(frame.width) * 4u)
+    if (frame.stride < static_cast<std::uint32_t>(frame.width) *
+                           lcomp::bytes_per_pixel(frame.format))
         return {};
     const auto rows = static_cast<std::size_t>(frame.height);
     if (rows > std::numeric_limits<std::size_t>::max() / frame.stride)
@@ -55,8 +56,14 @@ QImage image_from(lcomp::PreviewFrame& frame) {
         return {};
     // The image owns decoded storage, never the renderer's reusable shared mapping.
     auto pixels = std::make_unique<std::vector<std::uint8_t>>(std::move(frame.pixels));
+    // Chosen from the frame's own format rather than assumed. RGBA64 is Qt's 16-bit-per-component
+    // layout and matches `PixelFormat::Rgba16` byte for byte on a little-endian host, which is the
+    // only kind this ships on.
+    const auto qt_format = frame.format == lcomp::PixelFormat::Rgba16
+                               ? QImage::Format_RGBA64
+                               : QImage::Format_RGBA8888;
     const QImage image(static_cast<const uchar*>(pixels->data()), frame.width, frame.height,
-                       static_cast<int>(frame.stride), QImage::Format_RGBA8888,
+                       static_cast<int>(frame.stride), qt_format,
                        [](void* data) { delete static_cast<std::vector<std::uint8_t>*>(data); },
                        pixels.get());
     pixels.release();

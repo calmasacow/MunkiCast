@@ -221,7 +221,7 @@ send_frame(lipc::Channel& channel, const ldoc::Id& canvas, const Picture& pictur
     }
 
     std::vector<std::byte> payload;
-    payload.reserve(1 + lc::kUlidLength + 4 + 4 + 4 + 1 + 4 + 8 + 8 + 4 + 4);
+    payload.reserve(1 + lc::kUlidLength + 4 + 4 + 4 + 1 + 1 + 4 + 8 + 8 + 4 + 4);
     payload.push_back(static_cast<std::byte>(Kind::Frame));
     for (char c : id)
         payload.push_back(static_cast<std::byte>(c));
@@ -233,6 +233,10 @@ send_frame(lipc::Channel& channel, const ldoc::Id& canvas, const Picture& pictur
     append_u32(payload, wire_h);
     append_u32(payload, have_pixels ? picture.stride : 0u);
     payload.push_back(static_cast<std::byte>(picture.status));
+    // After the status, before the counters: the format the pixels are in. A reader that does not
+    // know the value refuses the frame, which is the whole reason it is sent rather than inferred
+    // -- 16-bit pixels read as 8-bit ones would be a plausible-looking wrong picture.
+    payload.push_back(static_cast<std::byte>(picture.format));
     append_u32(payload, static_cast<std::uint32_t>(picture.gaps.size()));
     append_u64(payload, picture.render_ns);
     append_u64(payload, picture.rendered_frames);
@@ -557,6 +561,13 @@ std::expected<PreviewEvent, std::string> PreviewLink::decode(lipc::Message messa
     if (status_byte > static_cast<unsigned>(PictureStatus::Unsupported))
         return std::unexpected(
             std::string{"a frame arrived with a status this build does not know"});
+    if (at >= payload.size())
+        return std::unexpected(std::string{"a frame arrived without its pixel format"});
+    const auto format_byte = std::to_integer<unsigned>(payload[at++]);
+    if (format_byte > static_cast<unsigned>(PixelFormat::Rgba16))
+        return std::unexpected(
+            std::string{"a frame arrived in a pixel format this build does not know"});
+    const auto format = static_cast<PixelFormat>(format_byte);
     std::uint32_t gaps = 0;
     if (!take_u32(payload, at, gaps))
         return std::unexpected(std::string{"a frame's gap count was cut short"});
@@ -577,6 +588,7 @@ std::expected<PreviewEvent, std::string> PreviewLink::decode(lipc::Message messa
     event.frame.width = static_cast<std::int32_t>(width);
     event.frame.height = static_cast<std::int32_t>(height);
     event.frame.stride = stride;
+    event.frame.format = format;
     event.frame.status = static_cast<PictureStatus>(status_byte);
     event.frame.gaps = gaps;
     event.frame.render_ns = render_ns;
@@ -591,7 +603,10 @@ std::expected<PreviewEvent, std::string> PreviewLink::decode(lipc::Message messa
     if (width > static_cast<std::uint32_t>(kMaxPreviewEdge) ||
         height > static_cast<std::uint32_t>(kMaxPreviewEdge))
         return std::unexpected(std::string{"a frame is larger than this preview will map"});
-    if (stride < width * 4u || height > (std::numeric_limits<std::size_t>::max() / stride))
+    // The stride rule is per-format now, not a constant 4 bytes: a 16-bit frame needs twice the
+    // row, and checking it against 4 would accept a row half the size it must be.
+    if (stride < width * bytes_per_pixel(format) ||
+        height > (std::numeric_limits<std::size_t>::max() / stride))
         return std::unexpected(std::string{"a frame's stride does not fit its width"});
     const std::size_t need = static_cast<std::size_t>(stride) * static_cast<std::size_t>(height);
     if (borrow_immutable_ && need > 128ull * 1024 * 1024)

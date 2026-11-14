@@ -30,9 +30,11 @@ namespace lcomp {
 ///            on refresh; Ack alone means no document, capture or size change.
 ///   Quit     u8 kind. The renderer exits.
 ///   Frame    u8 kind, 26-byte canvas id, u32 width, u32 height, u32 stride, u8 status,
-///            u32 gap count, u64 cumulative render ns, u64 completed frames, u64 missed render
+///            u8 pixel format (0 = RGBA8, 1 = RGBA16), u32 gap count, u64 cumulative render ns,
+///            u64 completed frames, u64 missed render
 ///            budgets, u32 canvas fps numerator, u32 denominator. The first frame for a canvas, and
-///            any frame whose size changed, carries one memfd of tightly packed straight sRGB8.
+///            any frame whose size changed, carries one memfd of tightly packed pixels in that
+///            format -- straight sRGB8 for RGBA8, which is every frame sent today.
 ///            Later frames of the same size reuse it: the client copies on receipt, and it does not
 ///            send another snapshot until it has copied, so the renderer is not writing what is
 ///            being read.
@@ -62,7 +64,10 @@ namespace lcomp {
 ///
 /// An empty payload cannot be sent (ADR-0026), and every message here starts with its kind, so
 /// none of them are empty.
-inline constexpr std::uint16_t kPreviewProtocol = 13;
+// 14: the Frame header carries its pixel format. The renderer and the UI are built together and
+// check this on hello, so a mismatched pair refuses to start rather than reading the format byte
+// as a gap count.
+inline constexpr std::uint16_t kPreviewProtocol = 14;
 
 /// Capture packet: u32 count, then source ULID, negotiated/received milli-FPS,
 /// u16 error byte length and UTF-8 error. Rates describe arrivals, not unique images.
@@ -124,6 +129,10 @@ struct PreviewFrame {
     std::int32_t width = 0;
     std::int32_t height = 0;
     std::uint32_t stride = 0;
+    /// What the bytes mean. The stride rule follows from it: `stride >= width *
+    /// bytes_per_pixel(format)`. Carried on the wire, so a frame in a format this build does not
+    /// know is refused rather than read at the wrong width.
+    PixelFormat format = PixelFormat::Rgba8;
     PictureStatus status = PictureStatus::NoProgram;
     std::uint32_t gaps = 0;
     std::uint64_t render_ns = 0;
