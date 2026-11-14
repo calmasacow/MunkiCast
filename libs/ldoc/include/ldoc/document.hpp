@@ -14,7 +14,7 @@ namespace ldoc {
 /// Bumped only by a change that older builds cannot read. Migrations are forward-only, with
 /// golden fixtures; a project newer than this opens read-only rather than silently dropping the
 /// fields this build does not know about.
-inline constexpr int kSchemaVersion = 4;
+inline constexpr int kSchemaVersion = 5;
 
 /// An output surface with its own size, rate and colour space.
 ///

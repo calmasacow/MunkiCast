@@ -14,6 +14,7 @@ extern "C" {
 #include <json/json.h>
 #include <lcomp/composite.hpp>
 #include <lcomp/filters.hpp>
+#include <ldoc/migrate.hpp>
 #include <ldoc/project_io.hpp>
 #include <limport/obs.hpp>
 #include <map>
@@ -1042,6 +1043,16 @@ import_obs(const fs::path& collection, const fs::path& destination, const ObsOpt
         canvas.height = options.height;
         canvas.fps = options.fps;
         converter.run(root);
+        // OBS stores geometry in canvas pixels and this document stores fractions of the
+        // containing space (ADR-0070). The converter above builds the scene in OBS's unit and
+        // this is the single conversion out of it -- the same pass the version 4 -> 5 migration
+        // runs, rather than a second copy that could disagree with it.
+        {
+            std::vector<ldoc::Problem> converted;
+            ldoc::geometry_to_fractions(converter.result.project, converted);
+            for (const ldoc::Problem& problem : converted)
+                converter.result.warnings.push_back(problem.message);
+        }
         const auto& main_canvas = converter.result.project.canvases.front();
         std::string report = "# OBS Import Report\n\nCanvas: " + std::to_string(main_canvas.width) +
                              "x" + std::to_string(main_canvas.height) + " at " +

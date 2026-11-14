@@ -54,6 +54,9 @@ try {
   await native('document_setNodeScale', { x: 0.75, y: 0.5 })
   await native('document_setNodeRotation', { degrees: 17 })
   let p = (await properties()).nodeProperties
+  // A position is stored as a fraction of the canvas and reported back in pixels, rounded to a
+  // hundredth of one (ADR-0070). Exact equality is the point: 123/1920 is not representable in
+  // binary, so without the rounding this reads 122.99999999999999.
   assert.equal(p.positionX, 123); assert.equal(p.positionY, 234)
   assert.equal(p.scaleX, 0.75); assert.equal(p.scaleY, 0.5); assert.equal(p.rotation, 17)
   await native('document_undo')

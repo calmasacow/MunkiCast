@@ -84,6 +84,10 @@ ldoc::Node bound_to(const ldoc::Source& source) {
     return node;
 }
 
+/// Geometry as a fraction of a canvas of `w` by `h`, which is what the document stores
+/// (ADR-0070). The tests name pixels because pixels are what they then assert on.
+ldoc::Vec2 of_canvas(double w, double h, double x, double y) { return {x / w, y / h}; }
+
 ldoc::Project show(ldoc::Scene scene, std::vector<ldoc::Source> sources) {
     ldoc::Project project = ldoc::make_default_project("show");
     project.canvases[0].width = 4;
@@ -155,7 +159,7 @@ LTEST_CASE(browser_scene_switch_preserves_page_unless_shutdown_is_enabled) {
         ldoc::Scene scene;
         scene.id = ldoc::Id::generate();
         scene.roots = {bound_to(browser)};
-        scene.roots[0].layout.size = {64, 32};
+        scene.roots[0].layout.size = of_canvas(64, 32, 64, 32);
         auto project = show(scene, {browser});
         project.canvases[0].width = 64;
         project.canvases[0].height = 32;
@@ -224,9 +228,9 @@ static void output_writes_playable_video_and_routed_audio(bool streaming, int sh
     tone.settings["loop"] = true;
     auto background = bound_to(red);
     background.layout.fit = ldoc::FitMode::Stretch;
-    background.layout.size = {64, 64};
+    background.layout.size = of_canvas(64, 64, 64, 64);
     auto sound = bound_to(tone);
-    sound.layout.size = {8, 8};
+    sound.layout.size = of_canvas(64, 64, 8, 8);
     ldoc::Scene scene;
     scene.id = ldoc::Id::generate();
     scene.roots = {background, sound};
@@ -1088,7 +1092,7 @@ LTEST_CASE(a_picture_crosses_the_process_and_the_renderer_exits_when_the_client_
         inner.id = ldoc::Id::generate();
         inner.canvas = project.canvases[0].id;
         auto child = bound_to(overlay);
-        child.layout.size = {2, 2};
+        child.layout.size = of_canvas(4, 4, 2, 2);
         child.layout.fit = ldoc::FitMode::Stretch;
         inner.roots = {child};
         auto nested = ldoc::make_node(ldoc::NodeKind::Precomp, "nested");
@@ -1126,8 +1130,8 @@ LTEST_CASE(text_source_crosses_worker_and_renderer_and_obeys_placement) {
     source.settings["height"] = std::int64_t{32};
     auto node = bound_to(source);
     node.layout.fit = ldoc::FitMode::Stretch;
-    node.layout.size = {32, 32};
-    node.transform.position = {32, 0};
+    node.layout.size = of_canvas(64, 32, 32, 32);
+    node.transform.position = of_canvas(64, 32, 32, 0);
     ldoc::Scene scene;
     scene.id = ldoc::Id::generate();
     scene.roots = {node};
@@ -1165,7 +1169,7 @@ LTEST_CASE(native_alpha_media_crosses_worker_and_keeps_authored_box_and_letterbo
     source.settings["width"] = std::int64_t{32};
     source.settings["height"] = std::int64_t{32};
     auto node = bound_to(source);
-    node.transform.position = {32, 0};
+    node.transform.position = of_canvas(64, 32, 32, 0);
     ldoc::Scene scene;
     scene.id = ldoc::Id::generate();
     scene.roots = {node};
@@ -1885,7 +1889,8 @@ LTEST_CASE(capture_reuses_one_snapshot_across_direct_and_nested_placements) {
         source.settings["frameRate"] = std::string("60");
     } else source.settings["output"] = std::string(connector);
     auto node = bound_to(source);
-    node.layout.size = {64, 72};
+    // 64 by 72 of a 128 by 72 canvas: the left half, as a fraction of it (ADR-0070).
+    node.layout.size = of_canvas(128, 72, 64, 72);
     node.layout.fit = ldoc::FitMode::Stretch;
     ldoc::Scene scene;
     scene.id = ldoc::Id::generate();
@@ -1897,12 +1902,17 @@ LTEST_CASE(capture_reuses_one_snapshot_across_direct_and_nested_placements) {
     inner.canvas = project.canvases[0].id;
     auto duplicate = node;
     duplicate.id = ldoc::Id::generate();
-    inner.roots = {node, duplicate};
+    // Inside the precomp the containing space is the precomp's own 64 by 72 surface, so the
+    // same 64 by 72 of pixels is the whole of it rather than half.
+    duplicate.layout.size = {1.0, 1.0};
+    auto within = node;
+    within.layout.size = {1.0, 1.0};
+    inner.roots = {within, duplicate};
     auto nested = ldoc::make_node(ldoc::NodeKind::Precomp, "same screen again");
     auto& pre = std::get<ldoc::PrecompData>(nested.data);
     pre.scene = inner.id;
-    pre.size = {64, 72};
-    nested.transform.position = {64, 0};
+    pre.size = of_canvas(128, 72, 64, 72);
+    nested.transform.position = of_canvas(128, 72, 64, 0);
     project.scenes[0].roots = {node, nested};
     project.scenes.push_back(inner);
     if (video && !window) {

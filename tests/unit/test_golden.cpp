@@ -17,6 +17,7 @@
 #include "ldoc/json.hpp"
 #include "ldoc/migrate.hpp"
 #include "ldoc/project_io.hpp"
+#include "lcomp/composite.hpp"
 #include "lcore/atomic_file.hpp"
 
 #include "ltest.hpp"
@@ -24,6 +25,7 @@
 #include <algorithm>
 #include <array>
 #include <filesystem>
+#include <fstream>
 #include <vector>
 #include <format>
 #include <string>
@@ -53,13 +55,17 @@ Id fixed_id(std::uint8_t tag) {
 /// The current format, written by this build and committed. The byte-for-byte fixture.
 fs::path fixture_dir() {
     // Beside the test source, not in the build tree: it is an artefact of the repository.
-    return fs::path(MUNKICAST_TEST_FIXTURES) / "golden-project-v4";
+    return fs::path(MUNKICAST_TEST_FIXTURES) / "golden-project-v5";
 }
 
 /// The previous format, frozen. **Never regenerated**: its whole value is that it was written by
 /// a build that predates the change, so opening it exercises the real migration rather than a
 /// reconstruction of what version 1 is believed to have looked like. It still carries a scene
 /// with no canvas and nodes with `canvas_overrides`, which is exactly the point.
+///
+/// `golden-project-v4-pixels` beside it is the same arrangement, frozen at version 4, where
+/// position and box are still canvas pixels (ADR-0070). Also never regenerated, and for the
+/// same reason.
 fs::path fixture_v1_dir() {
     return fs::path(MUNKICAST_TEST_FIXTURES) / "golden-project-v1";
 }
@@ -154,10 +160,12 @@ Project golden_project() {
 
     Node cam_node = make_node(NodeKind::Source, "Camera");
     cam_node.id = fixed_id(0x52);
-    cam_node.transform.position = Vec2{120.0, 64.0};
+    // Fractions of the 2560x1440 canvas, which is what the document stores (ADR-0070). Written
+    // as the division so the pixels it means are still readable: 120,64 in a 640x360 box.
+    cam_node.transform.position = Vec2{120.0 / 2560.0, 64.0 / 1440.0};
     cam_node.transform.scale = Vec2{0.5, 0.5};
     cam_node.layout.fit = FitMode::Cover;
-    cam_node.layout.size = Vec2{640.0, 360.0};
+    cam_node.layout.size = Vec2{640.0 / 2560.0, 360.0 / 1440.0};
     cam_node.layout.crop = CropRect{8.0, 0.0, 8.0, 0.0};
     std::get<SourceData>(cam_node.data).source = camera.id;
     std::get<SourceData>(cam_node.data).audio.bus = program.id;
@@ -202,7 +210,8 @@ Project golden_project() {
     vertical_live.canvas = vertical.id;
     Node vcam = make_node(NodeKind::Source, "Camera");
     vcam.id = fixed_id(0x57);
-    vcam.transform.position = Vec2{40.0, 1200.0};
+    // 40,1200 of the 1080x1920 vertical canvas (ADR-0070).
+    vcam.transform.position = Vec2{40.0 / 1080.0, 1200.0 / 1920.0};
     vcam.transform.scale = Vec2{0.8, 0.8};
     std::get<SourceData>(vcam.data).source = camera.id;
     vertical_live.roots.push_back(std::move(vcam));
@@ -364,13 +373,28 @@ LTEST_CASE(the_fixture_exists_and_was_not_written_by_this_run) {
         return;
 
     // Generate it, then fail: a golden file checked by the run that wrote it has proved nothing.
+    //
+    // Written with the writers the byte tests below compare against, not through
+    // `create_project`: saving deliberately clears on-air state and opens on the emergency
+    // scene, so a fixture saved that way would disagree with `project_to_json` about
+    // `program_scene` and the comparison would fail on the run after this one.
     Project p = golden_project();
+    p.generation = 1; // what the byte tests expect, and what create_project used to commit
     fs::remove_all(fixture_dir(), ec);
-    const auto created = create_project(p, fixture_dir());
-    CHECK_MSG(created.has_value(), "{}", created.has_value() ? std::string{} : created.error());
-
-    // The lock and journal are runtime state, not part of the fixture.
-    fs::remove_all(fixture_dir() / ".munkicast", ec);
+    fs::create_directories(fixture_dir() / "scenes", ec);
+    const auto write = [](const fs::path& at, const std::string& text) {
+        std::ofstream out(at, std::ios::binary);
+        out << text;
+        return out.good();
+    };
+    CHECK_MSG(write(fixture_dir() / "project.json", project_to_json(p)),
+              "could not write the fixture's project.json");
+    for (const Scene& s : p.scenes)
+        CHECK_MSG(write(fixture_dir() / "scenes" / std::format("{}.json", s.id.to_string()),
+                        scene_to_json(s, 1)),
+                  "could not write the fixture's scene '{}'", s.name);
+    CHECK_MSG(write(fixture_dir() / "assets.json", assets_to_json(p.assets)),
+              "could not write the fixture's assets.json");
     REQUIRE_MSG(false,
                 "the golden fixture was missing and has been written to {} -- review it and "
                 "commit it, then run again",
@@ -595,6 +619,74 @@ LTEST_CASE(outputs_that_asked_for_the_same_thing_end_up_sharing_one_encode) {
     CHECK(p.outputs[1].encode == p.outputs[2].encode);
     CHECK(p.outputs[3].encode != p.outputs[0].encode);
     CHECK_EQ(p.schema_version, kSchemaVersion);
+}
+
+LTEST_CASE(version_4_pixel_geometry_becomes_fractions_and_draws_identically) {
+    // These bytes were written while position and box were canvas pixels. Opening them is what
+    // exercises the real version 4 -> 5 conversion rather than a reconstruction of it
+    // (ADR-0070). The fixture is frozen and is never regenerated.
+    const ScratchDir sd;
+    const auto dir = sd.copy_of(fs::path(MUNKICAST_TEST_FIXTURES) / "golden-project-v4-pixels");
+    auto opened = open_project(dir);
+    REQUIRE_MSG(opened, "{}", opened ? std::string{} : opened.error());
+    CHECK_EQ(opened->project.schema_version, kSchemaVersion);
+    CHECK(!opened->read_only);
+    const Project& p = opened->project;
+
+    // The camera sat at 120,64 in a 640x360 box, inside an unsized group on a 2560x1440 canvas.
+    // An unsized group is the canvas, so the canvas is what those pixels are divided by.
+    const Scene* overlay = p.scene(fixed_id(0x50));
+    REQUIRE(overlay);
+    REQUIRE(!overlay->roots.empty());
+    const std::vector<Node>* kids = overlay->roots.front().children();
+    REQUIRE_MSG(kids && !kids->empty(), "the group lost its children");
+    const Node& cam = kids->front();
+    CHECK_NEAR(cam.transform.position.x, 120.0 / 2560.0, 1e-12);
+    CHECK_NEAR(cam.transform.position.y, 64.0 / 1440.0, 1e-12);
+    CHECK_NEAR(cam.layout.size.x, 640.0 / 2560.0, 1e-12);
+    CHECK_NEAR(cam.layout.size.y, 360.0 / 1440.0, 1e-12);
+
+    // A zero box still means "the source's natural size" and must not become a fraction of
+    // anything: dividing zero is zero, which is the point, but say so rather than assume it.
+    CHECK_EQ(overlay->roots.front().layout.size.x, 0.0);
+    CHECK_EQ(overlay->roots.front().layout.size.y, 0.0);
+
+    // The other canvas is a different size, so a scene on it is divided by its own canvas and
+    // not by the first one. 1200 of 1920 is five eighths; of 1440 it would be more than four
+    // fifths, which is what a single-canvas conversion would have produced.
+    const Scene* vertical = p.scene(fixed_id(0x56));
+    REQUIRE(vertical);
+    REQUIRE(!vertical->roots.empty());
+    CHECK_NEAR(vertical->roots.front().transform.position.x, 40.0 / 1080.0, 1e-12);
+    CHECK_NEAR(vertical->roots.front().transform.position.y, 1200.0 / 1920.0, 1e-12);
+
+    // The test the ADR names: at the size it was authored at, the picture is unchanged. The
+    // rectangle is computed the way the compositor does, against the containing space.
+    //
+    // These four numbers are what the version 4 code drew for this node, from its 640x360 box
+    // at 120,64 with `cover`, a crop of 8 off each side and a half scale -- not the box itself.
+    // They were taken from the pixel-model arithmetic rather than guessed, which is the only
+    // way this test says anything: if the conversion were wrong, these would move.
+    lcomp::GapReason why = lcomp::GapReason::NoSize;
+    const auto frame = lcomp::drawn_frame(cam, 2560.0, 1440.0, 1920.0, 1080.0, true, why);
+    REQUIRE_MSG(frame, "the migrated camera node has no rectangle");
+    CHECK_NEAR(frame->x, 280.0, 1e-9);
+    CHECK_NEAR(frame->y, 153.24369747899158, 1e-9);
+    CHECK_NEAR(frame->width, 320.0, 1e-9);
+    CHECK_NEAR(frame->height, 181.51260504201682, 1e-9);
+
+    // And the whole point: the same node on a 4K canvas occupies the same fraction of the
+    // picture, where the pixel form would have left it in the lower-left quarter. Exactly the
+    // same fraction, not nearly -- the box, the position and the pivot all scale together, and
+    // `cover` picks the same ratio because both edges doubled.
+    const auto at_4k = lcomp::drawn_frame(cam, 3840.0, 2160.0, 1920.0, 1080.0, true, why);
+    REQUIRE(at_4k);
+    CHECK_NEAR(at_4k->x / 3840.0, frame->x / 2560.0, 1e-12);
+    CHECK_NEAR(at_4k->y / 2160.0, frame->y / 1440.0, 1e-12);
+    CHECK_NEAR(at_4k->width / 3840.0, frame->width / 2560.0, 1e-12);
+    CHECK_NEAR(at_4k->height / 2160.0, frame->height / 1440.0, 1e-12);
+
+    CHECK(is_valid(p));
 }
 
 LTEST_CASE(a_migrated_project_saves_as_the_current_version) {

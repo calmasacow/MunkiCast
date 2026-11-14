@@ -1179,9 +1179,10 @@ The repo rules that bit hardest this session:
   `output` in from the picker's `mapping_id`.
 - **What happens when a named connector is gone** is undecided (ADR-0041). It is a running-show
   failure and belongs with a supervisor that does not exist yet.
-- **"Fit to screen" bakes a layout box at the canvas size it was used on.** Changing the canvas
-  afterwards leaves the node drawing at the old size, because `fit: natural` then resolves
-  against the stored box rather than the source. Hit while benchmarking: a canvas changed to 4K
-  kept compositing its source at 1920x1080, which looked like a bug in the canvas resize and was
-  not. Whether a fit should re-resolve when the canvas changes is a real question and nobody has
-  answered it.
+- **"Fit to screen" bakes a layout box at the canvas size it was used on.** *Fixed in schema 5*
+  (ADR-0070): a box is a fraction of the containing space, so it follows a canvas resize and a
+  node baked by "Fit to screen" keeps filling the screen. The question that was open here --
+  whether a fit should re-resolve when the canvas changes -- stopped needing an answer, because
+  the box no longer names a resolution. Kept as a record of how the symptom read before: a
+  canvas changed to 4K kept compositing its source at 1920x1080, which looked like a bug in the
+  canvas resize and was not.

@@ -35,6 +35,12 @@ ldoc::Node bound_to(const ldoc::Source& source) {
     return node;
 }
 
+/// Geometry as a fraction of a square canvas of `edge` pixels, which is what the document
+/// stores (ADR-0070). The tests below name pixels, because a pixel is what they then assert on.
+ldoc::Vec2 of_canvas(int edge, double x, double y) {
+    return {x / static_cast<double>(edge), y / static_cast<double>(edge)};
+}
+
 /// A project whose one canvas is `edge` pixels square and whose program scene is `scene`.
 ldoc::Project show(int edge, ldoc::Scene scene, std::vector<ldoc::Source> sources = {}) {
     ldoc::Project project = ldoc::make_default_project("show");
@@ -253,7 +259,7 @@ LTEST_CASE(group_transform_places_its_children_as_one_picture) {
     auto group = ldoc::make_node(ldoc::NodeKind::Group, "Scaled group");
     std::get<ldoc::GroupData>(group.data).children = {bound_to(red)};
     group.transform.pivot = {0, 0};
-    group.transform.position = {1, 1};
+    group.transform.position = of_canvas(4, 1, 1);
     group.transform.scale = {0.5, 0.5};
     auto scene = scene_named("Scene");
     scene.roots = {group};
@@ -270,7 +276,7 @@ LTEST_CASE(contain_letterboxes_a_colour) {
     ldoc::Source red = colour_source(255, 0, 0, 4, 2);
     ldoc::Node node = bound_to(red);
     node.layout.fit = ldoc::FitMode::Contain;
-    node.layout.size = {4.0, 4.0};
+    node.layout.size = of_canvas(4, 4.0, 4.0);
     ldoc::Scene scene = scene_named("Scene");
     scene.roots = {node};
     ldoc::Project project = show(4, scene, {red});
@@ -339,7 +345,10 @@ LTEST_CASE(a_precomp_draws_the_other_scene_and_a_cycle_stops) {
 
     ldoc::Node pre = ldoc::make_node(ldoc::NodeKind::Precomp, "Inner");
     std::get<ldoc::PrecompData>(pre.data).scene = inner.id;
-    std::get<ldoc::PrecompData>(pre.data).size = {4.0, 4.0};
+    // The whole canvas, which is what {1, 1} means now that a precomp's surface is a fraction
+    // of the one it is drawn into (ADR-0070). An identical surface is what lets the plan below
+    // flatten the precomp instead of allocating one.
+    std::get<ldoc::PrecompData>(pre.data).size = {1.0, 1.0};
     ldoc::Scene outer = scene_named("Outer");
     outer.roots = {pre};
 
@@ -484,7 +493,7 @@ LTEST_CASE(an_image_that_cannot_be_read_leaves_what_is_behind_it) {
 LTEST_CASE(a_quarter_turn_and_a_flip_are_drawn_and_a_slant_is_not) {
     ldoc::Source red = colour_source(255, 0, 0, 4, 2);
     ldoc::Node card = bound_to(red);
-    card.transform.position = {2.0, 3.0};
+    card.transform.position = of_canvas(8, 2.0, 3.0);
     card.transform.rotation_deg = 90.0;
     ldoc::Scene scene = scene_named("Scene");
     scene.roots = {card};
@@ -529,13 +538,17 @@ LTEST_CASE(a_quarter_turn_and_a_flip_are_drawn_and_a_slant_is_not) {
 
     ldoc::Node plain = bound_to(red);
     GapReason why = GapReason::NoSize;
-    const auto solved = lcomp::solve_drawn_rect(plain, 4.0, 2.0, true, 0.0, 0.0, 2.0, 1.0);
+    // The handles' round trip: solve for a rectangle in pixels, write back what the solver
+    // returns -- which is in the stored unit, fractions of the 8-pixel canvas (ADR-0070) -- and
+    // the fit math has to hand back the rectangle that was asked for.
+    const auto solved =
+        lcomp::solve_drawn_rect(plain, 8.0, 8.0, 4.0, 2.0, true, 0.0, 0.0, 2.0, 1.0);
     REQUIRE(solved.has_value());
     CHECK(std::abs(solved->scale_x - 0.5) < 1e-9);
     CHECK(std::abs(solved->scale_y - 0.5) < 1e-9);
     plain.transform.position = {solved->x, solved->y};
     plain.transform.scale = {solved->scale_x, solved->scale_y};
-    const auto frame = lcomp::drawn_frame(plain, 4.0, 2.0, true, why);
+    const auto frame = lcomp::drawn_frame(plain, 8.0, 8.0, 4.0, 2.0, true, why);
     REQUIRE(frame.has_value());
     CHECK(std::abs(frame->x) < 1e-6);
     CHECK(std::abs(frame->y) < 1e-6);
@@ -725,7 +738,7 @@ LTEST_CASE(extreme_placement_is_bounded_before_integer_conversion_or_axis_alloca
     auto scene = scene_named("extreme transform");
     auto node = bound_to(screen);
     node.layout.fit = ldoc::FitMode::Stretch;
-    node.layout.size = {1e7, 1e7};
+    node.layout.size = of_canvas(4, 1e7, 1e7);
     scene.roots = {node};
     auto project = show(4, scene, {screen});
     const auto pixels = flat_bgra(4, 4, 13, 117, 231);
@@ -746,7 +759,7 @@ LTEST_CASE(cropping_samples_only_the_retained_source_pixels) {
     auto node = bound_to(source);
     node.layout.crop = {1, 0, 1, 0};
     node.layout.fit = ldoc::FitMode::Stretch;
-    node.layout.size = {4, 4};
+    node.layout.size = of_canvas(4, 4, 4);
     scene.roots = {node};
     auto project = show(4, scene, {source});
     const std::vector<std::uint8_t> pixels = {0, 0, 255, 255, 0, 255, 0, 255, 255, 0, 0, 255};

@@ -779,7 +779,9 @@ void Preview::stage_spot(const ldoc::Project& project, Spot& spot) {
         node.id = spot.node;
         std::get<ldoc::SourceData>(node.data).source = source->id;
         node.layout.fit = ldoc::FitMode::Contain;
-        node.layout.size = {double(canvas.width), double(canvas.height)};
+        // A box of the whole canvas, which is {1, 1} now that a box is a fraction of the space
+        // it sits in (ADR-0070). Independent of the preview canvas's size, which is the point.
+        node.layout.size = {1.0, 1.0};
         scene.roots.push_back(node);
     } else if (const auto* selected = project.scene(*owner)) {
         if (const auto* original = project.canvas(selected->canvas)) {
@@ -790,7 +792,9 @@ void Preview::stage_spot(const ldoc::Project& project, Spot& spot) {
         node.id = spot.node;
         auto& data = std::get<ldoc::PrecompData>(node.data);
         data.scene = selected->id;
-        data.size = {double(canvas.width), double(canvas.height)};
+        // Fractions of the preview canvas (ADR-0070); {0, 0} would mean the same thing here,
+        // but saying it outright keeps this reading like the source branch above.
+        data.size = {1.0, 1.0};
         scene.roots.push_back(node);
     } else {
         for (const auto& existing : project.scenes) {

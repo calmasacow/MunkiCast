@@ -52,7 +52,7 @@ if(MUNKICAST_BUILD_TESTS)
                      "${CMAKE_SOURCE_DIR}/tests/unit/fixtures/golden-project-v1" --verbose)
     set_tests_properties(inspect_migrates_an_older_project PROPERTIES
         TIMEOUT 30
-        PASS_REGULAR_EXPRESSION "version 1, brought up to 4"
+        PASS_REGULAR_EXPRESSION "version 1, brought up to 5"
         FAIL_REGULAR_EXPRESSION "error "
     )
 

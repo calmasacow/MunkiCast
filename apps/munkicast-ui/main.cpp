@@ -7240,7 +7240,11 @@ int main(int argc, char** argv) {
                     if (!source)
                         return false;
                     lcomp::GapReason why = lcomp::GapReason::NoSize;
-                    const auto frame = lcomp::drawn_frame(*source, 1920, 1080, true, why);
+                    // 1080x1920 is the portrait canvas this scene is on, and is the space the
+                    // node's fractions are measured against (ADR-0070); 1920x1080 is the
+                    // source's natural size.
+                    const auto frame =
+                        lcomp::drawn_frame(*source, 1080, 1920, 1920, 1080, true, why);
                     return frame && std::abs(frame->x - x) < 0.1 && std::abs(frame->y - y) < 0.1;
                 };
                 report(transform_action(QStringLiteral("Center to screen")) && at_position(340, 810),

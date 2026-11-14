@@ -5,6 +5,7 @@
 #include "lcore/ulid.hpp"
 
 #include <array>
+#include <cmath>
 #include <cstdint>
 #include <optional>
 #include <map>
@@ -104,7 +105,21 @@ enum class FitMode : std::uint8_t {
 [[nodiscard]] std::string_view to_string(FitMode m);
 [[nodiscard]] std::optional<FitMode> fit_mode_from_string(std::string_view s);
 
+/// A fraction of `space` reported back as pixels, rounded to a hundredth of one (ADR-0070).
+///
+/// The stored value is not rounded -- it is the authored geometry and stays exact. This is for
+/// the way out, where a round number of pixels need not survive the trip: 123 of a 1920 canvas
+/// is 123/1920, which is not representable in binary, and comes back as 122.99999999999999.
+/// Nothing is placed to finer than a hundredth of a pixel, so a reader asking in pixels gets
+/// the number the operator typed rather than that.
+[[nodiscard]] inline double in_pixels(double fraction, double space) {
+    return std::round(fraction * space * 100.0) / 100.0;
+}
+
 /// Crop in source pixels, taken off each edge before fitting.
+///
+/// Source pixels, not canvas fractions: a crop is a statement about the incoming image and has
+/// nothing to do with the canvas it is drawn onto (ADR-0070).
 struct CropRect {
     double left = 0.0;
     double top = 0.0;
@@ -115,7 +130,13 @@ struct CropRect {
     friend bool operator==(const CropRect&, const CropRect&) = default;
 };
 
-/// Where the node sits in canvas space.
+/// Where the node sits in its containing space.
+///
+/// `position` is a **fraction** of the space the node is composited into -- the canvas for a
+/// root node, the group's or precomp's own surface for a nested one. `{0.5, 0.5}` is half way
+/// across at any resolution, which is what lets a 1080p show reopen at 4K without every source
+/// moving (ADR-0070). The UI still shows and accepts pixels, computed against the current
+/// canvas; the fraction is the storage format, not the interface.
 struct Transform {
     Vec2 position{};
     double rotation_deg = 0.0;
@@ -131,7 +152,9 @@ struct Transform {
 struct Layout {
     FitMode fit = FitMode::Natural;
     CropRect crop{};
-    /// The box in canvas space. (0, 0) means "the source's natural size".
+    /// The box, as a **fraction** of the containing space (ADR-0070). (0, 0) still means
+    /// "the source's natural size", which is resolution-independent already because it is a
+    /// property of the source rather than of the canvas.
     Vec2 size{};
     /// Where the fitted content sits inside the box when it does not fill it.
     Vec2 alignment{0.5, 0.5};

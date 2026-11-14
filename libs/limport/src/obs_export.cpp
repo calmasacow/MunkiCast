@@ -382,11 +382,17 @@ struct Exporter {
             } else if (const auto* scene = std::get_if<ldoc::PrecompData>(&node.data);
                        scene && records.contains(scene->scene)) {
                 rec = records.at(scene->scene);
-                if (scene->size.x > 0 && scene->size.y > 0 && scene->size != rec.size)
+                // `scene->size` is a fraction of the containing space (ADR-0070); OBS stores
+                // pixels, so it is multiplied out before being compared with the scene's own.
+                const ldoc::Vec2 asked{scene->size.x * canvas.x, scene->size.y * canvas.y};
+                if (scene->size.x > 0 && scene->size.y > 0 && asked != rec.size)
                     warn(node.name,
                          "custom nested-scene size differs from scene canvas; check scaling");
             } else if (const auto* group = node.children()) {
-                const auto size = std::get<ldoc::GroupData>(node.data).size.value_or(canvas);
+                // A group's bounds are a fraction of the space it sits in (ADR-0070).
+                const auto& bounds = std::get<ldoc::GroupData>(node.data).size;
+                const auto size = bounds ? ldoc::Vec2{bounds->x * canvas.x, bounds->y * canvas.y}
+                                         : canvas;
                 rec = record(node.name, size);
                 auto nested = base(rec, "scene");
                 nested["settings"]["custom_size"] = true;
@@ -401,7 +407,10 @@ struct Exporter {
                 continue;
             }
             lcomp::GapReason why;
-            const auto frame = lcomp::drawn_frame(node, rec.size.x, rec.size.y, true, why);
+            // `canvas` is the space these nodes are placed in -- the OBS scene being written,
+            // which is this project's canvas at the top level and a group's bounds inside one.
+            const auto frame =
+                lcomp::drawn_frame(node, canvas.x, canvas.y, rec.size.x, rec.size.y, true, why);
             if (!frame || frame->width <= 0 || frame->height <= 0) {
                 warn(node.name, "unsupported transform or empty crop omitted");
                 continue;
@@ -419,10 +428,14 @@ struct Exporter {
             item["align"] = 5;
             item["bounds_type"] = 0;
             item["rot"] = node.transform.rotation_deg;
-            item["pos"] = vector(node.transform.position.x + frame->rel_cx + dx * std::cos(angle) -
-                                     dy * std::sin(angle),
-                                 node.transform.position.y + frame->rel_cy + dx * std::sin(angle) +
-                                     dy * std::cos(angle));
+            // OBS wants pixels. The position is a fraction of the space being written
+            // (ADR-0070), so it is multiplied out; the offsets it is added to are already
+            // pixels, from `drawn_frame`.
+            const double px = node.transform.position.x * canvas.x;
+            const double py = node.transform.position.y * canvas.y;
+            item["pos"] =
+                vector(px + frame->rel_cx + dx * std::cos(angle) - dy * std::sin(angle),
+                       py + frame->rel_cy + dx * std::sin(angle) + dy * std::cos(angle));
             item["scale"] =
                 vector(sx * frame->base_width /
                            (rec.size.x - node.layout.crop.left - node.layout.crop.right),

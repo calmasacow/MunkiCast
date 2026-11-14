@@ -1,0 +1,312 @@
+{
+  "audioEncodes" : 
+  [
+    {
+      "bitrate_kbps" : 160,
+      "bus" : "01JD55PV3X40G2081040G20810",
+      "codec" : "aac",
+      "extra" : {},
+      "id" : "01JD55PV3XFHY7RZ3WFHY7RZ3W",
+      "name" : "AAC 160",
+      "position" : 
+      {
+        "x" : 520.0,
+        "y" : 360.0
+      }
+    },
+    {
+      "bitrate_kbps" : 128,
+      "bus" : "01JD55PV3X44GJ289144GJ2891",
+      "codec" : "opus",
+      "extra" : 
+      {
+        "application" : "audio"
+      },
+      "id" : "01JD55PV3XFNYQTZBXFNYQTZBX",
+      "name" : "Opus 128",
+      "position" : 
+      {
+        "x" : 520.0,
+        "y" : 510.0
+      }
+    }
+  ],
+  "buses" : 
+  [
+    {
+      "channels" : 2,
+      "delay_ms" : 0.0,
+      "gain_db" : 0.0,
+      "hidden" : false,
+      "id" : "01JD55PV3X40G2081040G20810",
+      "inserts" : [],
+      "kind" : "program",
+      "level_locked" : false,
+      "monitor" : false,
+      "mute" : false,
+      "name" : "Program",
+      "pan" : 0.0,
+      "sends" : []
+    },
+    {
+      "channels" : 2,
+      "delay_ms" : 0.0,
+      "gain_db" : -2.5,
+      "hidden" : false,
+      "id" : "01JD55PV3X44GJ289144GJ2891",
+      "inserts" : [],
+      "kind" : "vod",
+      "level_locked" : false,
+      "monitor" : false,
+      "mute" : false,
+      "name" : "VOD",
+      "pan" : 0.0,
+      "sends" : 
+      [
+        {
+          "gain_db" : -6.0,
+          "pre_fader" : true,
+          "to" : "01JD55PV3X40G2081040G20810"
+        }
+      ]
+    }
+  ],
+  "canvases" : 
+  [
+    {
+      "color_space" : "rec709",
+      "emergency_scene" : "01JD55PV3X81040G2081040G20",
+      "fps" : 
+      {
+        "den" : 1001,
+        "num" : 60000
+      },
+      "height" : 1440,
+      "id" : "01JD55PV3X2081040G2081040G",
+      "name" : "Main",
+      "width" : 2560
+    },
+    {
+      "color_space" : "rec2100-pq",
+      "emergency_scene" : null,
+      "fps" : 
+      {
+        "den" : 1,
+        "num" : 60
+      },
+      "height" : 1920,
+      "id" : "01JD55PV3X248H248H248H248H",
+      "name" : "Vertical",
+      "width" : 1080
+    }
+  ],
+  "decks" : 
+  [
+    {
+      "canvas" : "01JD55PV3X2081040G2081040G",
+      "id" : "01JD55PV3XC1G60R30C1G60R30",
+      "name" : "Main",
+      "preview_scene" : "01JD55PV3X81040G2081040G20",
+      "program_scene" : "01JD55PV3XA1850M2GA1850M2G",
+      "studio_mode" : false,
+      "transition" : "transition.fade",
+      "transition_ms" : 420
+    }
+  ],
+  "encodes" : 
+  [
+    {
+      "canvas" : "01JD55PV3X2081040G2081040G",
+      "encoder" : 
+      {
+        "bitrate_kbps" : 12000,
+        "codec" : "h264",
+        "extra" : 
+        {
+          "rc-lookahead" : 
+          {
+            "int" : 20
+          }
+        },
+        "implementation" : "nvenc",
+        "keyframe_interval_ms" : 2000,
+        "preset" : "p5",
+        "rate_control" : "cbr"
+      },
+      "id" : "01JD55PV3XF9X7MYKTF9X7MYKT",
+      "name" : "1440p60 12 Mbps",
+      "position" : 
+      {
+        "x" : 520.0,
+        "y" : 60.0
+      },
+      "rescale" : null
+    },
+    {
+      "canvas" : "01JD55PV3X2081040G2081040G",
+      "encoder" : 
+      {
+        "bitrate_kbps" : 8000,
+        "codec" : "h264",
+        "extra" : {},
+        "implementation" : "nvenc",
+        "keyframe_interval_ms" : 2000,
+        "preset" : "p4",
+        "rate_control" : "cbr"
+      },
+      "id" : "01JD55PV3XFDXQPYVVFDXQPYVV",
+      "name" : "1080p60 8 Mbps",
+      "position" : 
+      {
+        "x" : 520.0,
+        "y" : 210.0
+      },
+      "rescale" : 
+      {
+        "x" : 1920.0,
+        "y" : 1080.0
+      }
+    }
+  ],
+  "generation" : 1,
+  "id" : "01JD55PV3X040G2081040G2081",
+  "name" : "Golden Show",
+  "outputs" : 
+  [
+    {
+      "audio_encode" : "01JD55PV3XFHY7RZ3WFHY7RZ3W",
+      "destination" : 
+      {
+        "credential_ref" : "youtube-main",
+        "kind" : "rtmps",
+        "url" : "rtmps://a.rtmps.youtube.com/live2"
+      },
+      "enabled" : false,
+      "encode" : "01JD55PV3XF9X7MYKTF9X7MYKT",
+      "id" : "01JD55PV3XE1R70W3GE1R70W3G",
+      "name" : "YouTube",
+      "position" : 
+      {
+        "x" : 1000.0,
+        "y" : 60.0
+      }
+    },
+    {
+      "audio_encode" : "01JD55PV3XFHY7RZ3WFHY7RZ3W",
+      "destination" : 
+      {
+        "credential_ref" : "twitch-main",
+        "kind" : "rtmps",
+        "url" : "rtmps://ingest.twitch.tv/app"
+      },
+      "enabled" : false,
+      "encode" : "01JD55PV3XFDXQPYVVFDXQPYVV",
+      "id" : "01JD55PV3XE5RQ2WBHE5RQ2WBH",
+      "name" : "Twitch",
+      "position" : 
+      {
+        "x" : 1000.0,
+        "y" : 210.0
+      }
+    },
+    {
+      "audio_encode" : null,
+      "destination" : 
+      {
+        "credential_ref" : "kick-main",
+        "kind" : "rtmps",
+        "url" : "rtmps://fa723fc1b171.global-contribute.live-video.net/app"
+      },
+      "enabled" : false,
+      "encode" : "01JD55PV3XFDXQPYVVFDXQPYVV",
+      "id" : "01JD55PV3XE9S74WKJE9S74WKJ",
+      "name" : "Kick",
+      "position" : 
+      {
+        "x" : 1000.0,
+        "y" : 360.0
+      }
+    }
+  ],
+  "scene_links" : 
+  [
+    {
+      "from" : "01JD55PV3XA1850M2GA1850M2G",
+      "id" : "01JD55PV3XJ289144GJ289144G",
+      "to" : "01JD55PV3XASB5CNJPASB5CNJP"
+    }
+  ],
+  "scenes" : 
+  [
+    {
+      "generation" : 1,
+      "id" : "01JD55PV3XA1850M2GA1850M2G",
+      "name" : "Live"
+    },
+    {
+      "generation" : 1,
+      "id" : "01JD55PV3X81040G2081040G20",
+      "name" : "Emergency"
+    },
+    {
+      "generation" : 1,
+      "id" : "01JD55PV3XASB5CNJPASB5CNJP",
+      "name" : "Live (Vertical)"
+    }
+  ],
+  "schema_version" : 5,
+  "settings" : 
+  {
+    "extra" : 
+    {
+      "tuning" : 0.25
+    },
+    "render_queue_frames" : 3,
+    "sample_rate" : 48000
+  },
+  "sources" : 
+  [
+    {
+      "asset" : null,
+      "effects" : 
+      [
+        {
+          "blend" : null,
+          "enabled" : false,
+          "id" : "01JD55PV3X68S34CHJ68S34CHJ",
+          "mask" : null,
+          "name" : "Camera correction",
+          "params" : 
+          {
+            "brightness" : 0.125
+          },
+          "type" : "filter.color-correction"
+        }
+      ],
+      "id" : "01JD55PV3X60R30C1G60R30C1G",
+      "name" : "Be Right Back",
+      "settings" : 
+      {
+        "gain" : 0.75,
+        "loop" : true,
+        "path" : "assets/brb.webm",
+        "tracks" : 
+        {
+          "int" : 2
+        }
+      },
+      "type" : "source.media"
+    },
+    {
+      "asset" : null,
+      "id" : "01JD55PV3X64RK2C9H64RK2C9H",
+      "name" : "Desk Cam",
+      "settings" : 
+      {
+        "device" : "/dev/video0",
+        "full_range" : false
+      },
+      "type" : "source.v4l2"
+    }
+  ]
+}

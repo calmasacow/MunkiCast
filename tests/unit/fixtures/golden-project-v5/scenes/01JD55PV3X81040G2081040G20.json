@@ -1,0 +1,101 @@
+{
+  "audio_overrides" : {},
+  "canvas" : "01JD55PV3X2081040G2081040G",
+  "effects" : 
+  [
+    {
+      "blend" : null,
+      "enabled" : false,
+      "id" : "01JD55PV3X89144GJ289144GJ2",
+      "mask" : null,
+      "name" : "Camera correction",
+      "params" : 
+      {
+        "brightness" : 0.125
+      },
+      "type" : "filter.color-correction"
+    }
+  ],
+  "favourite" : false,
+  "generation" : 1,
+  "id" : "01JD55PV3X81040G2081040G20",
+  "name" : "Emergency",
+  "roots" : 
+  [
+    {
+      "blend" : 
+      {
+        "clip_to_below" : false,
+        "mode" : "normal",
+        "opacity" : 1.0,
+        "pass_through_group" : false
+      },
+      "data" : 
+      {
+        "audio" : 
+        {
+          "bus" : null,
+          "gain_db" : 0.0,
+          "hidden" : false,
+          "level_locked" : false,
+          "monitor" : false,
+          "mute" : false,
+          "sends" : []
+        },
+        "source" : "01JD55PV3X60R30C1G60R30C1G"
+      },
+      "effects" : [],
+      "id" : "01JD55PV3X850M2GA1850M2GA1",
+      "kind" : "source",
+      "layout" : 
+      {
+        "alignment" : 
+        {
+          "x" : 0.5,
+          "y" : 0.5
+        },
+        "crop" : 
+        {
+          "bottom" : 0.0,
+          "left" : 0.0,
+          "right" : 0.0,
+          "top" : 0.0
+        },
+        "fit" : "natural",
+        "size" : 
+        {
+          "x" : 0.0,
+          "y" : 0.0
+        }
+      },
+      "locked" : false,
+      "name" : "Card",
+      "transform" : 
+      {
+        "pivot" : 
+        {
+          "x" : 0.5,
+          "y" : 0.5
+        },
+        "position" : 
+        {
+          "x" : 0.0,
+          "y" : 0.0
+        },
+        "rotation_deg" : 0.0,
+        "scale" : 
+        {
+          "x" : 1.0,
+          "y" : 1.0
+        },
+        "skew_deg" : 
+        {
+          "x" : 0.0,
+          "y" : 0.0
+        }
+      },
+      "visible" : true
+    }
+  ],
+  "schema_version" : 5
+}

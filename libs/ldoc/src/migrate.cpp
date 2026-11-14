@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <format>
+#include <variant>
 
 namespace ldoc {
 namespace {
@@ -248,7 +249,106 @@ void to_v4(Project& p, std::vector<Problem>& out) {
     place_on_graph(p);
 }
 
+
+/// Version 4 -> 5. Geometry stops being canvas pixels and becomes fractions (ADR-0070).
+///
+/// A version 4 project put every node where it was in pixels, so a canvas changed from 1080p to
+/// 4K left the whole scene in the lower-left quarter and the operator re-placed each source by
+/// hand. Fractions mean the numbers already say the same thing at the new size, and `SetCanvas`
+/// needs no rescaling pass at all.
+///
+/// What is divided, and by what:
+///
+///  - `Transform.position` and `Layout.size`, by the size of the space the node sits in -- the
+///    scene's canvas for a root node, the containing group's surface for a nested one, which is
+///    itself resolved from the canvas on the way down.
+///  - `GroupData::size` and `PrecompData::size`, by that same space, because they *are* that
+///    space for their children.
+///  - Nothing else. `scale`, `rotation_deg`, `pivot`, `skew_deg` and `Layout.alignment` were
+///    already unit-free, and `CropRect` stays in source pixels: a crop is a statement about the
+///    incoming image, not about the canvas it is drawn onto.
+///
+/// A scene whose canvas is missing falls back to the first canvas, which is what v1 -> v2 does
+/// with scenes that never had one. The division is exact arithmetic with one right answer, so a
+/// migrated project draws the identical rectangles at the size it was authored at -- which is
+/// what `test_golden`'s version 4 case asserts rather than taking on trust.
+///
+/// A scene is converted once, against its own canvas, even when a precomp draws it into a
+/// surface of some other size. That is the size it was authored at, and it is the only one this
+/// pass can know; a scene used as a precomp at two different sizes had the same ambiguity in
+/// pixels, and converting it twice would mean two answers for one scene.
+void nodes_to_fractions(Node& node, double space_w, double space_h) {
+    node.transform.position.x /= space_w;
+    node.transform.position.y /= space_h;
+    node.layout.size.x /= space_w;
+    node.layout.size.y /= space_h;
+
+    // The child space in pixels, before this node's own size is converted: a group of 960x540
+    // inside 1920x1080 is where its children were placed, and that is still true afterwards.
+    double child_w = space_w;
+    double child_h = space_h;
+    if (auto* group = std::get_if<GroupData>(&node.data)) {
+        if (group->size && group->size->x > 0.0 && group->size->y > 0.0) {
+            child_w = group->size->x;
+            child_h = group->size->y;
+            group->size = Vec2{group->size->x / space_w, group->size->y / space_h};
+        }
+        for (Node& child : group->children)
+            nodes_to_fractions(child, child_w, child_h);
+        return;
+    }
+    if (auto* pre = std::get_if<PrecompData>(&node.data)) {
+        if (pre->size.x > 0.0 && pre->size.y > 0.0)
+            pre->size = Vec2{pre->size.x / space_w, pre->size.y / space_h};
+    }
+}
+
+void to_fractions(Project& p, std::vector<Problem>& out) {
+    if (p.scenes.empty())
+        return;
+    if (p.canvases.empty()) {
+        out.push_back(Problem{Severity::Error,
+                              std::format("this project is from an older format and has {} "
+                                          "scene(s) placed in pixels, but no canvas to measure "
+                                          "them against; their geometry cannot be converted",
+                                          p.scenes.size()),
+                              p.id});
+        return;
+    }
+
+    const Canvas& fallback = p.canvases.front();
+    std::size_t orphans = 0;
+    for (Scene& scene : p.scenes) {
+        const Canvas* canvas = nullptr;
+        for (const Canvas& c : p.canvases) {
+            if (c.id == scene.canvas)
+                canvas = &c;
+        }
+        if (!canvas) {
+            canvas = &fallback;
+            ++orphans;
+        }
+        if (canvas->width <= 0 || canvas->height <= 0)
+            continue;
+        const auto w = static_cast<double>(canvas->width);
+        const auto h = static_cast<double>(canvas->height);
+        for (Node& root : scene.roots)
+            nodes_to_fractions(root, w, h);
+    }
+
+    if (orphans > 0)
+        out.push_back(Problem{Severity::Warning,
+                              std::format("{} scene(s) name a canvas this project does not have; "
+                                          "their geometry was converted against '{}'",
+                                          orphans, fallback.name),
+                              fallback.id});
+}
+
 } // namespace
+
+void geometry_to_fractions(Project& project, std::vector<Problem>& problems) {
+    to_fractions(project, problems);
+}
 
 Migration migrate(Project& project, const std::vector<LegacyOutputEncode>& legacy_outputs) {
     Migration m;
@@ -260,6 +360,8 @@ Migration migrate(Project& project, const std::vector<LegacyOutputEncode>& legac
         to_v2(project, legacy_outputs, m.problems);
     if (project.schema_version < 4)
         to_v4(project, m.problems);
+    if (project.schema_version < 5)
+        to_fractions(project, m.problems);
 
     project.schema_version = kSchemaVersion;
     return m;

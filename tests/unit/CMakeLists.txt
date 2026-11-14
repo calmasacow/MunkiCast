@@ -37,7 +37,7 @@ munkicast_unit_test(test_document         munkicast::ldoc)
 munkicast_unit_test(test_dropzone        munkicast::llayout)
 munkicast_unit_test(test_journal          munkicast::ldoc munkicast::lcore)
 munkicast_unit_test(test_fuzz             munkicast::ldoc munkicast::llayout munkicast::lsession)
-munkicast_unit_test(test_golden           munkicast::ldoc munkicast::lcore)
+munkicast_unit_test(test_golden           munkicast::ldoc munkicast::lcore munkicast::lcomp)
 target_compile_definitions(test_golden PRIVATE
     MUNKICAST_TEST_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 munkicast_unit_test(test_ipc              munkicast::lipc)

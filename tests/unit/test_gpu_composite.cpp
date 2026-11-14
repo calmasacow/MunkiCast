@@ -21,6 +21,11 @@ extern "C" {
 }
 
 namespace {
+/// Geometry as a fraction of a canvas of `w` by `h`, which is what the document stores
+/// (ADR-0070). These tests name pixels because the CPU and GPU pictures are compared pixel for
+/// pixel, and the default canvas below is 48 by 32.
+ldoc::Vec2 of_canvas(double x, double y, double w = 48, double h = 32) { return {x / w, y / h}; }
+
 ldoc::Project show(int width = 48, int height = 32) {
     auto p = ldoc::make_default_project("GPU check");
     p.canvases[0].width = width;
@@ -31,7 +36,7 @@ ldoc::Project show(int width = 48, int height = 32) {
     auto node = ldoc::make_node(ldoc::NodeKind::Source, "screen");
     std::get<ldoc::SourceData>(node.data).source = source.id;
     node.layout.fit = ldoc::FitMode::Stretch;
-    node.layout.size = {static_cast<double>(width), static_cast<double>(height)};
+    node.layout.size = {1.0, 1.0}; // The whole canvas, whatever its size (ADR-0070).
     ldoc::Scene scene;
     scene.id = ldoc::Id::generate();
     scene.canvas = p.canvases[0].id;
@@ -329,7 +334,7 @@ LTEST_CASE(still_images_share_pixels_and_cached_uploads_follow_replacement) {
     project.sources.push_back(second);
     auto placed = project.scenes[0].roots[0];
     placed.id = ldoc::Id::generate();
-    placed.transform.position = {16, 0};
+    placed.transform.position = of_canvas(16, 0);
     std::get<ldoc::SourceData>(placed.data).source = second.id;
     project.scenes[0].roots.push_back(placed);
     const auto original = lcomp::plan_canvas(project, project.canvases[0].id);
@@ -549,8 +554,8 @@ LTEST_CASE(gpu_executes_the_shared_walk_for_opacity_precomps_rotations_and_flips
     };
     auto project = show();
     auto node = project.scenes[0].roots[0];
-    node.layout.size = {17, 13};
-    node.transform.position = {-2, 3};
+    node.layout.size = of_canvas(17, 13);
+    node.transform.position = of_canvas(-2, 3);
     node.layout.crop = {1, 1, 2, 1};
     ldoc::Scene inner = project.scenes[0];
     inner.id = ldoc::Id::generate();
@@ -581,7 +586,7 @@ LTEST_CASE(gpu_executes_the_shared_walk_for_opacity_precomps_rotations_and_flips
     project.sources[0].settings["file"] = std::string(MUNKICAST_IMAGE_FIXTURES) + "/two.png";
     auto group = ldoc::make_node(ldoc::NodeKind::Group, "opacity group");
     group.blend.opacity = 0.5;
-    group.transform.position = {2, 1};
+    group.transform.position = of_canvas(2, 1);
     group.transform.scale = {0.5, 0.75};
     group.transform.rotation_deg = 90;
     std::get<ldoc::GroupData>(group.data).children = project.scenes[0].roots;
@@ -590,7 +595,7 @@ LTEST_CASE(gpu_executes_the_shared_walk_for_opacity_precomps_rotations_and_flips
     auto image_result = gpu->render(image_plan, 0, error);
     REQUIRE_MSG(image_result.has_value(), "{}", error);
     compare(lcomp::execute_cpu(image_plan), *image_result);
-    std::get<ldoc::GroupData>(project.scenes[0].roots[0].data).size = ldoc::Vec2{8, 6};
+    std::get<ldoc::GroupData>(project.scenes[0].roots[0].data).size = of_canvas(8, 6);
     const auto bounded_plan = lcomp::plan_canvas(project, project.canvases[0].id);
     auto bounded_result = gpu->render(bounded_plan, 0, error);
     REQUIRE_MSG(bounded_result.has_value(), "{}", error);
@@ -637,7 +642,7 @@ LTEST_CASE(all_seven_blends_match_cpu_for_textures_transparency_and_nested_group
             auto group = ldoc::make_node(ldoc::NodeKind::Group, "blended group");
             group.blend.mode = mode;
             group.blend.opacity = opacity;
-            group.transform.position = {2, 1};
+            group.transform.position = of_canvas(2, 1);
             group.transform.scale = {0.8, 0.7};
             std::get<ldoc::GroupData>(group.data).children = {precomp, background};
             project.scenes[0].roots = {group, background};

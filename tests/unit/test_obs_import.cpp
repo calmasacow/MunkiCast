@@ -396,7 +396,9 @@ LTEST_CASE(import_group_skips_backup_items_and_renders_saved_tight_bounds) {
     REQUIRE(p.scenes[0].roots[0].is_group());
     const auto& native = std::get<ldoc::GroupData>(p.scenes[0].roots[0].data);
     REQUIRE(native.size.has_value());
-    CHECK(*native.size == (ldoc::Vec2{2, 2}));
+    // 2 by 2 of the 4 by 4 canvas this fixture imports onto: half of it each way, which is
+    // what the document stores now (ADR-0070).
+    CHECK(*native.size == (ldoc::Vec2{0.5, 0.5}));
     CHECK_EQ(native.children.size(), 1u);
     CHECK(p.scenes[0].roots[0].locked);
     const auto picture = lcomp::composite_canvas(p, p.canvases[0].id);
@@ -728,7 +730,8 @@ LTEST_CASE(export_roundtrip_preserves_pixels_stack_crop_pivot_flips_and_rotation
     REQUIRE(converted);
     auto& project = converted->project;
     auto& node = project.scenes.front().roots.front();
-    node.transform.position = {1, 1};
+    // A fraction of the 4 by 4 canvas this fixture imports onto (ADR-0070).
+    node.transform.position = {1.0 / 4.0, 1.0 / 4.0};
     node.transform.rotation_deg = 90;
     node.transform.scale = {-1, 1};
     node.transform.pivot = {0.5, 0.5};

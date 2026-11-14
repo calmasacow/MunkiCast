@@ -1,0 +1,86 @@
+{
+  "audio_overrides" : {},
+  "canvas" : "01JD55PV3X248H248H248H248H",
+  "favourite" : false,
+  "generation" : 1,
+  "id" : "01JD55PV3XASB5CNJPASB5CNJP",
+  "name" : "Live (Vertical)",
+  "roots" : 
+  [
+    {
+      "blend" : 
+      {
+        "clip_to_below" : false,
+        "mode" : "normal",
+        "opacity" : 1.0,
+        "pass_through_group" : false
+      },
+      "data" : 
+      {
+        "audio" : 
+        {
+          "bus" : null,
+          "gain_db" : 0.0,
+          "hidden" : false,
+          "level_locked" : false,
+          "monitor" : false,
+          "mute" : false,
+          "sends" : []
+        },
+        "source" : "01JD55PV3X64RK2C9H64RK2C9H"
+      },
+      "effects" : [],
+      "id" : "01JD55PV3XAXBNENTQAXBNENTQ",
+      "kind" : "source",
+      "layout" : 
+      {
+        "alignment" : 
+        {
+          "x" : 0.5,
+          "y" : 0.5
+        },
+        "crop" : 
+        {
+          "bottom" : 0.0,
+          "left" : 0.0,
+          "right" : 0.0,
+          "top" : 0.0
+        },
+        "fit" : "natural",
+        "size" : 
+        {
+          "x" : 0.0,
+          "y" : 0.0
+        }
+      },
+      "locked" : false,
+      "name" : "Camera",
+      "transform" : 
+      {
+        "pivot" : 
+        {
+          "x" : 0.5,
+          "y" : 0.5
+        },
+        "position" : 
+        {
+          "x" : 0.037037037037037035,
+          "y" : 0.625
+        },
+        "rotation_deg" : 0.0,
+        "scale" : 
+        {
+          "x" : 0.80000000000000004,
+          "y" : 0.80000000000000004
+        },
+        "skew_deg" : 
+        {
+          "x" : 0.0,
+          "y" : 0.0
+        }
+      },
+      "visible" : true
+    }
+  ],
+  "schema_version" : 5
+}

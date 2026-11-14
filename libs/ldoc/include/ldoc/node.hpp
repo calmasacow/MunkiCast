@@ -92,7 +92,8 @@ struct GroupData {
     std::vector<Node> children;
     /// Composite against transparency instead of the backdrop beneath the group.
     bool isolate = false;
-    /// Local surface bounds; absent means the containing canvas size.
+    /// Local surface bounds, as a **fraction** of the containing space (ADR-0070); absent means
+    /// the containing surface's own size.
     std::optional<Vec2> size;
 
     friend bool operator==(const GroupData&, const GroupData&) = default;
@@ -160,7 +161,8 @@ struct ReferenceData {
 
 struct PrecompData {
     Id scene;
-    /// (0, 0) means "the size of the canvas this precomp is being composited into".
+    /// The precomp's own surface, as a **fraction** of the containing space (ADR-0070).
+    /// (0, 0) still means "the size of the surface this precomp is being composited into".
     Vec2 size{};
     ColorSpace color_space = ColorSpace::Rec709;
 

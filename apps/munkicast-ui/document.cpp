@@ -325,14 +325,20 @@ namespace {
 
 const ldoc::Scene* program_scene(const ldoc::Project& project, const ldoc::Id& canvas);
 std::optional<QVariantMap> placed_map(const ldoc::Project& project, const ldoc::Canvas& canvas,
-                                      const ldoc::Node& node);
+                                      const ldoc::Node& node, const ldoc::Vec2& space);
 
-QTransform group_space(const ldoc::Node& group, const ldoc::Canvas& canvas) {
+/// The surface a group's children are composited into, in pixels. A group's own bounds are a
+/// fraction of the space the group sits in (ADR-0070); absent means that space unchanged, which
+/// is what the compositor does with it.
+ldoc::Vec2 group_surface(const ldoc::Node& group, const ldoc::Vec2& space) {
     const auto& data = std::get<ldoc::GroupData>(group.data);
-    const auto size = data.size.value_or(
-        ldoc::Vec2{static_cast<double>(canvas.width), static_cast<double>(canvas.height)});
+    return data.size ? ldoc::Vec2{data.size->x * space.x, data.size->y * space.y} : space;
+}
+
+QTransform group_space(const ldoc::Node& group, const ldoc::Vec2& space) {
+    const auto size = group_surface(group, space);
     lcomp::GapReason why = lcomp::GapReason::NoSize;
-    const auto box = lcomp::drawn_frame(group, size.x, size.y, true, why);
+    const auto box = lcomp::drawn_frame(group, space.x, space.y, size.x, size.y, true, why);
     const auto width = size.x - group.layout.crop.left - group.layout.crop.right;
     const auto height = size.y - group.layout.crop.top - group.layout.crop.bottom;
     if (!box || width <= 0 || height <= 0)
@@ -365,18 +371,39 @@ QTransform group_space(const ldoc::Node& group, const ldoc::Canvas& canvas) {
     return QTransform(x.x(), x.y(), y.x(), y.y(), origin.x(), origin.y());
 }
 
-QTransform parent_space(const ldoc::Scene& scene, const ldoc::Id& id, const ldoc::Canvas& canvas) {
+/// The transform into the space `id` is positioned in, and that space's pixel size.
+///
+/// Both are needed together: a node inside a group is placed against the group's surface, not
+/// against the canvas, so a walk that returned only the transform would leave the caller
+/// multiplying the node's fractions by the wrong size (ADR-0070).
+QTransform parent_space(const ldoc::Scene& scene, const ldoc::Id& id, const ldoc::Canvas& canvas,
+                        ldoc::Vec2* space_out = nullptr) {
     QTransform result;
-    const auto walk = [&](const auto& self, const std::vector<ldoc::Node>& nodes, const QTransform& parent) -> bool {
+    const ldoc::Vec2 canvas_space{static_cast<double>(canvas.width),
+                                  static_cast<double>(canvas.height)};
+    ldoc::Vec2 space = canvas_space;
+    const auto walk = [&](const auto& self, const std::vector<ldoc::Node>& nodes,
+                          const QTransform& parent, const ldoc::Vec2& in) -> bool {
         for (const auto& node : nodes) {
-            if (node.id == id) { result = parent; return true; }
+            if (node.id == id) { result = parent; space = in; return true; }
             if (const auto* children = node.children())
-                if (self(self, *children, group_space(node, canvas) * parent)) return true;
+                if (self(self, *children, group_space(node, in) * parent,
+                         group_surface(node, in)))
+                    return true;
         }
         return false;
     };
-    walk(walk, scene.roots, {});
+    walk(walk, scene.roots, {}, canvas_space);
+    if (space_out)
+        *space_out = space;
     return result;
+}
+
+/// The pixel size of the surface `id` is positioned against.
+ldoc::Vec2 node_space(const ldoc::Scene& scene, const ldoc::Id& id, const ldoc::Canvas& canvas) {
+    ldoc::Vec2 space{static_cast<double>(canvas.width), static_cast<double>(canvas.height)};
+    parent_space(scene, id, canvas, &space);
+    return space;
 }
 
 const ldoc::Canvas* canvas_of(const ldoc::Project& project, const ldoc::Id& id) {
@@ -388,6 +415,27 @@ const ldoc::Canvas* canvas_of(const ldoc::Project& project, const ldoc::Id& id) 
 }
 
 } // namespace
+
+QVariantMap Document::nodeSpace(const QString& sceneId, const QString& nodeId) const {
+    const ldoc::Project& project = session_->project();
+    const auto scene_id = parse_id(sceneId);
+    const auto node_id = parse_id(nodeId);
+    if (!scene_id || !node_id)
+        return {};
+    const ldoc::Scene* scene = project.scene(*scene_id);
+    const ldoc::Canvas* canvas = scene ? canvas_of(project, scene->canvas) : nullptr;
+    if (!scene || !canvas || canvas->width <= 0 || canvas->height <= 0)
+        return {};
+    if (!ldoc::find_node(scene->roots, *node_id))
+        return {};
+    const ldoc::Vec2 space = node_space(*scene, *node_id, *canvas);
+    if (!(space.x > 0.0) || !(space.y > 0.0))
+        return {};
+    QVariantMap out;
+    out[QStringLiteral("width")] = space.x;
+    out[QStringLiteral("height")] = space.y;
+    return out;
+}
 
 QVariantMap Document::placedRect(const QString& canvasId, const QString& nodeId) const {
     const ldoc::Project& project = session_->project();
@@ -407,9 +455,11 @@ QVariantMap Document::placedRect(const QString& canvasId, const QString& nodeId)
 
 QVariantMap Document::placed_rect(const ldoc::Scene& scene, const ldoc::Canvas& canvas,
                                  const ldoc::Node& node) const {
-    auto result = placed_map(session_->project(), canvas, node).value_or(QVariantMap{});
+    ldoc::Vec2 space{static_cast<double>(canvas.width), static_cast<double>(canvas.height)};
+    const QTransform into = parent_space(scene, node.id, canvas, &space);
+    auto result = placed_map(session_->project(), canvas, node, space).value_or(QVariantMap{});
     if (!result.isEmpty()) {
-        const auto box = parent_space(scene, node.id, canvas).mapRect(QRectF(
+        const auto box = into.mapRect(QRectF(
             result["x"].toDouble(), result["y"].toDouble(),
             result["width"].toDouble(), result["height"].toDouble()));
         result["x"] = box.x(); result["y"] = box.y();
@@ -746,7 +796,11 @@ bool drawable(const ldoc::Node& node) {
     return true; // natural_size refuses kinds the picture does not draw
 }
 
-QVariantMap frame_map(const lcomp::DrawnFrame& frame, const ldoc::Node& node) {
+/// Everything in this map is pixels in the node's containing space, including `posX`/`posY`:
+/// the document stores fractions (ADR-0070) and the shell shows pixels, and the conversion
+/// belongs here rather than in each reader.
+QVariantMap frame_map(const lcomp::DrawnFrame& frame, const ldoc::Node& node,
+                      const ldoc::Vec2& space) {
     QVariantMap m;
     m.insert(QStringLiteral("id"), id_str(node.id));
     m.insert(QStringLiteral("x"), frame.x);
@@ -759,8 +813,8 @@ QVariantMap frame_map(const lcomp::DrawnFrame& frame, const ldoc::Node& node) {
     m.insert(QStringLiteral("relCy"), frame.rel_cy);
     m.insert(QStringLiteral("relDx"), frame.rel_dx);
     m.insert(QStringLiteral("relDy"), frame.rel_dy);
-    m.insert(QStringLiteral("posX"), node.transform.position.x);
-    m.insert(QStringLiteral("posY"), node.transform.position.y);
+    m.insert(QStringLiteral("posX"), ldoc::in_pixels(node.transform.position.x, space.x));
+    m.insert(QStringLiteral("posY"), ldoc::in_pixels(node.transform.position.y, space.y));
     m.insert(QStringLiteral("scaleX"), node.transform.scale.x);
     m.insert(QStringLiteral("scaleY"), node.transform.scale.y);
     m.insert(QStringLiteral("locked"), node.locked);
@@ -768,7 +822,7 @@ QVariantMap frame_map(const lcomp::DrawnFrame& frame, const ldoc::Node& node) {
 }
 
 std::optional<QVariantMap> placed_map(const ldoc::Project& project, const ldoc::Canvas& canvas,
-                                      const ldoc::Node& node) {
+                                      const ldoc::Node& node, const ldoc::Vec2& space) {
     if (!node.visible || node.blend.opacity <= 0.0)
         return std::nullopt;
     if (!lcomp::blend_supported(node.blend.mode) || node.blend.clip_to_below ||
@@ -792,11 +846,11 @@ std::optional<QVariantMap> placed_map(const ldoc::Project& project, const ldoc::
     }
     lcomp::GapReason why = lcomp::GapReason::NoSize;
     const std::optional<lcomp::DrawnFrame> frame =
-        lcomp::drawn_frame(node, natural_w, natural_h, have, why);
+        lcomp::drawn_frame(node, space.x, space.y, natural_w, natural_h, have, why);
     if (!frame || !(frame->width > 0.0) || !(frame->height > 0.0) || !(frame->base_width > 0.0) ||
         !(frame->base_height > 0.0))
         return std::nullopt;
-    return frame_map(*frame, node);
+    return frame_map(*frame, node, space);
 }
 
 } // namespace
@@ -806,13 +860,16 @@ QVariantMap Document::nodeProperties() const {
     const ldoc::Node* n = current_node();
     if (!n)
         return m;
+    // Position and box are stored as fractions of the containing space (ADR-0070). The panel
+    // shows pixels, so they are multiplied out here -- the one place the shell converts.
+    const ldoc::Vec2 space = current_node_space();
     m["id"] = id_str(n->id);
     m["name"] = node_display_name(session_->project(), *n);
     m["kind"] = kind_str(n->kind());
     m["visible"] = n->visible;
     m["locked"] = n->locked;
-    m["positionX"] = n->transform.position.x;
-    m["positionY"] = n->transform.position.y;
+    m["positionX"] = ldoc::in_pixels(n->transform.position.x, space.x);
+    m["positionY"] = ldoc::in_pixels(n->transform.position.y, space.y);
     m["scaleX"] = n->transform.scale.x;
     m["scaleY"] = n->transform.scale.y;
     m["rotation"] = n->transform.rotation_deg;
@@ -822,8 +879,8 @@ QVariantMap Document::nodeProperties() const {
         static_cast<qsizetype>(ldoc::to_string(n->blend.mode).size()));
     const auto fit = ldoc::to_string(n->layout.fit);
     m["fit"] = QString::fromUtf8(fit.data(), static_cast<qsizetype>(fit.size()));
-    m["boxWidth"] = n->layout.size.x;
-    m["boxHeight"] = n->layout.size.y;
+    m["boxWidth"] = ldoc::in_pixels(n->layout.size.x, space.x);
+    m["boxHeight"] = ldoc::in_pixels(n->layout.size.y, space.y);
     m["cropLeft"] = n->layout.crop.left;
     m["cropTop"] = n->layout.crop.top;
     m["cropRight"] = n->layout.crop.right;
@@ -3119,11 +3176,12 @@ int Document::pasteWouldMissCanvas() const {
     // A node sitting entirely past the right or bottom edge, or before the left or top one.
     // Counted rather than listed: the operator asked to be told that something is off, not
     // which things (ADR-0036).
-    const auto misses = [c](const ldoc::Node& n) {
+    // Fractions of the canvas (ADR-0070), so the canvas's own edges are 0 and 1 and the test
+    // needs no pixel sizes at all. `c` is still required: a paste onto no canvas misses nothing.
+    const auto misses = [](const ldoc::Node& n) {
         const double w = n.layout.size.x > 0 ? n.layout.size.x : 0.0;
         const double h = n.layout.size.y > 0 ? n.layout.size.y : 0.0;
-        return n.transform.position.x >= static_cast<double>(c->width) ||
-               n.transform.position.y >= static_cast<double>(c->height) ||
+        return n.transform.position.x >= 1.0 || n.transform.position.y >= 1.0 ||
                n.transform.position.x + w <= 0.0 || n.transform.position.y + h <= 0.0;
     };
     int off = 0;
@@ -4990,8 +5048,10 @@ void Document::ungroupNode(const QString& nodeId) {
                                    "clipping and blending. Move its sources out individually."));
         return;
     }
-    if (const auto* canvas = current_canvas(); canvas &&
-        (!group_space(*group, *canvas).isIdentity() || group->blend.opacity != 1.0)) {
+    const ldoc::Scene* group_scene = current_scene();
+    if (const auto* canvas = current_canvas(); canvas && group_scene &&
+        (!group_space(*group, node_space(*group_scene, group->id, *canvas)).isIdentity() ||
+         group->blend.opacity != 1.0)) {
         emit notice(QStringLiteral("Reset the group's transform and opacity before ungrouping; "
                                    "ungrouping now would change its children's picture."));
         return;
@@ -5349,13 +5409,27 @@ void Document::moveNode(const QString& id, int delta) {
 
 // ---- properties -------------------------------------------------------------------------------
 
+/// The pixel size of the surface the selected node is positioned against: the canvas, or the
+/// group's surface when it is nested. Every px-to-fraction conversion in the shell divides by
+/// this (ADR-0070). Falls back to 1x1 rather than 0x0 so a conversion is never a division by
+/// zero -- a canvas with no size has nothing placed on it anyway.
+ldoc::Vec2 Document::current_node_space() const {
+    const ldoc::Scene* s = current_scene();
+    const ldoc::Node* n = current_node();
+    const ldoc::Canvas* c = current_canvas();
+    if (!s || !n || !c || c->width <= 0 || c->height <= 0)
+        return {1.0, 1.0};
+    return node_space(*s, n->id, *c);
+}
+
 void Document::setNodePosition(double x, double y) {
     const ldoc::Scene* s = current_scene();
     const ldoc::Node* n = current_node();
     if (!s || !n)
         return;
+    const ldoc::Vec2 space = current_node_space();
     ldoc::Transform t = n->transform;
-    t.position = ldoc::Vec2{x, y};
+    t.position = ldoc::Vec2{x / space.x, y / space.y};
     run(ldoc::SetNodeTransform{s->id, n->id, t});
 }
 
@@ -5405,15 +5479,18 @@ void Document::setDrawnRect(double x, double y, double width, double height, boo
     if (!std::isfinite(x) || !std::isfinite(y) || !(width > 0.0) || !(height > 0.0))
         return;
     bool invertible = false;
-    const auto inverse = parent_space(*scene, node->id, *canvas).inverted(&invertible);
+    ldoc::Vec2 space{static_cast<double>(canvas->width), static_cast<double>(canvas->height)};
+    const auto inverse =
+        parent_space(*scene, node->id, *canvas, &space).inverted(&invertible);
     if (!invertible) return;
     const auto local = inverse.mapRect(QRectF(x, y, width, height));
     x = local.x(); y = local.y(); width = local.width(); height = local.height();
     double natural_w = 0.0;
     double natural_h = 0.0;
     const bool have = natural_size(session_->project(), *canvas, *node, natural_w, natural_h);
-    const auto solved =
-        lcomp::solve_drawn_rect(*node, natural_w, natural_h, have, x, y, width, height);
+    // Solves back into the stored unit: `solved.x`/`y` are fractions of `space` (ADR-0070).
+    const auto solved = lcomp::solve_drawn_rect(*node, space.x, space.y, natural_w, natural_h,
+                                                have, x, y, width, height);
     if (!solved)
         return;
     ldoc::Transform t = node->transform;
@@ -5645,8 +5722,9 @@ void Document::setNodeBoxSize(double w, double h) {
     const ldoc::Node* n = current_node();
     if (!s || !n)
         return;
+    const ldoc::Vec2 space = current_node_space();
     ldoc::Layout l = n->layout;
-    l.size = ldoc::Vec2{std::max(0.0, w), std::max(0.0, h)};
+    l.size = ldoc::Vec2{std::max(0.0, w) / space.x, std::max(0.0, h) / space.y};
     run(ldoc::SetNodeLayout{s->id, n->id, l});
 }
 

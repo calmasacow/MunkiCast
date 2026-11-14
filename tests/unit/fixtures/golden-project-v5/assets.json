@@ -1,0 +1,16 @@
+{
+  "assets" : 
+  [
+    {
+      "bytes" : 4294967296,
+      "id" : "01JD55PV3XG2081040G2081040",
+      "path" : "assets/brb.webm",
+      "relocation_hints" : 
+      [
+        "/home/someone/Videos/brb.webm"
+      ],
+      "sha256" : "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+    }
+  ],
+  "schema_version" : 5
+}

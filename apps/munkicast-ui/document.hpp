@@ -161,6 +161,15 @@ public:
     /// The rectangle the program picture draws for this node, in canvas pixels, and the terms a
     /// resize needs to keep the opposite edge still. Empty when this canvas's program scene does
     /// not draw that node.
+    /// The pixel size of the surface a node is positioned against, as `width` and `height`.
+    ///
+    /// The document stores a position and box as fractions of that surface (ADR-0070), so
+    /// anything speaking pixels -- the OBS protocol, which does -- multiplies and divides by
+    /// this. Unlike `placedRect` it names the scene rather than assuming the canvas's program
+    /// scene, and it answers for a node that is not currently drawable. Empty when the scene,
+    /// the node or a sized canvas is missing.
+    Q_INVOKABLE [[nodiscard]] QVariantMap nodeSpace(const QString& sceneId,
+                                                    const QString& nodeId) const;
     Q_INVOKABLE [[nodiscard]] QVariantMap placedRect(const QString& canvasId,
                                                      const QString& nodeId) const;
     /// Every such rectangle in the program scene, topmost first, so a click can find a source.
@@ -656,10 +665,17 @@ public:
 
     // ---- the selected node's properties ------------------------------------------------------
 
+    /// In canvas pixels, like everything else the shell exposes; converted to the stored
+    /// fraction on the way in (ADR-0070).
     Q_INVOKABLE void setNodePosition(double x, double y);
     /// Position and scale together. `dragging` makes the whole gesture one undo step; the caller
     /// finishes with `endGesture()`. A canvas handle changes scale, not the layout box: with the
     /// default fit the box is not the rectangle on screen.
+    ///
+    /// **`x` and `y` here are fractions of the containing space, not pixels**, because the only
+    /// thing that ever fed them was `solve_drawn_rect`, which now returns fractions. Nothing
+    /// calls this today -- `setDrawnRect` is what the canvas handles use -- so it is left as it
+    /// is rather than given a pixel boundary no caller would exercise.
     Q_INVOKABLE void setNodeFrame(double x, double y, double scaleX, double scaleY,
                                   bool dragging = false);
     /// The drawn rectangle, in canvas pixels. Rotation stays, and so does the sign of the
@@ -769,6 +785,10 @@ private:
     bool prepare_transform(const ldoc::Scene*& scene, const ldoc::Node*& node);
     QVariantMap placed_rect(const ldoc::Scene& scene, const ldoc::Canvas& canvas,
                             const ldoc::Node& node) const;
+    /// The pixel size of the surface the selection is positioned against -- the canvas, or a
+    /// containing group's surface. The document stores position and box as fractions of it
+    /// (ADR-0070); this is what the shell multiplies and divides by to keep showing pixels.
+    [[nodiscard]] ldoc::Vec2 current_node_space() const;
     /// The canvas the shell is currently working against. One canvas until Phase 2 gives the UI
     /// a way to choose; taking the first is honest rather than pretending otherwise.
     [[nodiscard]] const ldoc::Canvas* current_canvas() const;

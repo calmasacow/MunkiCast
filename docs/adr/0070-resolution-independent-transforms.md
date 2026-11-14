@@ -31,8 +31,8 @@ The model does not need a new concept. It already has the pair OBS calls a bound
 - `Layout.size` is the node's box, and `FitMode` says how the source's pixels fill it
   (`Natural`, `Stretch`, `Contain`, `Cover`, `FillWidth`, `FillHeight`).
 - `Layout.alignment` and `Transform.pivot` are **already** normalized 0-1.
-- `PrecompData::size` is **already** relative: `(0, 0)` means "the size of the canvas this is
-  composited into".
+- `PrecompData::size` is **already** partly relative: `(0, 0)` means "the size of the surface
+  this is composited into". Its non-zero case is still pixels, and becomes a fraction.
 
 So the separation `types.hpp` argues for -- where a node sits versus how its image fills its box
 -- is kept. That separation is the reason OBS bounding boxes confuse people, and it stays. What
@@ -40,12 +40,23 @@ changes is only the **unit** the box and the position are measured in.
 
 ## Decision
 
-**A node's position and box are stored as fractions of the canvas, not pixels.**
+**A node's position and box are stored as fractions of the space it is composited into, not
+pixels.**
 
-- `Transform.position` becomes a fraction of canvas width and height. `{0.5, 0.5}` is the centre
-  at any resolution.
-- `Layout.size` becomes a fraction of the canvas, keeping `(0, 0)` to mean "the source's natural
+That space is the canvas for a node at the top of a scene, and a containing group's or precomp's
+own surface for a nested one. Saying "the canvas" would be wrong for a nested node: a group with
+bounds composites its children into its own surface, and a child's position has always been
+measured against that surface rather than against the canvas. The containing space is what the
+compositor already walks with, so this needs no new plumbing -- just one multiplication where
+the surface is known.
+
+- `Transform.position` becomes a fraction of that space's width and height. `{0.5, 0.5}` is the
+  centre at any resolution.
+- `Layout.size` becomes a fraction of that space, keeping `(0, 0)` to mean "the source's natural
   size" -- which is itself resolution-independent, because it is a property of the source.
+- `GroupData::size` and `PrecompData::size` become fractions of *their* containing space too.
+  They have to: they are the space their own children are measured against, so leaving them in
+  pixels would pin every nested node to a fixed surface and defeat the whole change.
 - `CropRect` stays in **source** pixels. A crop is a statement about the incoming image, and has
   nothing to do with the canvas it is drawn onto.
 - `Transform.scale`, `rotation_deg`, `pivot`, `skew_deg` and `Layout.alignment` are already
@@ -67,11 +78,26 @@ already the single place that turns a node into a rectangle (`unscaled_content()
 Text is the exception worth stating: its field stays a px number in the dialog, converted on the
 way in and out, because a type size in percent of canvas height would be unreadable.
 
+**Pixels reported back out are rounded to two decimals** (`ldoc::in_pixels`). A round number of
+pixels does not always survive the trip: 123 of a 1920 canvas is 123/1920, which is not
+representable in binary and returns as 122.99999999999999. The *stored* value is never rounded --
+it is the authored geometry -- and a drag goes through `solve_drawn_rect`, which does not round
+either. Only the four pixel fields are rounded: position and box, in the properties panel, the
+canvas overlay map and the OBS protocol. Scale and rotation are unit-free and crop is already in
+source pixels, so none of them pass through the conversion.
+
+Two decimals rather than three because that is what `NumberField` already displays: at three the
+panel would read `123.00` while the API said `123.001`, which is the same confusion this removes.
+A hundredth of a pixel is 2.6 millionths of the width of a 4K canvas, so nothing placeable is
+lost, and the error being corrected is around 1e-14.
+
 ## Migration
 
 Schema version 4 -> 5, in `libs/ldoc/src/migrate.cpp`, which holds no geometry rescaling today.
 
-For each node, divide `position` and `size` by the size of the canvas the scene belongs to.
+For each node, divide `position` and `size` by the size of the space it sits in: the scene's
+canvas at the top level, and a containing group's pixel bounds below that -- which the walk knows
+because it converts a group's own bounds after descending through them, not before.
 Divide a text node's `size` by that canvas's height. A scene whose canvas is missing -- which the
 reader already tolerates -- falls back to the first canvas, as version 1 scenes already do.
 

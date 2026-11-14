@@ -361,6 +361,13 @@ QJsonObject RemoteControl::item(const ldoc::Scene& s, const ldoc::Node& node, in
     const auto* nested = pre ? p.scene(pre->scene) : nullptr;
     const auto* canvas = p.canvas(s.canvas);
     const auto size = document_.placedRect(id(s.canvas), id(node.id));
+    // `placedRect` answers only for the canvas's program scene and only for a node the picture
+    // can draw, but every item in every scene has to report a position. `nodeSpace` is what
+    // the fractions are measured against (ADR-0070), and it answers for all of them; the
+    // canvas is the fallback when even that cannot say, which is the space a root node sits in.
+    const auto measured = document_.nodeSpace(id(s.id), id(node.id));
+    const double space_w = measured.value("width", canvas ? canvas->width : 0).toDouble();
+    const double space_h = measured.value("height", canvas ? canvas->height : 0).toDouble();
     return {
         {"sceneItemId", itemId(node.id)},
         {"sceneItemUuid", id(node.id)},
@@ -378,18 +385,21 @@ QJsonObject RemoteControl::item(const ldoc::Scene& s, const ldoc::Node& node, in
         {"sceneItemEnabled", node.visible},
         {"sceneItemLocked", node.locked},
         {"sceneItemBlendMode", blendName(node.blend.mode)},
+        // OBS speaks canvas pixels. The document stores fractions (ADR-0070), and `placedRect`
+        // already multiplies them out against the right containing space, so this reads the
+        // pixels from there rather than converting a second time.
         {"sceneItemTransform",
          QJsonObject{
-             {"positionX", node.transform.position.x},
-             {"positionY", node.transform.position.y},
+             {"positionX", ldoc::in_pixels(node.transform.position.x, space_w)},
+             {"positionY", ldoc::in_pixels(node.transform.position.y, space_h)},
              {"rotation", node.transform.rotation_deg},
              {"scaleX", node.transform.scale.x},
              {"scaleY", node.transform.scale.y},
              {"alignment", 5},
              {"boundsType", "OBS_BOUNDS_NONE"},
              {"boundsAlignment", 0},
-             {"boundsWidth", node.layout.size.x},
-             {"boundsHeight", node.layout.size.y},
+             {"boundsWidth", ldoc::in_pixels(node.layout.size.x, space_w)},
+             {"boundsHeight", ldoc::in_pixels(node.layout.size.y, space_h)},
              {"cropLeft", node.layout.crop.left},
              {"cropTop", node.layout.crop.top},
              {"cropRight", node.layout.crop.right},
@@ -1168,8 +1178,28 @@ RemoteResult RemoteControl::request(const QString& type, const QJsonObject& data
                 if (values.contains(key))
                     dest = values[key].toDouble();
             };
-            assign("positionX", transform.position.x);
-            assign("positionY", transform.position.y);
+            // OBS sends canvas pixels; the document stores fractions of the space the node sits
+            // in (ADR-0070), so the division here matches the multiplication the read path
+            // does. `nodeSpace` rather than `placedRect`: the request names its own scene,
+            // which need not be the canvas's program scene, and it is answerable for a node
+            // that is not currently drawable. A space with no size takes no geometry rather
+            // than dividing by zero.
+            const auto measured = document_.nodeSpace(id(s->id), id(node->id));
+            const double space_w = measured.value("width", 0).toDouble();
+            const double space_h = measured.value("height", 0).toDouble();
+            const auto assign_fraction = [&](const char* key, double& dest, double space) {
+                if (!values.contains(key))
+                    return true;
+                if (!(space > 0.0))
+                    return false;
+                dest = values[key].toDouble() / space;
+                return true;
+            };
+            if (!assign_fraction("positionX", transform.position.x, space_w) ||
+                !assign_fraction("positionY", transform.position.y, space_h) ||
+                !assign_fraction("boundsWidth", layout.size.x, space_w) ||
+                !assign_fraction("boundsHeight", layout.size.y, space_h))
+                return fail(600, "That scene item is not placed on a sized canvas.");
             assign("rotation", transform.rotation_deg);
             assign("scaleX", transform.scale.x);
             assign("scaleY", transform.scale.y);
@@ -1177,8 +1207,6 @@ RemoteResult RemoteControl::request(const QString& type, const QJsonObject& data
             assign("cropTop", layout.crop.top);
             assign("cropRight", layout.crop.right);
             assign("cropBottom", layout.crop.bottom);
-            assign("boundsWidth", layout.size.x);
-            assign("boundsHeight", layout.size.y);
             if (layout.crop.left < 0 || layout.crop.right < 0 || layout.crop.top < 0 ||
                 layout.crop.bottom < 0 || layout.size.x < 0 || layout.size.y < 0)
                 return fail(402, "Crop and bounds must be nonnegative.");

@@ -40,4 +40,12 @@ struct Migration {
 [[nodiscard]] Migration migrate(Project& project,
                                 const std::vector<LegacyOutputEncode>& legacy_outputs = {});
 
+/// Convert every node's position and box from canvas pixels to fractions, in place (ADR-0070).
+///
+/// This is the version 4 -> 5 step, exposed because OBS import has the same problem from the
+/// other direction: OBS stores pixels, so the converter builds the scene in pixels and then
+/// asks for one conversion here, rather than keeping a second copy of the arithmetic that would
+/// drift from the migration's.
+void geometry_to_fractions(Project& project, std::vector<Problem>& problems);
+
 } // namespace ldoc

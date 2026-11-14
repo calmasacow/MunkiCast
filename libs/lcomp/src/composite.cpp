@@ -112,8 +112,17 @@ struct Unscaled {
     double rel_dy = 0;
 };
 
-std::optional<Unscaled> unscaled_content(const ldoc::Node& node, double natural_w, double natural_h,
+/// `space_w`/`space_h` is the containing surface in pixels. The node's position and box are
+/// fractions of it (ADR-0070); this function is the only place that multiplies them out, so the
+/// handles in the UI and the pixels in the picture cannot disagree about where a node is.
+std::optional<Unscaled> unscaled_content(const ldoc::Node& node, double space_w, double space_h,
+                                         double natural_w, double natural_h,
                                          bool have_natural, GapReason& why) {
+    if (!(space_w > 0.0) || !(space_h > 0.0) || !std::isfinite(space_w) ||
+        !std::isfinite(space_h)) {
+        why = GapReason::NoSize;
+        return std::nullopt;
+    }
     if (!transform_supported(node.transform)) {
         why = GapReason::UnsupportedTransform;
         return std::nullopt;
@@ -129,10 +138,10 @@ std::optional<Unscaled> unscaled_content(const ldoc::Node& node, double natural_
         return std::nullopt;
     }
 
-    const double bx = node.transform.position.x;
-    const double by = node.transform.position.y;
-    const double bw = have_box ? node.layout.size.x : natural_w;
-    const double bh = have_box ? node.layout.size.y : natural_h;
+    const double bx = node.transform.position.x * space_w;
+    const double by = node.transform.position.y * space_h;
+    const double bw = have_box ? node.layout.size.x * space_w : natural_w;
+    const double bh = have_box ? node.layout.size.y * space_h : natural_h;
     if (!(bw > 0.0) || !(bh > 0.0) || !std::isfinite(bw) || !std::isfinite(bh)) {
         why = GapReason::NoSize;
         return std::nullopt;
@@ -223,10 +232,11 @@ void scaled_corners(const Unscaled& u, double sx, double sy, double& left, doubl
 
 } // namespace
 
-std::optional<DrawnFrame> drawn_frame(const ldoc::Node& node, double natural_w, double natural_h,
+std::optional<DrawnFrame> drawn_frame(const ldoc::Node& node, double space_w, double space_h,
+                                      double natural_w, double natural_h,
                                       bool have_natural, GapReason& why) {
     const std::optional<Unscaled> fitted =
-        unscaled_content(node, natural_w, natural_h, have_natural, why);
+        unscaled_content(node, space_w, space_h, natural_w, natural_h, have_natural, why);
     if (!fitted)
         return std::nullopt;
 
@@ -262,8 +272,10 @@ std::optional<DrawnFrame> drawn_frame(const ldoc::Node& node, double natural_w, 
     frame.rel_cy = fitted->rel_cy;
     frame.rel_dx = fitted->rel_dx;
     frame.rel_dy = fitted->rel_dy;
-    frame.x = node.transform.position.x + fitted->rel_cx + min_x;
-    frame.y = node.transform.position.y + fitted->rel_cy + min_y;
+    // The position is a fraction of the containing space (ADR-0070); everything else here is
+    // already pixels, so it is multiplied out before being added to them.
+    frame.x = node.transform.position.x * space_w + fitted->rel_cx + min_x;
+    frame.y = node.transform.position.y * space_h + fitted->rel_cy + min_y;
     frame.width = max_x - min_x;
     frame.height = max_y - min_y;
     if (!(frame.width > 0.0) || !(frame.height > 0.0))
@@ -279,12 +291,12 @@ std::optional<DrawnFrame> drawn_frame(const ldoc::Node& node, double natural_w, 
     return frame;
 }
 
-std::optional<SolvedFrame> solve_drawn_rect(const ldoc::Node& node, double natural_w,
-                                            double natural_h, bool have_natural, double x, double y,
-                                            double width, double height) {
+std::optional<SolvedFrame> solve_drawn_rect(const ldoc::Node& node, double space_w, double space_h,
+                                            double natural_w, double natural_h, bool have_natural,
+                                            double x, double y, double width, double height) {
     GapReason why = GapReason::NoSize;
     const std::optional<Unscaled> fitted =
-        unscaled_content(node, natural_w, natural_h, have_natural, why);
+        unscaled_content(node, space_w, space_h, natural_w, natural_h, have_natural, why);
     if (!fitted || !(fitted->base_w > 0.0) || !(fitted->base_h > 0.0))
         return std::nullopt;
     const std::optional<int> quarter = quarter_turn(node.transform.rotation_deg);
@@ -319,8 +331,11 @@ std::optional<SolvedFrame> solve_drawn_rect(const ldoc::Node& node, double natur
     }
 
     SolvedFrame solved;
-    solved.x = x - fitted->rel_cx - min_x;
-    solved.y = y - fitted->rel_cy - min_y;
+    // Back out to the stored unit: a position is a fraction of the containing space, and the
+    // caller writes this straight into `Transform.position` (ADR-0070). `space_w`/`space_h` are
+    // positive here because `unscaled_content` refused otherwise.
+    solved.x = (x - fitted->rel_cx - min_x) / space_w;
+    solved.y = (y - fitted->rel_cy - min_y) / space_h;
     solved.scale_x = sx;
     solved.scale_y = sy;
     if (!std::isfinite(solved.x) || !std::isfinite(solved.y))
@@ -377,12 +392,16 @@ using Px = DrawRect;
 /// natural size". Fit then places the source inside that box, and scale acts around the box's
 /// pivot. Integer-aligned inputs stay on pixel edges; nothing here antialiases, so a test can
 /// name a pixel and mean it.
-std::optional<Px> place(const ldoc::Node& node, double natural_w, double natural_h,
-                        bool have_natural, GapReason& why) {
+std::optional<Px> place(const DrawPlan& surface, const ldoc::Node& node, double natural_w,
+                        double natural_h, bool have_natural, GapReason& why) {
     // Integer edges of `drawn_frame`. The overlay reads the continuous rectangle; the picture
     // reads these, and they have to be the same placement or the handles miss the pixels.
+    // The surface being drawn into is the space the node's fractions are measured against
+    // (ADR-0070) -- the canvas at the top level, a group's or precomp's own surface inside one.
     const std::optional<DrawnFrame> frame =
-        drawn_frame(node, natural_w, natural_h, have_natural, why);
+        drawn_frame(node, static_cast<double>(surface.width),
+                    static_cast<double>(surface.height), natural_w, natural_h,
+                    have_natural, why);
     if (!frame)
         return std::nullopt;
     if (!(frame->width > 0.0) || !(frame->height > 0.0))
@@ -648,7 +667,7 @@ void append_filtered(const ldoc::Node& node, DrawOp op, int width, int height, C
     if (!op.filters.empty()) {
         const auto size = filter_size(op.filters, width, height);
         GapReason why = GapReason::NoSize;
-        const auto rect = size ? place(node, size->x, size->y, true, why) : std::nullopt;
+        const auto rect = size ? place(target.picture, node, size->x, size->y, true, why) : std::nullopt;
         if (!rect) {
             refuse(target.picture, node, GapReason::UnsupportedEffect);
             return;
@@ -714,7 +733,7 @@ void paint_image(const ldoc::Source& src, const ldoc::Node& node, double opacity
         return;
     }
     GapReason why = GapReason::NoSize;
-    const std::optional<Px> rect = place(node, static_cast<double>(image->width),
+    const std::optional<Px> rect = place(target.picture, node, static_cast<double>(image->width),
                                          static_cast<double>(image->height), true, why);
     if (!rect) {
         refuse(target.picture, node, why);
@@ -772,7 +791,7 @@ void paint_screen(const ldoc::Source& src, const ldoc::Node& node, double opacit
     }
     GapReason why = GapReason::NoSize;
     const std::optional<Px> rect =
-        place(node, static_cast<double>(width), static_cast<double>(height), true, why);
+        place(target.picture, node, static_cast<double>(width), static_cast<double>(height), true, why);
     if (!rect) {
         refuse(target.picture, node, why);
         return;
@@ -860,15 +879,20 @@ void paint_node(const ldoc::Project& project, const ldoc::Node& node, double par
     }
 
     if (const auto* group = std::get_if<ldoc::GroupData>(&node.data)) {
-        const auto size = group->size.value_or(ldoc::Vec2{
-            static_cast<double>(target.picture.width), static_cast<double>(target.picture.height)});
+        // A group's surface is a fraction of the one it sits in (ADR-0070); absent means that
+        // surface's own size. Resolved to pixels here, because the surface has to be allocated.
+        const auto space_w = static_cast<double>(target.picture.width);
+        const auto space_h = static_cast<double>(target.picture.height);
+        const auto size = group->size ? ldoc::Vec2{group->size->x * space_w,
+                                                  group->size->y * space_h}
+                                      : ldoc::Vec2{space_w, space_h};
         if (!std::isfinite(size.x) || !std::isfinite(size.y) || size.x <= 0 || size.y <= 0 ||
             size.x > 8192 || size.y > 8192 || size.x * size.y > 33554432) {
             refuse(target.picture, node, GapReason::NoSize);
             return;
         }
         GapReason why = GapReason::NoSize;
-        const auto rect = place(node, size.x, size.y, true, why);
+        const auto rect = place(target.picture, node, size.x, size.y, true, why);
         if (!rect) { refuse(target.picture, node, why); return; }
         const bool identity = !node.layout.crop.any() && rect->x0 == 0 && rect->y0 == 0 && rect->x1 == target.picture.width &&
             rect->y1 == target.picture.height && quarter_turn(node.transform.rotation_deg) == 0 &&
@@ -954,7 +978,7 @@ void paint_node(const ldoc::Project& project, const ldoc::Node& node, double par
         const auto height = setting_number(src->settings, "height");
         const bool have_natural = width && height && *width > 0.0 && *height > 0.0;
         GapReason why = GapReason::NoSize;
-        const std::optional<Px> rect = place(node, have_natural ? *width : 0.0,
+        const std::optional<Px> rect = place(target.picture, node, have_natural ? *width : 0.0,
                                              have_natural ? *height : 0.0, have_natural, why);
         if (!rect) {
             refuse(target.picture, node, why);
@@ -979,17 +1003,21 @@ void paint_node(const ldoc::Project& project, const ldoc::Node& node, double par
             refuse(target.picture, node, GapReason::MissingScene);
             return;
         }
-        // (0, 0) means the canvas this precomp is being drawn into. That is what PrecompData
-        // says, and a second opinion here would be a second size.
+        // (0, 0) means the surface this precomp is being drawn into. That is what PrecompData
+        // says, and a second opinion here would be a second size. Anything else is a fraction
+        // of that surface (ADR-0070), resolved to pixels here because it has to be allocated.
         int pw = target.picture.width;
         int ph = target.picture.height;
         if (pre->size.x > 0.0 && pre->size.y > 0.0) {
-            if (pre->size.x > kMaxPreviewEdge || pre->size.y > kMaxPreviewEdge) {
+            const double px = pre->size.x * static_cast<double>(target.picture.width);
+            const double py = pre->size.y * static_cast<double>(target.picture.height);
+            if (!std::isfinite(px) || !std::isfinite(py) || px > kMaxPreviewEdge ||
+                py > kMaxPreviewEdge) {
                 refuse(target.picture, node, GapReason::NoSize);
                 return;
             }
-            pw = static_cast<int>(std::lround(pre->size.x));
-            ph = static_cast<int>(std::lround(pre->size.y));
+            pw = static_cast<int>(std::lround(px));
+            ph = static_cast<int>(std::lround(py));
         }
         if (pw <= 0 || ph <= 0 || pw > kMaxPreviewEdge || ph > kMaxPreviewEdge) {
             refuse(target.picture, node, GapReason::NoSize);
@@ -1012,7 +1040,7 @@ void paint_node(const ldoc::Project& project, const ldoc::Node& node, double par
 
         GapReason why = GapReason::NoSize;
         const std::optional<Px> rect =
-            place(node, static_cast<double>(pw), static_cast<double>(ph), true, why);
+            place(target.picture, node, static_cast<double>(pw), static_cast<double>(ph), true, why);
         if (!rect) {
             refuse(target.picture, node, why);
             return;

@@ -1,0 +1,322 @@
+{
+  "audio_overrides" : 
+  {
+    "01JD55PV3XA9954MJJA9954MJJ" : 
+    {
+      "bus" : null,
+      "gain_db" : -4.0,
+      "mute" : false,
+      "sends" : null
+    }
+  },
+  "canvas" : "01JD55PV3X2081040G2081040G",
+  "favourite" : false,
+  "generation" : 1,
+  "id" : "01JD55PV3XA1850M2GA1850M2G",
+  "name" : "Live",
+  "roots" : 
+  [
+    {
+      "blend" : 
+      {
+        "clip_to_below" : false,
+        "mode" : "multiply",
+        "opacity" : 0.80000000000000004,
+        "pass_through_group" : false
+      },
+      "data" : 
+      {
+        "children" : 
+        [
+          {
+            "blend" : 
+            {
+              "clip_to_below" : false,
+              "mode" : "normal",
+              "opacity" : 1.0,
+              "pass_through_group" : false
+            },
+            "data" : 
+            {
+              "audio" : 
+              {
+                "bus" : "01JD55PV3X40G2081040G20810",
+                "gain_db" : -3.0,
+                "hidden" : false,
+                "level_locked" : false,
+                "monitor" : false,
+                "mute" : false,
+                "sends" : []
+              },
+              "source" : "01JD55PV3X64RK2C9H64RK2C9H"
+            },
+            "effects" : 
+            [
+              {
+                "blend" : null,
+                "enabled" : true,
+                "id" : "01JD55PV3XAD9N6MTKAD9N6MTK",
+                "mask" : null,
+                "params" : 
+                {
+                  "colour" : 
+                  {
+                    "a" : 1.0,
+                    "b" : 0.021219010376003555,
+                    "g" : 0.35153259950043936,
+                    "r" : 1.0
+                  },
+                  "count" : 
+                  {
+                    "int" : 3
+                  },
+                  "link" : 
+                  {
+                    "id" : "01JD55PV3XA9954MJJA9954MJJ"
+                  },
+                  "note" : "keeps the camera readable on a bright scene",
+                  "offset" : 
+                  {
+                    "x" : 1.0,
+                    "y" : -1.0
+                  },
+                  "width" : 2.5
+                },
+                "type" : "effect.stroke"
+              }
+            ],
+            "id" : "01JD55PV3XA9954MJJA9954MJJ",
+            "kind" : "source",
+            "layout" : 
+            {
+              "alignment" : 
+              {
+                "x" : 0.5,
+                "y" : 0.5
+              },
+              "crop" : 
+              {
+                "bottom" : 0.0,
+                "left" : 8.0,
+                "right" : 8.0,
+                "top" : 0.0
+              },
+              "fit" : "cover",
+              "size" : 
+              {
+                "x" : 0.25,
+                "y" : 0.25
+              }
+            },
+            "locked" : false,
+            "name" : "Camera",
+            "transform" : 
+            {
+              "pivot" : 
+              {
+                "x" : 0.5,
+                "y" : 0.5
+              },
+              "position" : 
+              {
+                "x" : 0.046875,
+                "y" : 0.044444444444444446
+              },
+              "rotation_deg" : 0.0,
+              "scale" : 
+              {
+                "x" : 0.5,
+                "y" : 0.5
+              },
+              "skew_deg" : 
+              {
+                "x" : 0.0,
+                "y" : 0.0
+              }
+            },
+            "visible" : true
+          },
+          {
+            "blend" : 
+            {
+              "clip_to_below" : false,
+              "mode" : "normal",
+              "opacity" : 1.0,
+              "pass_through_group" : false
+            },
+            "data" : {},
+            "effects" : [],
+            "id" : "01JD55PV3XAHA58N2MAHA58N2M",
+            "kind" : "adjustment",
+            "layout" : 
+            {
+              "alignment" : 
+              {
+                "x" : 0.5,
+                "y" : 0.5
+              },
+              "crop" : 
+              {
+                "bottom" : 0.0,
+                "left" : 0.0,
+                "right" : 0.0,
+                "top" : 0.0
+              },
+              "fit" : "natural",
+              "size" : 
+              {
+                "x" : 0.0,
+                "y" : 0.0
+              }
+            },
+            "locked" : false,
+            "name" : "Grade",
+            "transform" : 
+            {
+              "pivot" : 
+              {
+                "x" : 0.5,
+                "y" : 0.5
+              },
+              "position" : 
+              {
+                "x" : 0.0,
+                "y" : 0.0
+              },
+              "rotation_deg" : 0.0,
+              "scale" : 
+              {
+                "x" : 1.0,
+                "y" : 1.0
+              },
+              "skew_deg" : 
+              {
+                "x" : 0.0,
+                "y" : 0.0
+              }
+            },
+            "visible" : true
+          }
+        ],
+        "isolate" : false
+      },
+      "effects" : [],
+      "id" : "01JD55PV3XA58N2MAHA58N2MAH",
+      "kind" : "group",
+      "layout" : 
+      {
+        "alignment" : 
+        {
+          "x" : 0.5,
+          "y" : 0.5
+        },
+        "crop" : 
+        {
+          "bottom" : 0.0,
+          "left" : 0.0,
+          "right" : 0.0,
+          "top" : 0.0
+        },
+        "fit" : "natural",
+        "size" : 
+        {
+          "x" : 0.0,
+          "y" : 0.0
+        }
+      },
+      "locked" : false,
+      "name" : "Overlay",
+      "transform" : 
+      {
+        "pivot" : 
+        {
+          "x" : 0.5,
+          "y" : 0.5
+        },
+        "position" : 
+        {
+          "x" : 0.0,
+          "y" : 0.0
+        },
+        "rotation_deg" : 0.0,
+        "scale" : 
+        {
+          "x" : 1.0,
+          "y" : 1.0
+        },
+        "skew_deg" : 
+        {
+          "x" : 0.0,
+          "y" : 0.0
+        }
+      },
+      "visible" : true
+    },
+    {
+      "blend" : 
+      {
+        "clip_to_below" : false,
+        "mode" : "normal",
+        "opacity" : 1.0,
+        "pass_through_group" : false
+      },
+      "data" : 
+      {
+        "mode" : "live",
+        "target" : "01JD55PV3XA58N2MAHA58N2MAH"
+      },
+      "effects" : [],
+      "id" : "01JD55PV3XANANANANANANANAN",
+      "kind" : "reference",
+      "layout" : 
+      {
+        "alignment" : 
+        {
+          "x" : 0.5,
+          "y" : 0.5
+        },
+        "crop" : 
+        {
+          "bottom" : 0.0,
+          "left" : 0.0,
+          "right" : 0.0,
+          "top" : 0.0
+        },
+        "fit" : "natural",
+        "size" : 
+        {
+          "x" : 0.0,
+          "y" : 0.0
+        }
+      },
+      "locked" : false,
+      "name" : "Clone of Overlay",
+      "transform" : 
+      {
+        "pivot" : 
+        {
+          "x" : 0.5,
+          "y" : 0.5
+        },
+        "position" : 
+        {
+          "x" : 0.0,
+          "y" : 0.0
+        },
+        "rotation_deg" : 0.0,
+        "scale" : 
+        {
+          "x" : 1.0,
+          "y" : 1.0
+        },
+        "skew_deg" : 
+        {
+          "x" : 0.0,
+          "y" : 0.0
+        }
+      },
+      "visible" : true
+    }
+  ],
+  "schema_version" : 5
+}

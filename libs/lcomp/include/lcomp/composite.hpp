@@ -147,7 +147,11 @@ struct DrawnFrame {
 
 /// The same placement the compositor paints. `why` is set when nothing is returned. A frame
 /// whose width or height is not positive is a scale that collapsed it; the picture draws nothing.
-[[nodiscard]] std::optional<DrawnFrame> drawn_frame(const ldoc::Node& node, double natural_w,
+/// `space_w` and `space_h` are the containing surface in pixels -- the canvas for a root node,
+/// a group's or precomp's own surface for a nested one. The node's position and box are
+/// fractions of it (ADR-0070), and this is the one place they become pixels.
+[[nodiscard]] std::optional<DrawnFrame> drawn_frame(const ldoc::Node& node, double space_w,
+                                                    double space_h, double natural_w,
                                                     double natural_h, bool have_natural,
                                                     GapReason& why);
 
@@ -162,7 +166,8 @@ struct SolvedFrame {
     double scale_y = 1;
 };
 
-[[nodiscard]] std::optional<SolvedFrame> solve_drawn_rect(const ldoc::Node& node, double natural_w,
+[[nodiscard]] std::optional<SolvedFrame> solve_drawn_rect(const ldoc::Node& node, double space_w,
+                                                          double space_h, double natural_w,
                                                           double natural_h, bool have_natural,
                                                           double x, double y, double width,
                                                           double height);
