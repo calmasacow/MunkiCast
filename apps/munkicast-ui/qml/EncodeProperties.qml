@@ -520,10 +520,25 @@ Item {
                            : (panel.encode.codec === "h264") ? ["baseline", "main", "high"]
                            : (panel.encode.codec === "hevc") ? ["main", "main10"] : ["main"]
                     choiceLabels: ({"": qsTr("Encoder default"), "baseline": qsTr("Baseline"), "main": qsTr("Main"),
-                                    "high": qsTr("High"), "main10": qsTr("Main 10")})
+                                    "high": qsTr("High"), "main10": qsTr("Main 10 (8-bit source)")})
                     value: String(panel.extra[panel.implementation + ".profile"] ??
                                   (panel.encode.codec === "h264" ? "high" : "main"))
                     onCommitted: value => panel.setExtra(panel.implementation + ".profile", value)
+                }
+
+                // Main 10 opens a real 10-bit encode, but the compositor still hands the
+                // encoder 8-bit pixels, so the extra bits carry nothing (ADR-0071). Said here
+                // because the alternative is an operator choosing it, seeing "10-bit" in the
+                // stream, and believing the picture improved. Removed when the output path
+                // carries 10-bit end to end.
+                Text {
+                    objectName: "profileMain10Note"
+                    width: parent.width
+                    visible: String(panel.extra[panel.implementation + ".profile"] ?? "") === "main10"
+                    wrapMode: Text.WordWrap
+                    font.pixelSize: 10
+                    color: Theme.c.textMuted
+                    text: qsTr("Main 10 writes a 10-bit stream, but the compositor output is still 8-bit, so this adds depth the picture does not have. Useful only where a platform requires a 10-bit profile.")
                 }
 
                 Item { width: 1; height: 4 }
