@@ -38,6 +38,33 @@ inline std::expected<SignalMode, std::string> signal_mode(const v4l2_dv_timings&
                       numerator / divisor, 1000000u / divisor};
 }
 
+/// What a captured signal's colour is, from the format V4L2 negotiated.
+///
+/// Classified in one place because the three cases need different handling and are easy to
+/// confuse: Rec.2100 HLG has no transfer code of its own -- it is BT.2020 primaries with the
+/// HLG curve -- so it cannot be told from wide-gamut SDR by `colorspace` alone (ADR-0071).
+struct SignalColour {
+    /// SMPTE ST 2084. Highlights run far above SDR white.
+    bool pq = false;
+    /// BT.2020 primaries with no stated curve, which is how HLG arrives.
+    bool hlg = false;
+    /// BT.2020 primaries, whatever the curve. Needs the 2020 matrix to decode without a hue
+    /// shift, which is true of the SDR case as well as the two HDR ones.
+    bool wide = false;
+
+    [[nodiscard]] bool hdr() const { return pq || hlg; }
+};
+
+inline SignalColour signal_colour(std::uint32_t colorspace, std::uint32_t xfer_func) {
+    SignalColour out;
+    out.wide = colorspace == V4L2_COLORSPACE_BT2020;
+    out.pq = xfer_func == V4L2_XFER_FUNC_SMPTE2084;
+    // Only when nothing else claimed the curve: a card that states both BT.2020 and ST 2084 is
+    // PQ, not HLG, and treating it as both would log the wrong one.
+    out.hlg = out.wide && !out.pq && xfer_func == V4L2_XFER_FUNC_NONE;
+    return out;
+}
+
 inline bool matches_signal_rate(const SignalMode& signal, std::uint32_t numerator,
                                 std::uint32_t denominator) {
     return numerator && denominator &&

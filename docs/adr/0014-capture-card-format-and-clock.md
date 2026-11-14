@@ -5,6 +5,12 @@ SPDX-License-Identifier: GPL-3.0-or-later
 # ADR 0014 — Capture cards: pick the format for the output rate, not the peak rate
 
 - **Status:** accepted, measured
+- **Amended by:** ADR-0071, in scope only. Everything below was measured with **HDR disabled on
+  the wire**, and all of it still holds for that case. What has changed since is that an HDR
+  signal is no longer refused outright: it is captured, decoded with the BT.2020 matrix, and
+  left for the compositor to tone-map. The format table in Finding 1 is what decides whether a
+  10-bit capture is possible at all -- `P010` is offered at 60 fps at 1440p and 30 at 2160p, so
+  10-bit and a high frame rate cannot both be had on this card.
 - **Date:** 2026-10-12
 - **Extends:** ADR-0013 (capture is damage-driven)
 - **Hardware:** Elgato 4K X on `argus`, fed from the dev box's HDMI-A-1

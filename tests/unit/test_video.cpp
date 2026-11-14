@@ -70,6 +70,44 @@ LTEST_CASE(incoming_signal_rate_uses_full_frame_timing_and_rejects_invalid_signa
     CHECK(!signal_mode(timing));
 }
 
+LTEST_CASE(hdr_signals_are_classified_rather_than_refused) {
+    using namespace munkicast::capture::detail;
+    // Capture used to fail outright on PQ or BT.2020 (ADR-0071). It now classifies the signal,
+    // and the three cases need telling apart: HLG has no transfer code of its own, so it cannot
+    // be distinguished from wide-gamut SDR by `colorspace` alone.
+    const auto plain = signal_colour(V4L2_COLORSPACE_REC709, V4L2_XFER_FUNC_709);
+    CHECK(!plain.hdr());
+    CHECK(!plain.wide);
+
+    const auto pq = signal_colour(V4L2_COLORSPACE_BT2020, V4L2_XFER_FUNC_SMPTE2084);
+    CHECK(pq.hdr());
+    CHECK(pq.pq);
+    CHECK(!pq.hlg);
+    CHECK(pq.wide); // needs the 2020 matrix as well as being HDR
+
+    // PQ is PQ even when the card does not say BT.2020 alongside it.
+    const auto bare_pq = signal_colour(V4L2_COLORSPACE_REC709, V4L2_XFER_FUNC_SMPTE2084);
+    CHECK(bare_pq.hdr());
+    CHECK(bare_pq.pq);
+
+    // BT.2020 with no stated curve is how HLG arrives.
+    const auto hlg = signal_colour(V4L2_COLORSPACE_BT2020, V4L2_XFER_FUNC_NONE);
+    CHECK(hlg.hdr());
+    CHECK(hlg.hlg);
+    CHECK(!hlg.pq);
+
+    // Wide primaries with an ordinary curve is SDR, and must not be called HDR -- it is the
+    // case that would otherwise be tone-mapped for no reason.
+    const auto wide_sdr = signal_colour(V4L2_COLORSPACE_BT2020, V4L2_XFER_FUNC_709);
+    CHECK(!wide_sdr.hdr());
+    CHECK(wide_sdr.wide);
+
+    // A card stating both is PQ, not both: the log would otherwise name the wrong curve.
+    const auto both = signal_colour(V4L2_COLORSPACE_BT2020, V4L2_XFER_FUNC_SMPTE2084);
+    CHECK(both.pq);
+    CHECK(!both.hlg);
+}
+
 LTEST_CASE(unavailable_video_is_an_error_not_an_invented_frame) {
     std::string error;
     CHECK(!munkicast::capture::VideoCapture::open("/dev/video999999", "", "", "", error));

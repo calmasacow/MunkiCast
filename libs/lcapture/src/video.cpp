@@ -493,8 +493,21 @@ std::unique_ptr<VideoCapture> VideoCapture::open(const std::string& path,
     const double timeout_seconds = static_cast<double>(options.timeout_frames) * interval.numerator / interval.denominator;
     if (timeout_seconds <= 0 || timeout_seconds > 3600) return fail("invalid capture timeout interval");
     state->timeout = std::chrono::duration_cast<std::chrono::nanoseconds>(std::chrono::duration<double>(timeout_seconds));
-    if (f.xfer_func == V4L2_XFER_FUNC_SMPTE2084 || f.colorspace == V4L2_COLORSPACE_BT2020)
-        return fail("HDR or BT.2020 capture is not supported yet");
+    // An HDR signal is captured rather than refused (ADR-0071). A 4K X fed by a console or a
+    // modern PC sees HDR on the wire as a matter of course, and refusing it left the operator
+    // turning HDR off at the source. Delivery is still SDR, and the conversion here is the
+    // matrix and the range only -- see the note at the converter below for why the transfer
+    // curve is not touched and where the roll off belongs.
+    //
+    // Rec.2100 HLG carries no V4L2 transfer code of its own -- it is BT.2020 primaries with the
+    // HLG curve -- so the two HDR curves are told apart by `xfer_func`, and BT.2020 primaries
+    // with any other curve is wide-gamut SDR, which is what it is.
+    const auto colour = detail::signal_colour(f.colorspace, f.xfer_func);
+    const bool pq = colour.pq, hlg = colour.hlg, wide = colour.wide;
+    if (colour.hdr())
+        lc::info("video capture: {} input on {}", pq ? "Rec.2100 PQ" : "Rec.2100 HLG", path);
+    else if (wide)
+        lc::info("video capture: BT.2020 primaries on {}; decoding with the 2020 matrix", path);
     if (compressed) {
         const auto* codec = avcodec_find_decoder(AV_CODEC_ID_MJPEG);
         state->decoder = avcodec_alloc_context3(codec);
@@ -510,6 +523,9 @@ std::unique_ptr<VideoCapture> VideoCapture::open(const std::string& path,
         if (!state->converter) return fail("cannot create capture pixel converter");
         int matrix = f.ycbcr_enc == V4L2_YCBCR_ENC_709 || f.colorspace == V4L2_COLORSPACE_REC709
                          ? SWS_CS_ITU709 : SWS_CS_ITU601;
+        // BT.2020 has its own matrix. Decoding 2020 YCbCr with the 709 or 601 coefficients is
+        // what makes an HDR capture come back with the wrong hue rather than merely flat.
+        if (wide || f.ycbcr_enc == V4L2_YCBCR_ENC_BT2020) matrix = SWS_CS_BT2020;
         int full = f.quantization == V4L2_QUANTIZATION_FULL_RANGE || f.colorspace == V4L2_COLORSPACE_JPEG;
         if (range == "Full") full = 1;
         else if (range == "Partial") full = 0;
@@ -524,6 +540,19 @@ std::unique_ptr<VideoCapture> VideoCapture::open(const std::string& path,
         const int* coefficients = sws_getCoefficients(matrix);
         if (sws_setColorspaceDetails(state->converter, coefficients, full, coefficients, 1, 0, 1 << 16, 1 << 16) < 0)
             return fail("unsupported capture colour conversion");
+        // Not tone-mapped here, and that is deliberate rather than unfinished. swscale's
+        // colour conversion covers the matrix and the range; it does not convert a transfer
+        // curve, so there is no honest way to roll off PQ or HLG highlights at this layer.
+        // What this branch achieves is that the capture *works* and has the right hue and
+        // range instead of being refused outright.
+        //
+        // The picture is therefore flat, with highlights above SDR white clipped. The roll off
+        // belongs in the compositor, where `filter.hdr-tonemap` already lives and already
+        // works in linear light -- said once at open, so an operator does not conclude the card
+        // is broken.
+        if (pq || hlg)
+            lc::warn("video capture on {}: HDR highlights are clipped, not rolled off; add the "
+                     "HDR tone-map filter to this source for a graded picture", path);
     }
     if (!range.empty() && range != "Default" && range != "Full" && range != "Partial")
         return fail("invalid colour range");
