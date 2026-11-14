@@ -7276,6 +7276,35 @@ int main(int argc, char** argv) {
                            document.nodeProperties().value("scaleX").toDouble() == 1 &&
                            document.nodeProperties().value("scaleY").toDouble() == 1,
                        "Vertical Sources Transform resets its selected source");
+                document.undo();
+                settle();
+
+                // What ADR-0070 is for, and why `SetCanvas` needs no rescaling pass: a node
+                // centred at one resolution is still centred at another, because its position
+                // is a fraction of the canvas rather than a count of pixels. Checked on the
+                // vertical canvas because it is resized here already.
+                //
+                // `at_position` measures against 1080x1920, so the canvas is put back to that
+                // size before the comparison -- the test is that the geometry survived the
+                // round trip, not that the rectangle is resolution-independent in pixels.
+                {
+                    const auto centred = transform_action(QStringLiteral("Center to screen"));
+                    const auto before = document.nodeProperties();
+                    document.setCanvasSize(vertical_id, 2160, 3840);
+                    settle();
+                    const bool doubled =
+                        document.canvasSizeOf(vertical_id) == QSize(2160, 3840) &&
+                        std::abs(before.value("positionX").toDouble() * 2.0 -
+                                 document.nodeProperties().value("positionX").toDouble()) < 0.02 &&
+                        std::abs(before.value("positionY").toDouble() * 2.0 -
+                                 document.nodeProperties().value("positionY").toDouble()) < 0.02;
+                    document.setCanvasSize(vertical_id, 1080, 1920);
+                    settle();
+                    report(centred && doubled && at_position(340, 810),
+                           "a canvas resize keeps a node where it was on the canvas");
+                }
+                document.undo();
+                settle();
                 for (auto* menu : collect(window->contentItem(), QStringLiteral("nodeMenu")))
                     QMetaObject::invokeMethod(menu, "close");
                 for (int i = 0; i < 12 && document.canUndo() &&
