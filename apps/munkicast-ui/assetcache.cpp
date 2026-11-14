@@ -20,6 +20,7 @@
 #include <algorithm>
 #include <array>
 #include <optional>
+#include <utility>
 #include <variant>
 
 namespace munkicast::ui {
@@ -745,7 +746,29 @@ bool AssetCache::build(bool rebuild, QStringList originals) {
                     entry.preparedSize = error.isEmpty() ? writtenBytes : 0;
                     entry.preparedFor = recipe.target;
                     entry.error = error;
-                    index_.insert_or_assign(original, std::move(entry));
+                    // The copy this one replaces stops being indexed here, so it would
+                    // otherwise stay on disk with nothing naming it -- 74 such files after the
+                    // 2026-11-09 disk-full launch. Queued rather than deleted: a reader may
+                    // still be following the old path, and the index has not reached disk yet.
+                    //
+                    // A failed preparation prepared nothing, so it supersedes nothing. It keeps
+                    // the previous entry's description of the copy that worked and records only
+                    // the error against it: the file then stays indexed, which is what makes
+                    // `clear()` able to reclaim it and the next successful build able to retire
+                    // it. Dropping the name instead would orphan that file on disk permanently
+                    // -- the same leak, reached by failing instead of succeeding.
+                    const auto it = index_.find(original);
+                    if (!error.isEmpty() && it != index_.end()) {
+                        auto kept = it->second;
+                        kept.error = error;
+                        index_.insert_or_assign(original, std::move(kept));
+                    } else {
+                        if (const auto stale = it != index_.end() ? absolute(it->second)
+                                                                  : QString{};
+                            !stale.isEmpty() && stale != absolute(entry))
+                            superseded_.push_back(stale);
+                        index_.insert_or_assign(original, std::move(entry));
+                    }
                     ++items_done_;
                     item_progress_ = 0.0;
                     emit progressed();
@@ -773,6 +796,9 @@ void AssetCache::finishWorker(bool cancelled, int prepared, int failed) {
     current_item_.clear();
     item_progress_ = 0.0;
     if (!writeIndex())
+        // The superseded copies stay where they are. The index on disk still names them, so
+        // they are the only files the next run can use; deleting them here would turn a build
+        // that was merely not remembered into one that lost the previous result as well.
         emit notice(tr("The cache index could not be written, so this build will not be "
                        "remembered."));
     else if (cancelled)
@@ -784,9 +810,19 @@ void AssetCache::finishWorker(bool cancelled, int prepared, int failed) {
                         .arg(failed));
     else
         emit notice(tr("Cache build finished: %n file(s) prepared.", "", prepared));
+    retireSuperseded();
     resweep();
     emit progressed();
     emit changed();
+}
+
+void AssetCache::retireSuperseded() {
+    // Only reached after `writeIndex()` committed, so the index on disk no longer names any of
+    // these. A file that will not delete is dropped from the list anyway: it is already
+    // unindexed, and retrying it on every build would be a leak of a different kind.
+    for (const QString& path : std::exchange(superseded_, {}))
+        if (!path.isEmpty() && QFile::exists(path))
+            QFile::remove(path);
 }
 
 void AssetCache::cancel() {
@@ -807,6 +843,12 @@ bool AssetCache::clear() {
         if (!prepared.isEmpty() && QFile::exists(prepared) && !QFile::remove(prepared))
             whole = false;
     }
+    // Clearing means the cache directory holds nothing this feature made, so copies waiting to
+    // be retired go too -- they are generated leftovers, and leaving them would make a cleared
+    // cache still take up room.
+    for (const QString& stale : std::exchange(superseded_, {}))
+        if (!stale.isEmpty() && QFile::exists(stale) && !QFile::remove(stale))
+            whole = false;
     if (!base.isEmpty()) {
         for (const QFileInfo& leftover :
              QDir(base).entryInfoList({QStringLiteral("*.part")}, QDir::Files))

@@ -8591,6 +8591,8 @@ int main(int argc, char** argv) {
                        cache->preparedPath(assetPath) != firstPrepared && cache->itemsTotal() == 1 &&
                        cache->preparedPath(unrelatedPath).isEmpty(),
                    "an item cache request rebuilds only that item's existing cache");
+            report(!QFileInfo::exists(firstPrepared),
+                   "and the copy it replaced is gone rather than left behind unindexed");
             report(!cache->build(true, QStringList{}) && !cache->building(),
                    "an empty item cache request never builds the entire project");
             document.removeSourceAndUses(unrelated);
@@ -8670,6 +8672,24 @@ int main(int argc, char** argv) {
                 document.removeSourceAndUses(broken);
             }
 
+            // 6b. A rebuild that fails must not cost the copy that worked. Retiring the old
+            //     file is what makes a rebuild not leak; doing it when there is nothing to
+            //     replace it with would mean a full disk takes a working prepared asset away.
+            {
+                const auto good = cache->preparedPath(assetPath);
+                report(!good.isEmpty() && QFileInfo::exists(good),
+                       "the asset has a prepared copy to lose");
+                QFile::setPermissions(assetPath, QFileDevice::WriteOwner);
+                cache->build(true, document.sourceAssetPaths(source));
+                report(await_build(), "a rebuild over an unreadable original finishes");
+                QFile::setPermissions(assetPath, QFileDevice::WriteOwner | QFileDevice::ReadOwner);
+                report(QFileInfo::exists(good),
+                       "and leaves the copy that worked on disk rather than retiring it");
+                report(cache->build(true, document.sourceAssetPaths(source)) && await_build() &&
+                           state_of() == QLatin1String("ok") && !QFileInfo::exists(good),
+                       "a rebuild that succeeds then retires it");
+            }
+
             // 7. Stage 3: an oversized clip is re-encoded at canvas size rather than copied,
             //    and resizing the canvas makes that copy stale -- it is the wrong number of
             //    pixels for the show it is in. A 64x48 fixture against a 32x24 canvas, so the
@@ -8738,6 +8758,20 @@ int main(int argc, char** argv) {
                            .entryInfoList({QStringLiteral("*.part")}, QDir::Files)
                            .isEmpty(),
                        "a cancelled build leaves no .part files behind");
+            }
+
+            // 9. Clearing accounts for every file this feature made, including ones a failed
+            //    index write left waiting to be retired. Otherwise "Clear Cache" would report
+            //    success over a directory that still held generated copies.
+            {
+                document.applySourceSettings(source, QStringLiteral("Cached still"),
+                                             {{"file", assetPath}, {"useCache", true}});
+                settle();
+                report(cache->build(true, document.sourceAssetPaths(source)) && await_build(),
+                       "an asset is prepared to clear");
+                report(cache->clear(), "clearing the cache reports success");
+                report(QDir(cacheDir.path()).entryInfoList(QDir::Files).isEmpty(),
+                       "and the cache directory holds nothing this feature wrote");
             }
 
             document.activateScene(original_scene);

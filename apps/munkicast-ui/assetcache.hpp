@@ -221,8 +221,20 @@ class AssetCache : public QObject {
     /// Joins the finished build thread and says how it went. Posted from the worker's own end,
     /// because a jthread cannot join itself.
     void finishWorker(bool cancelled, int prepared, int failed);
+    /// Deletes the queued superseded copies. Only safe once the index naming their
+    /// replacements is durably on disk, which is why nothing but `finishWorker` calls it.
+    void retireSuperseded();
 
     std::map<QString, Entry> index_;
+    /// Prepared files an entry has stopped naming, absolute paths, awaiting deletion.
+    ///
+    /// A rebuild writes a fresh ULID-named copy and then replaces the entry, so the file the
+    /// entry used to name is still on disk and no longer indexed. Deleting it at that moment
+    /// would be wrong twice over: a reader still following the old path -- the renderer holds
+    /// a published project, and a build runs during a show -- would lose its file, and a crash
+    /// before the index reached disk would leave the index naming a copy that had been
+    /// deleted. So they wait here until `writeIndex()` commits, and are removed only then.
+    QStringList superseded_;
     /// Keyed by absolute path: the originals the index knows, and the prepared files beside them.
     std::map<QString, Stamp> stamps_;
     QStringList wanted_;
