@@ -30,18 +30,12 @@
 #include <cstring>
 #include <lcapture/audio.hpp>
 #include <lcomp/preview.hpp>
+#include <lcomp/text_metrics.hpp>
 #include <mutex>
 #include <thread>
 #include <unistd.h>
 
 namespace {
-/// Ceiling for a text surface that sizes itself to its content. It is a safety bound, not a
-/// layout: `publish` already refuses anything over 8192 on an edge or 128 MB, and a surface
-/// that hit that mid-show would drop the layer instead of the type getting smaller. 4096 leaves
-/// headroom under both while being far above anything type reaches -- 900px "LIVE", the largest
-/// case measured, lays out at 1956x1010.
-constexpr int kMaxTextSurface = 4096;
-
 class Content : public QObject {
     ldoc::Source source_;
     QSize size_;
@@ -59,7 +53,6 @@ class Content : public QObject {
     std::string countdown_last_;
     /// The longest caption this timer can ever show, which is what its font size is fitted to.
     /// Settled once per configure so that the size cannot change while it counts.
-    QString countdown_widest_;
     std::unique_ptr<QMovie> movie_;
     std::unique_ptr<QAudioBufferOutput> audio_;
     std::vector<float> audio_pending_;
@@ -399,35 +392,6 @@ class Content : public QObject {
         }
     }
 
-    /// The longest caption this timer can produce, used to fit the font once rather than per
-    /// frame.
-    ///
-    /// Taken by asking the formatter itself at the two extremes -- the full period, and the
-    /// end -- rather than by reasoning about digit counts, so a format string, an end message
-    /// and the display-unit checkboxes are all accounted for without this having to know how
-    /// any of them work.
-    QString widest_countdown_caption() {
-        if (!flag("countdown.enabled", false))
-            return QString::fromStdString(text("text"));
-        auto probe = source_.settings;
-        probe["countdown.running"] = false;
-        probe["countdown.elapsedMs"] = std::int64_t{0};
-        QString widest;
-        const auto consider = [&](const std::string& candidate) {
-            const auto text = QString::fromStdString(candidate);
-            if (text.size() > widest.size())
-                widest = text;
-        };
-        // Full period, one tick in, and the end -- which covers the widest the digits get and
-        // the end message, whichever is longer.
-        consider(lcomp::countdown(probe, 0).text);
-        probe["countdown.elapsedMs"] = std::int64_t{1000};
-        consider(lcomp::countdown(probe, 0).text);
-        probe["countdown.elapsedMs"] = lcomp::countdown_period_ms(probe);
-        consider(lcomp::countdown(probe, 0).text);
-        return widest;
-    }
-
     void draw_text() {
         auto label = text("text");
         QColor colour(Qt::white);
@@ -458,97 +422,24 @@ class Content : public QObject {
         // matches what an operator coming from OBS expects: type size is the only control,
         // and the texture follows it.
         //
-        // Measured before the surface exists, because the measurement is what sizes it.
-        // `kMaxTextSurface` is the ceiling -- a safety bound, not a layout -- so a 1024px face
-        // cannot ask for an arbitrary allocation.
-        QFont font(QString::fromStdString(text("font", "Sans")));
-        // The style name rather than setBold/setItalic: it picks the face the family actually
-        // ships, where the flags ask Qt to synthesise one from Regular if it does not. An empty
-        // or unknown style leaves the family's default, which is what a document written before
-        // this setting existed has.
-        if (const auto style = text("fontStyle"); !style.empty())
-            font.setStyleName(QString::fromStdString(style));
-        const int chosen = std::clamp(number("size", 48), 1, 1024);
-        font.setPixelSize(chosen);
+        // Measured in `lcomp::text_surface` rather than here, because the shell has to put
+        // selection handles around this same rectangle and a second copy of the measurement is
+        // a second answer. When the two disagreed the handles sat in the middle of the canvas
+        // while the glyphs were somewhere else.
+        const auto surface = lcomp::text_surface(source_.settings);
         const bool counting = flag("countdown.enabled", false);
-        if (counting) {
-            // Ask for tabular figures where the face has them. Many do not -- Liberation Sans,
-            // which is what "Sans" resolves to on a typical Linux box, has no `tnum` table and
-            // genuinely narrower ones -- so this is an optimisation, not the fix. The fix is
-            // the fixed-advance drawing below, which needs no cooperation from the font.
-            font.setFeature(QFont::Tag("tnum"), 1);
-            font.setFeature(QFont::Tag("lnum"), 1);
-        }
-        // Wrap is off by default and its width is set separately, the way OBS does it: a
-        // caption is one line until the operator says otherwise, and a wrap point in pixels is
-        // a property of the layer rather than of whatever resolution it happens to be shown at.
-        // `wrapAt` of zero with wrap on means "wrap at the natural width", which is no wrap --
-        // so the flag is what decides, and the width only narrows it.
-        const bool wrapping = flag("wrap", false);
-        const int wrap_at = wrapping ? std::clamp(number("wrapAt", 0), 0, 4096) : 0;
-        const auto align = text("alignment", "Left");
-        // Justification only, and only between lines. Where the whole block sits on the canvas
-        // is the node's business, not the surface's -- with the surface sized to the text there
-        // is no slack inside it to align against.
-        // Not Qt::TextSingleLine when wrap is off: that collapses a newline the operator typed
-        // into a space, so a deliberate two-line caption would come out as one. Off means "do
-        // not break lines I did not break", not "ignore the ones I did".
-        const int flags = (wrapping ? Qt::TextWordWrap : 0) | Qt::AlignTop |
-                          (align == "Right"    ? Qt::AlignRight
-                           : align == "Centre" ? Qt::AlignHCenter
-                                               : Qt::AlignLeft);
+        const int flags = lcomp::text_flags(source_.settings);
         const QString drawn = QString::fromStdString(label);
-        // Measured against the *widest* the timer will ever be rather than against this frame,
-        // so the surface is a property of the timer and not of the digits showing right now --
-        // otherwise every tick that changed the width would resize the caption under the
-        // viewer. This mattered more when the size was shrunk to fit a fixed surface; it still
-        // matters, because now it is the surface itself that would otherwise breathe.
-        const QString widest = counting ? countdown_widest_ : drawn;
-        // Measured the way it will be drawn: the fixed-advance layout below is wider than
-        // Qt's own for a proportional face, so measuring with Qt's would clip the digits.
-        const auto measure = [&](const QFont& with) {
-            const QFontMetrics metrics(with);
-            const int limit = wrap_at > 0 ? wrap_at : kMaxTextSurface;
-            // Measured left-aligned whatever the alignment is. Alignment positions a line inside
-            // the rectangle it is given, so measuring centred against a 4096-wide rectangle
-            // reports a rectangle starting around x=2000 -- and sizing a surface to that and
-            // then drawing into it put the text off the surface entirely. The size of the text
-            // does not depend on where it is put, so the measurement must not either.
-            const int measured_flags = (flags & ~Qt::AlignHorizontal_Mask) | Qt::AlignLeft;
-            QRect needed =
-                metrics.boundingRect(QRect(0, 0, limit, kMaxTextSurface), measured_flags, widest);
-            if (counting && !widest.contains(QLatin1Char('\n'))) {
-                int cell = 0;
-                for (char digit = '0'; digit <= '9'; ++digit)
-                    cell = std::max(cell, metrics.horizontalAdvance(QLatin1Char(digit)));
-                int total = 0;
-                for (const QChar c : widest)
-                    total += c.isDigit() ? cell : metrics.horizontalAdvance(c);
-                needed.setWidth(std::max(needed.width(), total));
-            }
-            return needed;
-        };
-        QRect needed = measure(font);
-        // The surface follows the text, but not without limit: a 1024px face asking for a
-        // surface wider than the compositor will carry has to come down rather than be refused
-        // mid-show, so the same shrink-to-fit that used to serve the fixed surface now serves
-        // the ceiling. In practice nothing reaches it -- 900px "LIVE" measures 1956x1010.
-        for (int size = chosen;
-             size > 6 && (needed.height() > kMaxTextSurface || needed.width() > kMaxTextSurface);
-             size = size * 9 / 10) {
-            font.setPixelSize(size * 9 / 10);
-            needed = measure(font);
-        }
+        QImage image(surface.bounds.size(), QImage::Format_RGBA8888);
+        image.fill(Qt::transparent);
+        QPainter painter(&image);
+        painter.setFont(surface.font);
+        painter.setPen(colour);
         // Qt's bounding rect can report a left or top bearing, so the drawing origin is offset
         // by it rather than assumed to be zero: a face with a negative left bearing would
         // otherwise have its first glyph clipped by exactly that much.
-        const QSize surface(std::max(1, needed.width()), std::max(1, needed.height()));
-        QImage image(surface, QImage::Format_RGBA8888);
-        image.fill(Qt::transparent);
-        QPainter painter(&image);
-        painter.setFont(font);
-        painter.setPen(colour);
-        const QRect box(-needed.left(), -needed.top(), needed.width(), needed.height());
+        const QRect box(-surface.bounds.left(), -surface.bounds.top(), surface.bounds.width(),
+                        surface.bounds.height());
         if (counting)
             draw_monospaced_digits(painter, box, flags, drawn);
         else
@@ -627,7 +518,6 @@ class Content : public QObject {
         index_ = 0;
         publish({});
         if (source.type == "source.text") {
-            countdown_widest_ = widest_countdown_caption();
             draw_text();
             if (flag("countdown.enabled", false)) countdown_timer_.start(100);
         } else if (source.type == "source.blackmagic") {

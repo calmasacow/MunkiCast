@@ -109,7 +109,7 @@ Item {
             ChoiceField {
                 width: parent.width
                 objectName: "anchorH"
-                label: qsTr("Anchor")
+                label: qsTr("Anchor H")
                 choices: ["0", "0.5", "1"]
                 choiceLabels: ({"0": qsTr("Left"), "0.5": qsTr("Centre"), "1": qsTr("Right")})
                 value: panel.hasNode ? String(panel.props.anchorX) : "0"
@@ -120,7 +120,7 @@ Item {
             ChoiceField {
                 width: parent.width
                 objectName: "anchorV"
-                label: qsTr("")
+                label: qsTr("Anchor V")
                 choices: ["0", "0.5", "1"]
                 choiceLabels: ({"0": qsTr("Top"), "0.5": qsTr("Middle"), "1": qsTr("Bottom")})
                 value: panel.hasNode ? String(panel.props.anchorY) : "0"
@@ -213,7 +213,7 @@ Item {
             ChoiceField {
                 width: parent.width
                 objectName: "alignH"
-                label: qsTr("Align")
+                label: qsTr("Align H")
                 choices: ["0", "0.5", "1"]
                 choiceLabels: ({"0": qsTr("Left"), "0.5": qsTr("Centre"), "1": qsTr("Right")})
                 value: panel.hasNode ? String(panel.props.alignX) : "0.5"
@@ -224,7 +224,7 @@ Item {
             ChoiceField {
                 width: parent.width
                 objectName: "alignV"
-                label: qsTr("")
+                label: qsTr("Align V")
                 choices: ["0", "0.5", "1"]
                 choiceLabels: ({"0": qsTr("Top"), "0.5": qsTr("Middle"), "1": qsTr("Bottom")})
                 value: panel.hasNode ? String(panel.props.alignY) : "0.5"

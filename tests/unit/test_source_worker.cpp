@@ -10,7 +10,10 @@
 #include <csignal>
 #include <fstream>
 #include <lcomp/countdown.hpp>
+#include <QGuiApplication>
+#include <lcomp/text_metrics.hpp>
 #include <mutex>
+#include <utility>
 
 namespace {
 ldoc::Source source(const char* type) {
@@ -69,6 +72,45 @@ LTEST_CASE(text_worker_publishes_real_glyphs_with_transparency) {
     }
     CHECK(ink);
     CHECK(clear);
+}
+
+/// A QFontMetrics needs a QGuiApplication, and this suite is a plain console binary. One is
+/// brought up offscreen for the measuring test only -- the same thing the shell and the worker
+/// each have, without this suite needing a display.
+struct MeasuringApp {
+    MeasuringApp() {
+        qputenv("QT_QPA_PLATFORM", "offscreen");
+        app = std::make_unique<QGuiApplication>(argc, argv);
+    }
+    QSize measure(const ldoc::ParamMap& settings) const {
+        return lcomp::text_surface(settings).bounds.size();
+    }
+    int argc = 1;
+    char name[8] = "ltest";
+    char* argv[2] = {name, nullptr};
+    std::unique_ptr<QGuiApplication> app;
+};
+
+LTEST_CASE(the_shell_measures_a_text_surface_the_same_size_the_worker_publishes) {
+    const MeasuringApp gui;
+    // The bug this covers: the worker sized its surface to the laid-out text while the shell
+    // still read the old `width`/`height` settings and defaulted to 1920x1080, so the selection
+    // handles sat in the middle of the canvas and the glyphs were somewhere else. One
+    // measurement, in `lcomp::text_surface`, is the fix -- this is what says the worker uses it.
+    for (const auto& [caption, size] : std::initializer_list<std::pair<const char*, int>>{
+             {"Hi", 22}, {"SOON", 120}, {"The quick brown fox", 48}}) {
+        auto src = source("source.text");
+        src.settings["text"] = std::string(caption);
+        src.settings["size"] = static_cast<std::int64_t>(size);
+        const QSize measured = gui.measure(src.settings);
+        auto frames = capture(src);
+        REQUIRE(!frames.empty());
+        CHECK_MSG(static_cast<int>(frames[0].width) == measured.width() &&
+                      static_cast<int>(frames[0].height) == measured.height(),
+                  "'{}' at {}px: the worker published {}x{} and the shell measured {}x{}",
+                  caption, size, frames[0].width, frames[0].height, measured.width(),
+                  measured.height());
+    }
 }
 
 LTEST_CASE(concurrent_text_workers_draw_without_settings_changes) {

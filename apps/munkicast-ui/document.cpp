@@ -15,6 +15,7 @@
 #include <QElapsedTimer>
 #include <QFileInfo>
 #include <QFontDatabase>
+#include <lcomp/text_metrics.hpp>
 #include <QImageReader>
 #include <QProcess>
 #include <QRegularExpression>
@@ -745,7 +746,17 @@ bool unfiltered_natural_size(const ldoc::Project& project, const ldoc::Canvas& c
             return video_size(*src, width, height);
         if (src->type == "source.window" || src->type == "source.game")
             return window_size(*src, width, height);
-        if (src->type == "source.text" || src->type == "source.media" ||
+        if (src->type == "source.text") {
+            // Measured, not read from settings. The worker sizes its surface to the laid-out
+            // text, so a `width`/`height` setting left over from before that -- or the 1920x1080
+            // default below -- would put the selection handles somewhere the glyphs are not.
+            // `lcomp::text_surface` is the one measurement both sides use.
+            const QSize size = lcomp::text_surface(src->settings).bounds.size();
+            width = size.width();
+            height = size.height();
+            return width > 0 && height > 0;
+        }
+        if (src->type == "source.media" ||
             src->type == "source.slideshow" || src->type == "source.playlist" || src->type == "source.browser" || src->type == "source.blackmagic") {
             width = number_setting(src->settings, "width").value_or(1920);
             height = number_setting(src->settings, "height").value_or(1080);

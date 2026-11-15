@@ -3292,8 +3292,14 @@ int main(int argc, char** argv) {
             const QString placed = document.selectedNode();
             report(!document.placedRect(QString{}, placed).isEmpty(),
                    "each visual worker source exposes its actual output box to transform tools");
+            // Halved against the node's own width rather than against 1920: a text source is
+            // as wide as its laid-out type, not as wide as a setting, so there is no one number
+            // every worker type shares any more.
+            const double full = document.placedRect(QString{}, placed).value("width").toDouble();
             document.setNodeScale(0.5, 1.0);
-            report(std::abs(document.placedRect(QString{}, placed).value("width").toDouble() - 960.0) < 1.0,
+            report(full > 0.0 &&
+                       std::abs(document.placedRect(QString{}, placed).value("width").toDouble() -
+                                full / 2.0) < 1.0,
                    "resizing a worker source updates its visible transform rectangle");
             document.undo();
             document.undo();

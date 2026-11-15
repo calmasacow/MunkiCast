@@ -24,6 +24,10 @@ target_link_libraries(vst_fixture PRIVATE munkicast::flags)
 target_compile_definitions(test_filters PRIVATE MUNKICAST_VST_FIXTURE="$<TARGET_FILE:vst_fixture>")
 add_dependencies(test_filters vst_fixture)
 munkicast_unit_test(test_source_worker    munkicast::lcomp munkicast::lcore)
+# text_metrics.hpp measures with QFontMetrics, so this target needs Gui even though
+# lcomp itself is Qt-free.
+find_package(Qt6 REQUIRED COMPONENTS Gui)
+target_link_libraries(test_source_worker PRIVATE Qt6::Gui)
 target_sources(test_source_worker PRIVATE ../../apps/munkicast-render/source_worker.cpp)
 target_compile_definitions(test_source_worker PRIVATE
     MUNKICAST_SOURCE_EXE="$<TARGET_FILE:munkicast-source>"
