@@ -2573,12 +2573,12 @@ int main(int argc, char** argv) {
                                      {"loop", true}};
                     auto background = ldoc::make_node(ldoc::NodeKind::Source, "Preview red");
                     std::get<ldoc::SourceData>(background.data).source = red.id;
-                    background.layout.size = {static_cast<double>(canvas.width), static_cast<double>(canvas.height)};
+                    background.layout.size = {1.0, 1.0}; // fractions of the canvas (ADR-0070), not pixels
                     auto sound = ldoc::make_node(ldoc::NodeKind::Source, "Preview tone");
                     auto& soundData = std::get<ldoc::SourceData>(sound.data);
                     soundData.source = tone.id;
                     soundData.audio.bus = graphProject.buses.front().id;
-                    sound.layout.size = {32, 32};
+                    sound.layout.size = {32.0 / canvas.width, 32.0 / canvas.height};
                     ldoc::Scene scene;
                     scene.id = ldoc::Id::generate();
                     scene.canvas = canvas.id;
@@ -4064,6 +4064,60 @@ int main(int argc, char** argv) {
                                0.05 &&
                            document.undoDescription() == after_add,
                        "one undo puts the resize back where it started");
+
+                // Anchoring. The unit tests cover the placement arithmetic; what they cannot
+                // cover is that the overlay, the solver and the stored position still agree
+                // once a real pointer has dragged an anchored node -- which is exactly where a
+                // sign error hides, because it only shows as a jump on the first grab.
+                {
+                    const QVariantMap before = document.nodeProperties();
+                    document.setNodeAnchor(0.5, 0.5);
+                    settle();
+                    const QVariantMap centred = document.nodeProperties();
+                    report(std::abs(centred.value(QStringLiteral("anchorX")).toDouble() - 0.5) <
+                                   1e-6 &&
+                               std::abs(centred.value(QStringLiteral("anchorY")).toDouble() -
+                                        0.5) < 1e-6,
+                           "a node can be anchored by its centre rather than its corner");
+                    // Changing what the position is measured from must not move the picture, so
+                    // the stored position has to shift by half the node's width to compensate.
+                    report(std::abs(centred.value(QStringLiteral("positionX")).toDouble() -
+                                    before.value(QStringLiteral("positionX")).toDouble()) > 0.5,
+                           "anchoring by the centre moves the stored position to compensate");
+
+                    const QPointF from = frame->mapToScene(
+                        QPointF(frame->width() / 2.0, frame->height() / 2.0));
+                    const QPointF to = frame->mapToScene(
+                        QPointF(frame->width() / 2.0 + 40.0, frame->height() / 2.0));
+                    post(QEvent::MouseButtonPress, from, Qt::LeftButton, Qt::LeftButton);
+                    post(QEvent::MouseMove, to, Qt::NoButton, Qt::LeftButton);
+                    post(QEvent::MouseButtonRelease, to, Qt::LeftButton, Qt::NoButton);
+                    settle();
+                    const double wanted = 40.0 * 1920.0 / frame->width();
+                    const QVariantMap dragged = document.nodeProperties();
+                    // The node has to move by what the pointer moved, not by that plus half its
+                    // own width: an anchor the solver did not invert would show up here.
+                    report(std::abs(dragged.value(QStringLiteral("positionX")).toDouble() -
+                                    centred.value(QStringLiteral("positionX")).toDouble() -
+                                    wanted) < 2.0,
+                           "dragging an anchored node moves it by the drag, not by the anchor");
+                    // Three commands to put back, not two: the drag, and the pair that
+                    // `setNodeAnchor` runs to move the anchor without moving the picture. Undoing
+                    // two left the node anchored by its centre, which moved every resize the
+                    // checks below go on to make -- so the anchor is asserted back to where it
+                    // started rather than assumed.
+                    document.undo();
+                    document.undo();
+                    document.undo();
+                    settle();
+                    const QVariantMap back = document.nodeProperties();
+                    report(std::abs(back.value(QStringLiteral("anchorX")).toDouble()) < 1e-6 &&
+                               std::abs(back.value(QStringLiteral("anchorY")).toDouble()) < 1e-6 &&
+                               std::abs(back.value(QStringLiteral("positionX")).toDouble() -
+                                        before.value(QStringLiteral("positionX")).toDouble()) <
+                                   0.05,
+                           "undo puts the anchor and the position back together");
+                }
 
                 const auto drag_handle = [&](QPointF to, Qt::KeyboardModifiers mods) {
                     post(QEvent::MouseButtonPress, corner, Qt::LeftButton, Qt::LeftButton, mods);

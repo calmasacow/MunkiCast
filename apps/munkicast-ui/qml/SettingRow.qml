@@ -21,8 +21,12 @@ Item {
     /// The pending value, which is the dialog's rather than the document's: nothing is
     /// committed until the dialog is accepted.
     property var currentValue
+    /// A "font" row edits two keys -- the family and its style -- so it needs a second pending
+    /// value and a second commit. Unused by every other kind.
+    property var styleValue
 
     signal committed(var newValue)
+    signal styleCommitted(var newValue)
     signal browseRequested
 
     implicitHeight: loader.implicitHeight
@@ -40,6 +44,7 @@ Item {
             case "choice": return choiceRow;
             case "colour": return colourRow;
             case "multiline": return multilineRow;
+            case "font":   return fontRow;
             default:       return textRow;
             }
         }
@@ -151,17 +156,79 @@ Item {
                 border.color: Theme.c.textMuted
                 clip: true
                 TextEdit {
+                    id: multiline
+
+                    // Not `text: row.currentValue`. Committing on every keystroke replaces the
+                    // dialog's whole pending map, which re-evaluates that binding and writes the
+                    // stored value back over what is being typed -- so the caret jumps to the end
+                    // and a fast typist loses characters. The stored value is followed only while
+                    // the field is not being edited; what the operator types is theirs until they
+                    // leave. Same rule as TextLine and NumberField, for the same reason.
+                    property string stored: row.currentValue === undefined
+                                            ? "" : String(row.currentValue)
+
                     anchors.fill: parent
                     anchors.margins: 4
-                    text: row.currentValue === undefined ? "" : String(row.currentValue)
                     color: Theme.c.text
                     font.pixelSize: 12
                     wrapMode: TextEdit.Wrap
                     selectByMouse: true
                     textFormat: TextEdit.PlainText
                     Accessible.name: row.field.label
-                    onTextChanged: if (activeFocus) row.committed(text)
+                    onStoredChanged: if (!activeFocus && text !== stored) text = stored;
+                    Component.onCompleted: text = stored
+                    onTextChanged: if (activeFocus && text !== stored) row.committed(text)
                 }
+            }
+        }
+    }
+
+    // Family, style and a preview of the face, the way a font chooser has looked since long
+    // before OBS put one in a text source. The family and the style are two controls rather than
+    // one list of "Sans Bold" strings, because the styles a family has are a property of the
+    // face: a font with no italic must not be offered one, or Qt synthesises a slanted Regular
+    // and that is not the same thing as drawn italic.
+    Component {
+        id: fontRow
+
+        Column {
+            spacing: 4
+
+            ChoiceField {
+                objectName: "settingInput_" + row.field.key
+                width: parent.width
+                label: row.field.label
+                labelWidth: row.labelWidth
+                labelAlign: Text.AlignRight
+                choices: row.field.choices
+                value: row.currentValue === undefined ? "" : String(row.currentValue)
+                onCommitted: newValue => row.committed(newValue)
+            }
+
+            ChoiceField {
+                objectName: "settingInput_" + row.field.key + "Style"
+                width: parent.width
+                label: qsTr("Style")
+                labelWidth: row.labelWidth
+                labelAlign: Text.AlignRight
+                choices: Document.fontStyles(String(row.currentValue ?? ""))
+                value: String(row.styleValue ?? "Regular")
+                onCommitted: newValue => row.styleCommitted(newValue)
+            }
+
+            // The preview is the point of a font picker: a family name tells an operator almost
+            // nothing, and the list is long enough that trying them one at a time on air is not
+            // an option. Sized to the row rather than to the real type size, which would be 900px
+            // for a stinger and would not fit in a settings panel.
+            Text {
+                x: row.labelWidth + 4
+                width: Math.max(40, parent.width - x)
+                elide: Text.ElideRight
+                color: Theme.c.text
+                text: qsTr("The quick brown fox 0123")
+                font.family: String(row.currentValue ?? "Sans")
+                font.styleName: String(row.styleValue ?? "")
+                font.pixelSize: 22
             }
         }
     }

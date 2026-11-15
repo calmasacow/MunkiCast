@@ -173,8 +173,18 @@ std::optional<Unscaled> unscaled_content(const ldoc::Node& node, double space_w,
     case ldoc::FitMode::Natural:
         dw = sw;
         dh = sh;
-        dx = bx + crop.left;
-        dy = by + crop.top;
+        // Natural draws the content at its own size, and the alignment then says where that
+        // sits in a box bigger than it -- left/centre/right and top/middle/bottom, the way every
+        // other fit mode already uses this field. Before, Natural ignored it and pinned the
+        // content to the box's top-left, so a caption in a wide box could not be put against the
+        // right edge at all.
+        //
+        // `have_box` is what makes this safe for what is already authored: a zero box means "the
+        // content's own size" (bw == sw), so there is no slack, the terms below are zero, and
+        // every existing node draws exactly where it did. Measured across the real collections:
+        // 251 natural nodes, none of them with a box.
+        dx = bx + crop.left + (have_box ? (bw - dw) * ax : 0.0);
+        dy = by + crop.top + (have_box ? (bh - dh) * ay : 0.0);
         break;
     case ldoc::FitMode::Stretch:
         break;
@@ -272,12 +282,21 @@ std::optional<DrawnFrame> drawn_frame(const ldoc::Node& node, double space_w, do
     frame.rel_cy = fitted->rel_cy;
     frame.rel_dx = fitted->rel_dx;
     frame.rel_dy = fitted->rel_dy;
-    // The position is a fraction of the containing space (ADR-0070); everything else here is
-    // already pixels, so it is multiplied out before being added to them.
-    frame.x = node.transform.position.x * space_w + fitted->rel_cx + min_x;
-    frame.y = node.transform.position.y * space_h + fitted->rel_cy + min_y;
     frame.width = max_x - min_x;
     frame.height = max_y - min_y;
+    // The position is a fraction of the containing space (ADR-0070); everything else here is
+    // already pixels, so it is multiplied out before being added to them.
+    //
+    // The anchor then says which point of the drawn rectangle that position located. Subtracting
+    // it is the whole of the feature: at the default `{0, 0}` nothing is subtracted and the
+    // position is the top-left corner, exactly as before this field existed. It is applied after
+    // the rotated bounds are known, so an anchored node stays anchored through a quarter turn --
+    // the centre of a rotated rectangle is the centre of its bounding box, which `frame.width`
+    // and `frame.height` already describe.
+    frame.x = node.transform.position.x * space_w + fitted->rel_cx + min_x -
+              node.layout.anchor.x * frame.width;
+    frame.y = node.transform.position.y * space_h + fitted->rel_cy + min_y -
+              node.layout.anchor.y * frame.height;
     if (!(frame.width > 0.0) || !(frame.height > 0.0))
         return frame;
 
@@ -334,8 +353,13 @@ std::optional<SolvedFrame> solve_drawn_rect(const ldoc::Node& node, double space
     // Back out to the stored unit: a position is a fraction of the containing space, and the
     // caller writes this straight into `Transform.position` (ADR-0070). `space_w`/`space_h` are
     // positive here because `unscaled_content` refused otherwise.
-    solved.x = (x - fitted->rel_cx - min_x) / space_w;
-    solved.y = (y - fitted->rel_cy - min_y) / space_h;
+    //
+    // The anchor term is added back, because this is the inverse of `drawn_frame`, which
+    // subtracts it. The two have to stay exact inverses or a drag handle would move the node by
+    // the anchor offset on every grab -- `width` and `height` are the rectangle the caller is
+    // asking for, which is what `frame.width`/`frame.height` would be on the way out.
+    solved.x = (x - fitted->rel_cx - min_x + node.layout.anchor.x * width) / space_w;
+    solved.y = (y - fitted->rel_cy - min_y + node.layout.anchor.y * height) / space_h;
     solved.scale_x = sx;
     solved.scale_y = sy;
     if (!std::isfinite(solved.x) || !std::isfinite(solved.y))

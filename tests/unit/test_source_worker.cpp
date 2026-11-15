@@ -53,7 +53,15 @@ LTEST_CASE(text_worker_publishes_real_glyphs_with_transparency) {
     src.settings["size"] = std::int64_t{22};
     auto frames = capture(src);
     REQUIRE(!frames.empty());
-    CHECK_EQ(frames[0].width, 64);
+    // The surface is what the text measures, not the 64x32 the helper sets for every other
+    // source type -- so "Hi" at 22px comes back about 21 px wide. Checked as a range rather
+    // than a number, because the exact advance belongs to whichever face "Sans" resolves to on
+    // the machine running this, and pinning it would make the test a font check.
+    CHECK_MSG(frames[0].width > 8 && frames[0].width < 64,
+              "'Hi' at 22px published a {}px-wide surface; expected it to fit the glyphs",
+              frames[0].width);
+    CHECK_MSG(frames[0].height > 8 && frames[0].height < 64,
+              "'Hi' at 22px published a {}px-tall surface", frames[0].height);
     bool ink = false, clear = false;
     for (std::size_t i = 3; i < frames[0].pixels.size(); i += 4) {
         ink = ink || frames[0].pixels[i] > 0;

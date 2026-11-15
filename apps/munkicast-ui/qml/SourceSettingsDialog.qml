@@ -455,8 +455,14 @@ Item {
                         }
                         labelWidth: 150
                         currentValue: dialog.pending[settingRow.modelData.key]
+                        // A font row edits the family and its style, which are two settings. The
+                        // style's key is the family's with "Style" appended -- "font" and
+                        // "fontStyle" -- so one row knows both without a second spec.
+                        styleValue: dialog.pending[settingRow.modelData.key + "Style"]
                         onCommitted: newValue =>
                             dialog.setValue(settingRow.modelData.key, newValue)
+                        onStyleCommitted: newValue =>
+                            dialog.setValue(settingRow.modelData.key + "Style", newValue)
                         onBrowseRequested: {
                             const key = settingRow.modelData.key;
                             const current = dialog.pending[key];

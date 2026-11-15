@@ -35,6 +35,13 @@
 #include <unistd.h>
 
 namespace {
+/// Ceiling for a text surface that sizes itself to its content. It is a safety bound, not a
+/// layout: `publish` already refuses anything over 8192 on an edge or 128 MB, and a surface
+/// that hit that mid-show would drop the layer instead of the type getting smaller. 4096 leaves
+/// headroom under both while being far above anything type reaches -- 900px "LIVE", the largest
+/// case measured, lays out at 1956x1010.
+constexpr int kMaxTextSurface = 4096;
+
 class Content : public QObject {
     ldoc::Source source_;
     QSize size_;
@@ -115,8 +122,13 @@ class Content : public QObject {
             qWarning("source frame exceeds image budget");
             valid_ = false;
         }
+        // A text surface is sized to its content, so its frames legitimately differ from
+        // `size_` and from each other. The transport carries width and height per frame, and
+        // `paint_screen` takes the natural size from the delivered frame, so a varying size
+        // needs nothing special of either -- it just must not be centred into a fixed canvas
+        // below as though it were an undersized image.
         if (valid_ && (image.size() == size_ || source_.type == "source.media" ||
-                       source_.type == "source.playlist")) {
+                       source_.type == "source.playlist" || source_.type == "source.text")) {
             image_ = image.convertToFormat(QImage::Format_RGBA8888);
             dirty = true;
             return;
@@ -438,10 +450,24 @@ class Content : public QObject {
             if (label == countdown_last_) return;
             countdown_last_ = label;
         }
-        QImage image(size_, QImage::Format_RGBA8888);
-        image.fill(Qt::transparent);
-        QPainter painter(&image);
+        // The surface is whatever the laid-out text measures, not a fixed resolution the
+        // operator also has to set. A text layer drawn larger than a fixed surface was scaled
+        // up, which measured 3.1x softer glyph edges at 4K (4.24 px against 1.35) -- and the
+        // softness followed the surface-to-drawn ratio, so it was there at every type size.
+        // Sizing the surface to the text removes the upscale instead of papering over it, and
+        // matches what an operator coming from OBS expects: type size is the only control,
+        // and the texture follows it.
+        //
+        // Measured before the surface exists, because the measurement is what sizes it.
+        // `kMaxTextSurface` is the ceiling -- a safety bound, not a layout -- so a 1024px face
+        // cannot ask for an arbitrary allocation.
         QFont font(QString::fromStdString(text("font", "Sans")));
+        // The style name rather than setBold/setItalic: it picks the face the family actually
+        // ships, where the flags ask Qt to synthesise one from Regular if it does not. An empty
+        // or unknown style leaves the family's default, which is what a document written before
+        // this setting existed has.
+        if (const auto style = text("fontStyle"); !style.empty())
+            font.setStyleName(QString::fromStdString(style));
         const int chosen = std::clamp(number("size", 48), 1, 1024);
         font.setPixelSize(chosen);
         const bool counting = flag("countdown.enabled", false);
@@ -453,30 +479,45 @@ class Content : public QObject {
             font.setFeature(QFont::Tag("tnum"), 1);
             font.setFeature(QFont::Tag("lnum"), 1);
         }
-        painter.setFont(font);
-        painter.setPen(colour);
+        // Wrap is off by default and its width is set separately, the way OBS does it: a
+        // caption is one line until the operator says otherwise, and a wrap point in pixels is
+        // a property of the layer rather than of whatever resolution it happens to be shown at.
+        // `wrapAt` of zero with wrap on means "wrap at the natural width", which is no wrap --
+        // so the flag is what decides, and the width only narrows it.
+        const bool wrapping = flag("wrap", false);
+        const int wrap_at = wrapping ? std::clamp(number("wrapAt", 0), 0, 4096) : 0;
         const auto align = text("alignment", "Left");
-        const int flags = Qt::TextWordWrap | Qt::AlignTop |
+        // Justification only, and only between lines. Where the whole block sits on the canvas
+        // is the node's business, not the surface's -- with the surface sized to the text there
+        // is no slack inside it to align against.
+        // Not Qt::TextSingleLine when wrap is off: that collapses a newline the operator typed
+        // into a space, so a deliberate two-line caption would come out as one. Off means "do
+        // not break lines I did not break", not "ignore the ones I did".
+        const int flags = (wrapping ? Qt::TextWordWrap : 0) | Qt::AlignTop |
                           (align == "Right"    ? Qt::AlignRight
                            : align == "Centre" ? Qt::AlignHCenter
                                                : Qt::AlignLeft);
         const QString drawn = QString::fromStdString(label);
-        // An end message is prose where the time was digits, so it is routinely wider than the
-        // box that fitted "00:15" -- and the source is sized by its own width/height, not by
-        // what it happens to be saying. Shrink to fit rather than clipping the message: a
-        // "BACK SOON" with the N cut off is worse than a slightly smaller one.
-        //
         // Measured against the *widest* the timer will ever be rather than against this frame,
-        // so the size is a property of the timer and not of the digits showing right now --
-        // otherwise every tick that changed the width would pick a new size and the whole
-        // caption would resize under the viewer.
+        // so the surface is a property of the timer and not of the digits showing right now --
+        // otherwise every tick that changed the width would resize the caption under the
+        // viewer. This mattered more when the size was shrunk to fit a fixed surface; it still
+        // matters, because now it is the surface itself that would otherwise breathe.
         const QString widest = counting ? countdown_widest_ : drawn;
         // Measured the way it will be drawn: the fixed-advance layout below is wider than
-        // Qt's own for a proportional face, so fitting against Qt's measure would still clip.
-        const auto measure = [&] {
-            QRect needed = painter.boundingRect(image.rect(), flags, widest);
+        // Qt's own for a proportional face, so measuring with Qt's would clip the digits.
+        const auto measure = [&](const QFont& with) {
+            const QFontMetrics metrics(with);
+            const int limit = wrap_at > 0 ? wrap_at : kMaxTextSurface;
+            // Measured left-aligned whatever the alignment is. Alignment positions a line inside
+            // the rectangle it is given, so measuring centred against a 4096-wide rectangle
+            // reports a rectangle starting around x=2000 -- and sizing a surface to that and
+            // then drawing into it put the text off the surface entirely. The size of the text
+            // does not depend on where it is put, so the measurement must not either.
+            const int measured_flags = (flags & ~Qt::AlignHorizontal_Mask) | Qt::AlignLeft;
+            QRect needed =
+                metrics.boundingRect(QRect(0, 0, limit, kMaxTextSurface), measured_flags, widest);
             if (counting && !widest.contains(QLatin1Char('\n'))) {
-                const QFontMetrics metrics = painter.fontMetrics();
                 int cell = 0;
                 for (char digit = '0'; digit <= '9'; ++digit)
                     cell = std::max(cell, metrics.horizontalAdvance(QLatin1Char(digit)));
@@ -487,18 +528,31 @@ class Content : public QObject {
             }
             return needed;
         };
-        QRect needed = measure();
+        QRect needed = measure(font);
+        // The surface follows the text, but not without limit: a 1024px face asking for a
+        // surface wider than the compositor will carry has to come down rather than be refused
+        // mid-show, so the same shrink-to-fit that used to serve the fixed surface now serves
+        // the ceiling. In practice nothing reaches it -- 900px "LIVE" measures 1956x1010.
         for (int size = chosen;
-             size > 6 && (needed.height() > image.height() || needed.width() > image.width());
+             size > 6 && (needed.height() > kMaxTextSurface || needed.width() > kMaxTextSurface);
              size = size * 9 / 10) {
             font.setPixelSize(size * 9 / 10);
-            painter.setFont(font);
-            needed = measure();
+            needed = measure(font);
         }
+        // Qt's bounding rect can report a left or top bearing, so the drawing origin is offset
+        // by it rather than assumed to be zero: a face with a negative left bearing would
+        // otherwise have its first glyph clipped by exactly that much.
+        const QSize surface(std::max(1, needed.width()), std::max(1, needed.height()));
+        QImage image(surface, QImage::Format_RGBA8888);
+        image.fill(Qt::transparent);
+        QPainter painter(&image);
+        painter.setFont(font);
+        painter.setPen(colour);
+        const QRect box(-needed.left(), -needed.top(), needed.width(), needed.height());
         if (counting)
-            draw_monospaced_digits(painter, image.rect(), flags, drawn);
+            draw_monospaced_digits(painter, box, flags, drawn);
         else
-            painter.drawText(image.rect(), flags, drawn);
+            painter.drawText(box, flags, drawn);
         painter.end();
         publish(image);
     }

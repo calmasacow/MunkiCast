@@ -22,6 +22,7 @@
 
 #include "ltest.hpp"
 
+#include <cstdlib>
 #include <algorithm>
 #include <array>
 #include <filesystem>
@@ -55,7 +56,7 @@ Id fixed_id(std::uint8_t tag) {
 /// The current format, written by this build and committed. The byte-for-byte fixture.
 fs::path fixture_dir() {
     // Beside the test source, not in the build tree: it is an artefact of the repository.
-    return fs::path(MUNKICAST_TEST_FIXTURES) / "golden-project-v5";
+    return fs::path(MUNKICAST_TEST_FIXTURES) / "golden-project-v6";
 }
 
 /// The previous format, frozen. **Never regenerated**: its whole value is that it was written by
@@ -64,8 +65,10 @@ fs::path fixture_dir() {
 /// with no canvas and nodes with `canvas_overrides`, which is exactly the point.
 ///
 /// `golden-project-v4-pixels` beside it is the same arrangement, frozen at version 4, where
-/// position and box are still canvas pixels (ADR-0070). Also never regenerated, and for the
-/// same reason.
+/// position and box are still canvas pixels (ADR-0070). `golden-project-v5` is the same again,
+/// frozen at version 5, where a text node still carries its size as a scale on the node rather
+/// than as the font size it is drawn at. All of them are never regenerated, and for the same
+/// reason.
 fs::path fixture_v1_dir() {
     return fs::path(MUNKICAST_TEST_FIXTURES) / "golden-project-v1";
 }
@@ -783,3 +786,87 @@ LTEST_CASE(reading_the_fixture_and_writing_it_back_is_a_fixed_point) {
 }
 
 LTEST_MAIN("golden")
+
+LTEST_CASE(a_magnified_text_node_becomes_type_drawn_at_its_apparent_size) {
+    // Version 6. A text source has no native pixel size, so a scale on a text node was a
+    // magnified bitmap rather than larger type -- one real node was 48px at scale 10.55. The
+    // migration moves the factor into the font size, leaving the node drawn exactly as large as
+    // it already was, but rasterised rather than stretched.
+    Project p;
+    p.id = Id::generate();
+    p.schema_version = 5;
+    Canvas canvas;
+    canvas.id = Id::generate();
+    canvas.width = 3840;
+    canvas.height = 2160;
+    p.canvases = {canvas};
+
+    Source text;
+    text.id = Id::generate();
+    text.type = "source.text";
+    text.name = "START.CD.TXT";
+    text.settings["size"] = std::int64_t{48};
+    p.sources = {text};
+
+    Scene scene;
+    scene.id = Id::generate();
+    scene.canvas = canvas.id;
+    Node node = make_node(NodeKind::Source, "START.CD.TXT");
+    std::get<SourceData>(node.data).source = text.id;
+    node.transform.scale = {10.0, 10.0};
+    scene.roots = {node};
+    p.scenes = {scene};
+
+    const auto report = migrate(p);
+    CHECK(report.happened());
+    const auto* size = std::get_if<std::int64_t>(&p.sources.front().settings.at("size"));
+    REQUIRE(size != nullptr);
+    CHECK_MSG(*size == 480, "48px at scale 10 became {}px", *size);
+    // The scale is spent, so the node is drawn at the same size by type rather than by stretch.
+    const Transform& t = p.scenes.front().roots.front().transform;
+    CHECK(std::abs(t.scale.x - 1.0) < 1e-9);
+    CHECK(std::abs(t.scale.y - 1.0) < 1e-9);
+    // Said out loud rather than done quietly: it changes what a stored number means.
+    CHECK(!report.problems.empty());
+}
+
+LTEST_CASE(two_nodes_sharing_one_text_source_keep_their_relative_sizes) {
+    // The font size lives on the source, which nodes share, so the first node converted must not
+    // resize the type under the others. The largest wins and the rest become downscales, which
+    // costs sharpness nowhere -- the alternative is one of them silently changing size.
+    Project p;
+    p.id = Id::generate();
+    p.schema_version = 5;
+    Canvas canvas;
+    canvas.id = Id::generate();
+    canvas.width = 1920;
+    canvas.height = 1080;
+    p.canvases = {canvas};
+
+    Source text;
+    text.id = Id::generate();
+    text.type = "source.text";
+    text.settings["size"] = std::int64_t{40};
+    p.sources = {text};
+
+    Scene scene;
+    scene.id = Id::generate();
+    scene.canvas = canvas.id;
+    for (const double factor : {4.0, 2.0}) {
+        Node node = make_node(NodeKind::Source, "shared");
+        std::get<SourceData>(node.data).source = text.id;
+        node.transform.scale = {factor, factor};
+        scene.roots.push_back(node);
+    }
+    p.scenes = {scene};
+
+    CHECK(migrate(p).happened());
+    const auto* size = std::get_if<std::int64_t>(&p.sources.front().settings.at("size"));
+    REQUIRE(size != nullptr);
+    CHECK_MSG(*size == 160, "the largest user set the size to {}px, expected 160", *size);
+    const auto& roots = p.scenes.front().roots;
+    // 4x became the type; 2x is now half of it, so both are drawn the size they always were.
+    CHECK(std::abs(roots[0].transform.scale.x - 1.0) < 1e-9);
+    CHECK_MSG(std::abs(roots[1].transform.scale.x - 0.5) < 1e-9,
+              "the smaller node kept scale {}, expected 0.5", roots[1].transform.scale.x);
+}

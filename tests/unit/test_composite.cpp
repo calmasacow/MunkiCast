@@ -836,3 +836,129 @@ LTEST_CASE(source_clones_share_capture_identity_and_reject_cycles) {
 }
 
 LTEST_MAIN("composite")
+
+LTEST_CASE(an_anchor_says_which_point_of_the_content_the_position_locates) {
+    // Before this field, position was always the content's top-left, so a node at 0.5,0.5 had
+    // its *corner* at the centre of the canvas. pivot does not help: it is what rotation and
+    // scale turn around, and at scale 1 it changes nothing. Measured below, so the two stay
+    // distinguishable.
+    const ldoc::Source red = colour_source(255, 0, 0, 200, 100);
+    ldoc::Node node = bound_to(red);
+    node.layout.fit = ldoc::FitMode::Natural;
+    node.transform.position = {0.5, 0.5};
+    GapReason why = GapReason::NoSize;
+
+    // 1000x1000 space, 200x100 of natural content.
+    const auto at = [&](ldoc::Vec2 anchor) {
+        node.layout.anchor = anchor;
+        return lcomp::drawn_frame(node, 1000.0, 1000.0, 200.0, 100.0, true, why);
+    };
+
+    const auto top_left = at({0.0, 0.0});
+    REQUIRE(top_left.has_value());
+    CHECK(std::abs(top_left->x - 500.0) < 1e-6);
+    CHECK(std::abs(top_left->y - 500.0) < 1e-6);
+
+    // The centre anchor puts the content's middle on the position, so the rectangle starts half
+    // its own size earlier -- 500 - 100 across and 500 - 50 down.
+    const auto centred = at({0.5, 0.5});
+    REQUIRE(centred.has_value());
+    CHECK(std::abs(centred->x - 400.0) < 1e-6);
+    CHECK(std::abs(centred->y - 450.0) < 1e-6);
+    CHECK(std::abs((centred->x + centred->width / 2) - 500.0) < 1e-6);
+    CHECK(std::abs((centred->y + centred->height / 2) - 500.0) < 1e-6);
+
+    const auto bottom_right = at({1.0, 1.0});
+    REQUIRE(bottom_right.has_value());
+    CHECK(std::abs((bottom_right->x + bottom_right->width) - 500.0) < 1e-6);
+    CHECK(std::abs((bottom_right->y + bottom_right->height) - 500.0) < 1e-6);
+
+    // The pivot is a different thing and must stay one: it moves nothing at scale 1.
+    node.layout.anchor = {0.0, 0.0};
+    for (const auto pivot : {ldoc::Vec2{0.0, 0.0}, ldoc::Vec2{0.5, 0.5}, ldoc::Vec2{1.0, 1.0}}) {
+        node.transform.pivot = pivot;
+        const auto frame = lcomp::drawn_frame(node, 1000.0, 1000.0, 200.0, 100.0, true, why);
+        REQUIRE(frame.has_value());
+        CHECK_MSG(std::abs(frame->x - 500.0) < 1e-6, "pivot {},{} moved an unanchored node",
+                  pivot.x, pivot.y);
+    }
+}
+
+LTEST_CASE(the_handle_solver_and_the_drawn_rectangle_agree_about_the_anchor) {
+    // solve_drawn_rect backs the drag handles and is the inverse of drawn_frame. If the two
+    // disagree about the anchor, grabbing a handle moves the node by the anchor offset before
+    // the drag even starts -- so the round trip is checked at every anchor rather than assumed.
+    const ldoc::Source red = colour_source(255, 0, 0, 200, 100);
+    for (const auto anchor : {ldoc::Vec2{0.0, 0.0}, ldoc::Vec2{0.5, 0.5}, ldoc::Vec2{1.0, 1.0},
+                              ldoc::Vec2{0.0, 1.0}}) {
+        ldoc::Node node = bound_to(red);
+        node.layout.fit = ldoc::FitMode::Natural;
+        node.layout.anchor = anchor;
+        const auto solved =
+            lcomp::solve_drawn_rect(node, 800.0, 600.0, 200.0, 100.0, true, 123.0, 45.0, 400.0,
+                                    200.0);
+        REQUIRE_MSG(solved.has_value(), "anchor {},{} refused", anchor.x, anchor.y);
+        node.transform.position = {solved->x, solved->y};
+        node.transform.scale = {solved->scale_x, solved->scale_y};
+        GapReason why = GapReason::NoSize;
+        const auto frame = lcomp::drawn_frame(node, 800.0, 600.0, 200.0, 100.0, true, why);
+        REQUIRE(frame.has_value());
+        CHECK_MSG(std::abs(frame->x - 123.0) < 1e-6, "anchor {},{}: asked x=123, got {}",
+                  anchor.x, anchor.y, frame->x);
+        CHECK_MSG(std::abs(frame->y - 45.0) < 1e-6, "anchor {},{}: asked y=45, got {}", anchor.x,
+                  anchor.y, frame->y);
+        CHECK(std::abs(frame->width - 400.0) < 1e-6);
+        CHECK(std::abs(frame->height - 200.0) < 1e-6);
+    }
+}
+
+LTEST_CASE(natural_content_aligns_against_the_edges_of_a_larger_box) {
+    // What an operator means by "right": the right edge of the content meets the right edge of
+    // the box. Natural fit used to ignore alignment entirely and pin everything to the top-left,
+    // so a caption in a wide box could not be put against an edge at all.
+    const ldoc::Source red = colour_source(255, 0, 0, 200, 100);
+    ldoc::Node node = bound_to(red);
+    node.layout.fit = ldoc::FitMode::Natural;
+    node.transform.position = {0.0, 0.0};
+    // A 1000x1000 box in a 1000x1000 space, holding 200x100 of content: 800 and 900 of slack.
+    node.layout.size = {1.0, 1.0};
+    GapReason why = GapReason::NoSize;
+
+    const auto at = [&](ldoc::Vec2 alignment) {
+        node.layout.alignment = alignment;
+        return lcomp::drawn_frame(node, 1000.0, 1000.0, 200.0, 100.0, true, why);
+    };
+
+    const auto top_left = at({0.0, 0.0});
+    REQUIRE(top_left.has_value());
+    CHECK(std::abs(top_left->x) < 1e-6);
+    CHECK(std::abs(top_left->y) < 1e-6);
+    // The content keeps its own size whatever the box: Natural does not stretch.
+    CHECK(std::abs(top_left->width - 200.0) < 1e-6);
+    CHECK(std::abs(top_left->height - 100.0) < 1e-6);
+
+    const auto centred = at({0.5, 0.5});
+    REQUIRE(centred.has_value());
+    CHECK_MSG(std::abs((centred->x + centred->width / 2) - 500.0) < 1e-6,
+              "centre alignment put the content's middle at {}", centred->x + centred->width / 2);
+    CHECK(std::abs((centred->y + centred->height / 2) - 500.0) < 1e-6);
+
+    const auto bottom_right = at({1.0, 1.0});
+    REQUIRE(bottom_right.has_value());
+    CHECK_MSG(std::abs((bottom_right->x + bottom_right->width) - 1000.0) < 1e-6,
+              "right alignment put the content's right edge at {}",
+              bottom_right->x + bottom_right->width);
+    CHECK(std::abs((bottom_right->y + bottom_right->height) - 1000.0) < 1e-6);
+
+    // And the case every authored node is in: no box means no slack, so alignment moves
+    // nothing. This is what keeps the change invisible to 251 existing natural nodes.
+    node.layout.size = {0.0, 0.0};
+    for (const auto alignment : {ldoc::Vec2{0.0, 0.0}, ldoc::Vec2{0.5, 0.5}, ldoc::Vec2{1.0, 1.0}}) {
+        node.layout.alignment = alignment;
+        const auto frame = lcomp::drawn_frame(node, 1000.0, 1000.0, 200.0, 100.0, true, why);
+        REQUIRE(frame.has_value());
+        CHECK_MSG(std::abs(frame->x) < 1e-6 && std::abs(frame->y) < 1e-6,
+                  "alignment {},{} moved a node with no box to {},{}", alignment.x, alignment.y,
+                  frame->x, frame->y);
+    }
+}

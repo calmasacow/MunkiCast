@@ -3,6 +3,7 @@
 
 #include "ldoc/migrate.hpp"
 
+#include <map>
 #include <algorithm>
 #include <format>
 #include <variant>
@@ -344,6 +345,85 @@ void to_fractions(Project& p, std::vector<Problem>& out) {
                               fallback.id});
 }
 
+/// Fold a text node's scale into the font size it should have been asked for.
+///
+/// A text source has no native pixel size -- it has a size it was asked to draw at -- so a scale
+/// on a text node was always a magnified bitmap rather than larger type. Version 6 makes a handle
+/// drag set the font size instead, which leaves projects written before it carrying the old
+/// arrangement: one real node was 48px type at scale 10.55, drawn ten times its rendered size.
+///
+/// Converted here rather than left for the operator to find, because the alternative is a show
+/// that looks soft until every text node has been visited by hand. The drawn size is unchanged:
+/// the font size is multiplied by exactly the factor the scale is divided by.
+///
+/// The font size lives on the *source*, which several nodes may share, so it cannot be rewritten
+/// per node: the first node to be converted would change the type under every other one. The
+/// size is taken from the node that uses the source at the largest scale, and the rest keep a
+/// scale relative to that -- smaller than 1 rather than larger, so they are downscaled, which
+/// costs sharpness nowhere.
+void to_v6(Project& p, std::vector<Problem>& out) {
+    std::map<Id, double> largest;
+    const auto survey = [&](auto&& self, const Node& node) -> void {
+        if (const auto* group = std::get_if<GroupData>(&node.data))
+            for (const Node& child : group->children)
+                self(self, child);
+        const auto* placed = std::get_if<SourceData>(&node.data);
+        if (!placed || !placed->source)
+            return;
+        const Source* src = p.source(*placed->source);
+        if (!src || src->type != "source.text")
+            return;
+        const double factor = std::max(std::abs(node.transform.scale.x),
+                                       std::abs(node.transform.scale.y));
+        if (!std::isfinite(factor) || factor <= 0.0)
+            return;
+        auto& seen = largest[*placed->source];
+        seen = std::max(seen, factor);
+    };
+    for (const Scene& scene : p.scenes)
+        for (const Node& root : scene.roots)
+            survey(survey, root);
+
+    std::size_t converted = 0;
+    for (Source& src : p.sources) {
+        const auto found = largest.find(src.id);
+        if (found == largest.end() || std::abs(found->second - 1.0) < 1e-9)
+            continue;
+        const auto it = src.settings.find("size");
+        const auto* stored =
+            it == src.settings.end() ? nullptr : std::get_if<std::int64_t>(&it->second);
+        const double current = stored ? static_cast<double>(*stored) : 48.0;
+        const double wanted = std::clamp(std::round(current * found->second), 1.0, 1024.0);
+        if (std::abs(wanted - current) < 1.0)
+            continue;
+        src.settings["size"] = static_cast<std::int64_t>(wanted);
+        const double realised = wanted / current;
+        const auto rescale = [&](auto&& self, Node& node) -> void {
+            if (auto* group = std::get_if<GroupData>(&node.data))
+                for (Node& child : group->children)
+                    self(self, child);
+            const auto* placed = std::get_if<SourceData>(&node.data);
+            if (!placed || placed->source != src.id)
+                return;
+            node.transform.scale = Vec2{node.transform.scale.x / realised,
+                                        node.transform.scale.y / realised};
+        };
+        for (Scene& scene : p.scenes)
+            for (Node& root : scene.roots)
+                rescale(rescale, root);
+        ++converted;
+    }
+
+    if (converted > 0)
+        out.push_back(Problem{
+            Severity::Warning,
+            std::format("{} text source(s) were being magnified rather than drawn at size; their "
+                        "font size now carries the scale, so they are drawn sharp at the size "
+                        "they already appear",
+                        converted),
+            p.id});
+}
+
 } // namespace
 
 void geometry_to_fractions(Project& project, std::vector<Problem>& problems) {
@@ -362,6 +442,8 @@ Migration migrate(Project& project, const std::vector<LegacyOutputEncode>& legac
         to_v4(project, m.problems);
     if (project.schema_version < 5)
         to_fractions(project, m.problems);
+    if (project.schema_version < 6)
+        to_v6(project, m.problems);
 
     project.schema_version = kSchemaVersion;
     return m;

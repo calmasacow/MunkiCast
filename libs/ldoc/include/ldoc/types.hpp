@@ -158,6 +158,19 @@ struct Layout {
     Vec2 size{};
     /// Where the fitted content sits inside the box when it does not fill it.
     Vec2 alignment{0.5, 0.5};
+    /// Which point of the drawn content `transform.position` locates, normalised within it.
+    ///
+    /// `{0, 0}` -- the default, and what every node did before this field existed -- means the
+    /// position is the content's top-left corner. `{0.5, 0.5}` makes it the centre, so a node at
+    /// `{0.5, 0.5}` is centred on the canvas rather than having its corner at the middle.
+    /// `{1, 1}` makes it the bottom-right.
+    ///
+    /// This is not `pivot`, which is the point rotation and scale turn around and has no effect
+    /// at scale 1: measured, a node at position `{0.5, 0.5}` draws at the same place for every
+    /// pivot. Anchoring is about where the content is put; the pivot is about what it spins
+    /// around. A text layer whose surface is sized to its own content needs the first one,
+    /// because its size changes as the words do and a top-left anchor would slide it.
+    Vec2 anchor{};
 
     friend bool operator==(const Layout&, const Layout&) = default;
 };

@@ -138,6 +138,7 @@ Jv enc(const Layout& l) {
     o["crop"] = enc(l.crop);
     o["size"] = enc(l.size);
     o["alignment"] = enc(l.alignment);
+    o["anchor"] = enc(l.anchor);
     return o;
 }
 
@@ -696,6 +697,9 @@ Layout dec_layout(Rd& rd, const Jv& parent, const char* key, std::string_view pa
     }
     l.size = dec_vec2_at(rd, *o, "size", path, l.size);
     l.alignment = dec_vec2_at(rd, *o, "alignment", path, l.alignment);
+    // Absent in a document written before the field existed, and its default is what those
+    // documents meant, so no migration is needed: a top-left anchor is what every node had.
+    l.anchor = dec_vec2_at(rd, *o, "anchor", path, l.anchor);
     return l;
 }
 

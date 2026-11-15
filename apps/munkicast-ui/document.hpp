@@ -630,6 +630,12 @@ public:
     /// Where a recording of this encode would be written: beside the project when there is
     /// one, in the home directory when there is not, stamped so a second take does not
     /// overwrite the first. Empty when the encode is not in the project.
+    /// The styles a font family actually has -- "Regular", "Bold", "Oblique" and whatever else
+    /// the face ships. Asked of the family rather than offered as a fixed list, because a face
+    /// with no italic must not be offered one: Qt would synthesise a slanted Regular and the
+    /// result is not the same thing as a drawn italic.
+    Q_INVOKABLE [[nodiscard]] QStringList fontStyles(const QString& family) const;
+
     Q_INVOKABLE void setRecordingDirectory(const QString& outputId, const QString& path);
     Q_INVOKABLE [[nodiscard]] QString recordingDirectory() const;
     Q_INVOKABLE [[nodiscard]] QString recordingPathFor(const QString& encodeId) const;
@@ -707,6 +713,10 @@ public:
     Q_INVOKABLE void setNodeBoxSize(double w, double h);
     Q_INVOKABLE void setNodeCrop(double left, double top, double right, double bottom);
     Q_INVOKABLE void setNodeAlignment(double x, double y);
+    /// Which point of the drawn content the position locates: `{0,0}` top-left (the default and
+    /// what every node did before), `{0.5,0.5}` centre, `{1,1}` bottom-right. Corrects the
+    /// position so the content does not move when the anchor does.
+    Q_INVOKABLE void setNodeAnchor(double x, double y);
 
     Q_PROPERTY(QStringList fitModes READ fitModes CONSTANT)
     [[nodiscard]] QStringList fitModes() const;

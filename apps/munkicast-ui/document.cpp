@@ -887,6 +887,8 @@ QVariantMap Document::nodeProperties() const {
     m["cropBottom"] = n->layout.crop.bottom;
     m["alignX"] = n->layout.alignment.x;
     m["alignY"] = n->layout.alignment.y;
+    m["anchorX"] = n->layout.anchor.x;
+    m["anchorY"] = n->layout.anchor.y;
     m["effectCount"] = static_cast<int>(n->effects.size());
 
     // Audio, for the mixer's selected-node strip. A source node with no bus is unrouted, which is a
@@ -2101,12 +2103,26 @@ constexpr FieldSpec kImage[] = {
 
 constexpr FieldSpec kText[] = {
     {"text", "Text", "multiline"},
-    {"font", "Font", "choice", "Sans"},
+    // "font" draws family, style and a preview as one row. The style is written to `fontStyle`,
+    // which has no spec of its own: it is not separately settable, because the styles a family
+    // has depend on the family and a fixed list would offer faces that do not exist.
+    {"font", "Font", "font", "Sans"},
     {"size", "Size", "int", "", false, 48, "", "px"},
     {"color", "Colour", "colour", "#ffffff"},
-    {"alignment", "Alignment", "choice", "Left", false, 0, "Left|Centre|Right"},
-    {"width", "Output width", "int", "", false, 1920, "", "px"},
-    {"height", "Output height", "int", "", false, 1080, "", "px"},
+    // No width/height: the surface is whatever the laid-out text measures, so the type size is
+    // the only thing that sets scale. A fixed surface meant a text layer drawn larger than it
+    // was scaled up, measured at 3.1x softer glyph edges on a 4K canvas.
+    {"wrap", "Wrap long lines", "bool", "", false},
+    {"wrapAt", "Wrap at", "int", "", false, 0, "", "px"},
+    {"",
+     "Off, the text is one line however long it gets. On, a wrap width of 0 wraps at nothing, "
+     "so set the width you want the lines to break at.",
+     "note"},
+    {"alignment", "Line alignment", "choice", "Left", false, 0, "Left|Centre|Right"},
+    {"",
+     "Which edge the lines line up on, once wrapping has made more than one of them. Where the "
+     "text sits on the canvas is Align, in the node's Layout.",
+     "note"},
 };
 
 constexpr FieldSpec kColour[] = {
@@ -4452,6 +4468,15 @@ void Document::setRecordingDirectory(const QString& outputId, const QString& pat
     setOutputDestination(outputId, QStringLiteral("file"), directory);
 }
 
+QStringList Document::fontStyles(const QString& family) const {
+    auto styles = QFontDatabase::styles(family);
+    // A family Qt does not know returns nothing, and a field with no options cannot be set at
+    // all, so fall back to the one style every face has rather than offering an empty list.
+    if (styles.isEmpty())
+        styles.append(QStringLiteral("Regular"));
+    return styles;
+}
+
 QString Document::recordingDirectory() const {
     for (const auto& output : session_->project().outputs)
         if (output.destination.kind == ldoc::DestinationKind::File &&
@@ -5503,6 +5528,40 @@ void Document::setDrawnRect(double x, double y, double width, double height, boo
     ldoc::Transform t = node->transform;
     t.position = ldoc::Vec2{solved->x, solved->y};
     t.scale = ldoc::Vec2{solved->scale_x, solved->scale_y};
+
+    // Resizing text re-rasterises it rather than magnifying a bitmap. Every other source has a
+    // fixed number of pixels and scaling one is the only thing a handle can mean, but type has
+    // no native size -- it has a size it was asked for -- so magnifying it is the one thing a
+    // handle must not do. Folding the scale into the font size and leaving the scale at 1 makes
+    // the soft result unreachable instead of merely avoidable, and it is what an operator
+    // coming from OBS expects, where the texture is always re-rendered from the font size.
+    //
+    // Uniform only, from the larger of the two factors: a font has one size, so a handle drag
+    // that stretched one axis has no type size to mean. The aspect it does not satisfy is left
+    // to the box and the alignment, which is where a shape belongs.
+    if (const auto* placed = std::get_if<ldoc::SourceData>(&node->data);
+        placed && placed->source && !dragging) {
+        if (const ldoc::Source* src = session_->project().source(*placed->source);
+            src && src->type == "source.text") {
+            const double factor = std::max(std::abs(t.scale.x), std::abs(t.scale.y));
+            const auto current = number_setting(src->settings, "size").value_or(48.0);
+            const double wanted = std::round(current * factor);
+            // Clamped to what the worker will draw (it clamps to 1..1024 itself), and skipped
+            // when the drag did not change the size enough to move the type by a whole pixel --
+            // otherwise a nudge would rewrite the source for no visible gain.
+            const double sized = std::clamp(wanted, 1.0, 1024.0);
+            if (std::abs(sized - current) >= 1.0) {
+                ldoc::Source resized = *src;
+                resized.settings["size"] = static_cast<std::int64_t>(sized);
+                // The sign is the flip and is kept; the magnitude has become the font size.
+                t.scale = ldoc::Vec2{t.scale.x < 0.0 ? -1.0 : 1.0, t.scale.y < 0.0 ? -1.0 : 1.0};
+                run(ldoc::SetSource{std::move(resized)});
+                run(ldoc::SetNodeTransform{scene->id, node->id, t});
+                return;
+            }
+        }
+    }
+
     if (t == node->transform)
         return;
     const ldoc::SetNodeTransform command{scene->id, node->id, t};
@@ -5753,6 +5812,40 @@ void Document::setNodeAlignment(double x, double y) {
         return;
     ldoc::Layout l = n->layout;
     l.alignment = ldoc::Vec2{std::clamp(x, 0.0, 1.0), std::clamp(y, 0.0, 1.0)};
+    run(ldoc::SetNodeLayout{s->id, n->id, l});
+}
+
+void Document::setNodeAnchor(double x, double y) {
+    const ldoc::Scene* s = current_scene();
+    const ldoc::Node* n = current_node();
+    const ldoc::Canvas* c = current_canvas();
+    if (!s || !n || !c)
+        return;
+    const ldoc::Vec2 wanted{std::clamp(x, 0.0, 1.0), std::clamp(y, 0.0, 1.0)};
+    if (wanted == n->layout.anchor)
+        return;
+    // Moving the anchor must not move the content. The position says where the anchor point
+    // sits, so changing which point that is would slide the node by the difference -- not what
+    // an operator picking "centre" is asking for. The position is corrected by the same offset
+    // in the same command, so the node stays exactly where it is and only what it is measured
+    // from changes. Both are one SetNodeLayout plus one SetNodeTransform, so one undo puts both
+    // back.
+    const ldoc::Vec2 space = current_node_space();
+    double natural_w = 0.0;
+    double natural_h = 0.0;
+    const bool have = natural_size(session_->project(), *c, *n, natural_w, natural_h);
+    lcomp::GapReason why = lcomp::GapReason::NoSize;
+    const auto frame = lcomp::drawn_frame(*n, space.x, space.y, natural_w, natural_h, have, why);
+    ldoc::Layout l = n->layout;
+    l.anchor = wanted;
+    // Without a drawn rectangle there is no offset to compensate -- an unplaceable node has no
+    // size yet -- so the anchor is still recorded and the position left alone.
+    if (frame && frame->width > 0.0 && frame->height > 0.0 && space.x > 0.0 && space.y > 0.0) {
+        ldoc::Transform t = n->transform;
+        t.position.x += (wanted.x - n->layout.anchor.x) * frame->width / space.x;
+        t.position.y += (wanted.y - n->layout.anchor.y) * frame->height / space.y;
+        run(ldoc::SetNodeTransform{s->id, n->id, t});
+    }
     run(ldoc::SetNodeLayout{s->id, n->id, l});
 }
 

@@ -103,6 +103,31 @@ Item {
                 onCommitted: newValue => Document.setNodePosition(panel.props.positionX, newValue)
             }
 
+            // Which point of the node the X and Y above locate. Two dropdowns rather than nine
+            // buttons: the horizontal and the vertical are independent choices, and a grid of
+            // nine would still have to say which cell means what.
+            ChoiceField {
+                width: parent.width
+                objectName: "anchorH"
+                label: qsTr("Anchor")
+                choices: ["0", "0.5", "1"]
+                choiceLabels: ({"0": qsTr("Left"), "0.5": qsTr("Centre"), "1": qsTr("Right")})
+                value: panel.hasNode ? String(panel.props.anchorX) : "0"
+                onCommitted: newValue =>
+                    Document.setNodeAnchor(Number(newValue), panel.props.anchorY)
+            }
+
+            ChoiceField {
+                width: parent.width
+                objectName: "anchorV"
+                label: qsTr("")
+                choices: ["0", "0.5", "1"]
+                choiceLabels: ({"0": qsTr("Top"), "0.5": qsTr("Middle"), "1": qsTr("Bottom")})
+                value: panel.hasNode ? String(panel.props.anchorY) : "0"
+                onCommitted: newValue =>
+                    Document.setNodeAnchor(panel.props.anchorX, Number(newValue))
+            }
+
             NumberField {
                 width: parent.width
                 label: qsTr("Scale X")
@@ -153,7 +178,7 @@ Item {
                 width: parent.width
                 wrapMode: Text.WordWrap
                 visible: panel.hasNode && panel.props.fit === "natural"
-                text: qsTr("Natural size: the box takes the source's own dimensions and no fitting happens.")
+                text: qsTr("Natural size: the source is drawn at its own dimensions and placed in the box by the alignment below. A box of 0 means the source's own size.")
                 font.pixelSize: 9
                 color: Theme.c.textMuted
                 topPadding: 2
@@ -164,7 +189,11 @@ Item {
                 width: parent.width
                 label: qsTr("Box W")
                 decimals: 0
-                enabled: panel.hasNode && panel.props.fit !== "natural"
+                // Enabled for Natural as well. Natural no longer means "no box": it draws the
+                // content at its own size and aligns it inside whatever box there is, so a box
+                // is how a caption gets room to sit against an edge. Zero still means "the
+                // content's own size", which is the no-box case.
+                enabled: panel.hasNode
                 value: panel.hasNode ? panel.props.boxWidth : 0
                 onCommitted: newValue => Document.setNodeBoxSize(newValue, panel.props.boxHeight)
             }
@@ -173,9 +202,34 @@ Item {
                 width: parent.width
                 label: qsTr("Box H")
                 decimals: 0
-                enabled: panel.hasNode && panel.props.fit !== "natural"
+                enabled: panel.hasNode
                 value: panel.hasNode ? panel.props.boxHeight : 0
                 onCommitted: newValue => Document.setNodeBoxSize(panel.props.boxWidth, newValue)
+            }
+
+            // Which edge of the content meets which edge of the box: left to left, centre to
+            // centre, right to right. Only does anything when the box is bigger than the
+            // content, which is what the note above says.
+            ChoiceField {
+                width: parent.width
+                objectName: "alignH"
+                label: qsTr("Align")
+                choices: ["0", "0.5", "1"]
+                choiceLabels: ({"0": qsTr("Left"), "0.5": qsTr("Centre"), "1": qsTr("Right")})
+                value: panel.hasNode ? String(panel.props.alignX) : "0.5"
+                onCommitted: newValue =>
+                    Document.setNodeAlignment(Number(newValue), panel.props.alignY)
+            }
+
+            ChoiceField {
+                width: parent.width
+                objectName: "alignV"
+                label: qsTr("")
+                choices: ["0", "0.5", "1"]
+                choiceLabels: ({"0": qsTr("Top"), "0.5": qsTr("Middle"), "1": qsTr("Bottom")})
+                value: panel.hasNode ? String(panel.props.alignY) : "0.5"
+                onCommitted: newValue =>
+                    Document.setNodeAlignment(panel.props.alignX, Number(newValue))
             }
 
             NumberField {
