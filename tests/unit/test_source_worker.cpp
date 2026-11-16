@@ -163,11 +163,8 @@ LTEST_CASE(fixed_width_holds_a_timer_still_on_a_face_with_uneven_digits) {
 /// The levelled digits reach the glyphs, not just the measurement.
 ///
 /// The measurement test above passed throughout a bug where no caption was ever levelled: the
-/// drawing had a guard meant to skip wrapped prose, and it compared the laid-out height against
-/// the nominal line height. Those differ by a pixel or two for a single line, because the
-/// surface is measured from `boundingRect` and that includes bearing -- so every caption took
-/// the wrapped path. The surface was the right size and the digits inside it were not spaced.
-/// This looks at the published pixels, which is the only thing that could have caught it.
+/// surface was the right size and the digits inside it were not spaced. Only the published
+/// pixels could have caught that, so this reads them.
 LTEST_CASE(fixed_width_actually_spaces_the_drawn_digits) {
     const MeasuringApp gui;
     QString uneven;
@@ -182,23 +179,13 @@ LTEST_CASE(fixed_width_actually_spaces_the_drawn_digits) {
             widest = std::max(widest, metrics.horizontalAdvance(QLatin1Char(digit)));
         if (!(one > 0 && widest > one + widest / 4))
             continue;
-        // Both conditions, not just the uneven digits. The guard this covers only misfires when
-        // a single line lays out taller than the nominal line height, and on many faces those
-        // two numbers are equal -- on such a face the broken guard behaves correctly and the
-        // test proves nothing. Checked: picking merely the first uneven family chose one where
-        // they matched, and the mutation survived.
-        const QRect laid = metrics.boundingRect(QRect(0, 0, 4096, 4096),
-                                                Qt::AlignTop | Qt::AlignLeft, "00:11");
-        if (laid.height() <= metrics.height())
-            continue;
         uneven = family;
         narrow = one;
         wide = widest;
         break;
     }
     if (uneven.isEmpty()) {
-        CHECK_MSG(true, "no installed face both draws a narrow '1' and lays out taller than "
-                        "its line height; nothing here to measure");
+        CHECK_MSG(true, "no installed face draws '1' much narrower than its widest digit");
         return;
     }
 

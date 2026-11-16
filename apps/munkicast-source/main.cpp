@@ -349,8 +349,8 @@ class Content : public QObject {
     }
 
     /// Draw a caption giving every digit the same advance, so a clock does not move as its
-    /// digits change. Only when the operator ticked "Force fixed-width digits", and only while
-    /// the timer is counting -- an end message has no ticking digits.
+    /// digits change. Only when the operator ticked "Force fixed-width", and only while the
+    /// timer is counting -- an end message has no ticking digits.
     ///
     /// A proportional face draws "1" narrower than "8", and most of the faces actually
     /// installed on a Linux box -- Liberation Sans among them -- carry no `tnum` table to ask
@@ -358,26 +358,8 @@ class Content : public QObject {
     /// width of the widest digit in this face and centred in it, while everything that is not
     /// a digit keeps its natural advance. Nothing is required of the font.
     ///
-    /// Single-line only, which is what a countdown is. Anything with a newline in it falls back
-    /// to ordinary layout, because wrapping is Qt's job and not worth reimplementing here.
     static void draw_levelled_digits(QPainter& painter, const QRect& box, int flags,
                                        const QString& text) {
-        const QFontMetrics first(painter.font());
-        // Only a caption that stays on one line is laid out by hand. An end message is prose
-        // that wraps, and wrapping is Qt's job; it also has no digits ticking in it, so there
-        // is nothing here for it to gain.
-        //
-        // Counted in lines, not compared in pixels. Comparing the laid-out height against
-        // `height()` looks equivalent and is not: the surface is measured from `boundingRect`,
-        // which includes the font's bearing, so a single line routinely lays out a pixel or two
-        // taller than the nominal line height. Measured on Durandal at 120px, 155 against 154 --
-        // enough for every caption to take the wrapped path and never have its digits levelled,
-        // which is exactly what "fixed width does nothing" turned out to be.
-        const int laid_out = first.boundingRect(box, flags, text).height();
-        if (text.contains(QLatin1Char('\n')) || laid_out >= first.lineSpacing() * 2) {
-            painter.drawText(box, flags, text);
-            return;
-        }
         const QFontMetrics metrics = painter.fontMetrics();
         // The same cell the surface was measured with, from the same function, so the drawing
         // cannot be wider than the surface it is drawn into.

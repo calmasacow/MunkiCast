@@ -104,9 +104,8 @@ inline QRect text_bounds(const ldoc::ParamMap& settings, const QFont& font, cons
     const int measured_flags = (text_flags(settings) & ~Qt::AlignHorizontal_Mask) | Qt::AlignLeft;
     QRect needed = metrics.boundingRect(QRect(0, 0, limit, kMaxTextSurface), measured_flags, text);
     // Levelled digits lay out wider than Qt's own advances for a proportional face, so measuring
-    // with Qt's alone would clip them. Only when the operator asked for levelling, and only on a
-    // single line -- wrapping is Qt's job and a wrapped timer has no ticking digits to steady.
-    if (fixed_digits && !text.contains(QLatin1Char('\n'))) {
+    // with Qt's alone would clip them.
+    if (fixed_digits) {
         const int cell = digit_cell(font);
         int total = 0;
         for (const QChar c : text)
