@@ -500,6 +500,21 @@ int main(int argc, char** argv) {
                                labelled(QStringLiteral("sourceAnchorV"),
                                         QStringLiteral("Anchor V")),
                            "the text settings page carries both anchor axes itself");
+                    // The anchor is applied immediately to the nodes, so the field has to show
+                    // the new choice straight away. It used to snap back to the old one and only
+                    // read correctly after the dialog was closed and reopened.
+                    const auto shown = [&](const QString& name) {
+                        for (auto* field : collect(window->contentItem(), name))
+                            if (field->isVisible())
+                                return field->property("value").toString();
+                        return QString{};
+                    };
+                    QMetaObject::invokeMethod(dialog, "setAnchor", Q_ARG(QVariant, 1.0),
+                                              Q_ARG(QVariant, 1.0));
+                    pump();
+                    report(shown(QStringLiteral("sourceAnchorH")) == QStringLiteral("1") &&
+                               shown(QStringLiteral("sourceAnchorV")) == QStringLiteral("1"),
+                           "and both fields show a new anchor without being reopened");
                     if (parser.isSet(shot_opt)) {
                         QDir().mkpath(parser.value(shot_opt));
                         window->grabWindow().save(parser.value(shot_opt) +

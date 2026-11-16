@@ -97,6 +97,14 @@ Item {
         dialog.refreshPreview();
     }
 
+    // The anchor is the node's, applied immediately, so our copy of `details` goes stale the
+    // moment we write one -- and `value` is bound to that copy, so the field snapped back to the
+    // old choice until the dialog was reopened. Re-read after writing.
+    function setAnchor(x, y) {
+        Document.setSourceAnchor(dialog.sourceId, x, y);
+        dialog.details = Document.sourceDetails(dialog.sourceId);
+    }
+
     function close() {
         dialog.visible = false;
         dialog.sourceId = "";
@@ -512,9 +520,8 @@ Item {
                         choices: ["0", "0.5", "1"]
                         choiceLabels: ({"0": qsTr("Left"), "0.5": qsTr("Centre"), "1": qsTr("Right")})
                         value: dialog.known ? String(dialog.details.anchorX) : "0"
-                        onCommitted: newValue => Document.setSourceAnchor(
-                            dialog.sourceId, Number(newValue),
-                            dialog.known ? dialog.details.anchorY : 0)
+                        onCommitted: newValue => dialog.setAnchor(
+                            Number(newValue), dialog.known ? dialog.details.anchorY : 0)
                     }
 
                     ChoiceField {
@@ -528,9 +535,8 @@ Item {
                         choices: ["0", "0.5", "1"]
                         choiceLabels: ({"0": qsTr("Top"), "0.5": qsTr("Middle"), "1": qsTr("Bottom")})
                         value: dialog.known ? String(dialog.details.anchorY) : "0"
-                        onCommitted: newValue => Document.setSourceAnchor(
-                            dialog.sourceId, dialog.known ? dialog.details.anchorX : 0,
-                            Number(newValue))
+                        onCommitted: newValue => dialog.setAnchor(
+                            dialog.known ? dialog.details.anchorX : 0, Number(newValue))
                     }
 
                     Text {
