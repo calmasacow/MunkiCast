@@ -59,21 +59,34 @@ Item {
         // One column per figure, built from the same two-line shape so adding a figure later
         // costs a line. Machine load lives here rather than in Broadcast Stats because an
         // operator wants to see a core saturating without opening a panel to look for it.
-        component Gauge: Column {
+        // An Item wrapping the column, not the column itself. A Column refuses to position a
+        // child that anchors to it, and the two gauges carrying a hover MouseArea did exactly
+        // that -- "Column will not function", logged on every telemetry tick. The stack is an
+        // inner Column that nothing anchors to, so a MouseArea can fill the gauge.
+        component Gauge: Item {
             required property string label
             required property string value
-            spacing: 1
 
-            Text {
-                text: parent.value
-                font.pixelSize: 12
-                color: "#7AA2F7"
-            }
+            implicitWidth: stack.implicitWidth
+            implicitHeight: stack.implicitHeight
 
-            Text {
-                text: parent.label
-                font.pixelSize: 9
-                color: Theme.c.textMuted
+            Column {
+                id: stack
+
+                anchors.fill: parent
+                spacing: 1
+
+                Text {
+                    text: parent.parent.value
+                    font.pixelSize: 12
+                    color: "#7AA2F7"
+                }
+
+                Text {
+                    text: parent.parent.label
+                    font.pixelSize: 9
+                    color: Theme.c.textMuted
+                }
             }
         }
 

@@ -349,7 +349,8 @@ class Content : public QObject {
     }
 
     /// Draw a caption giving every digit the same advance, so a clock does not move as its
-    /// digits change.
+    /// digits change. Only when the operator ticked "Force fixed-width digits", and only while
+    /// the timer is counting -- an end message has no ticking digits.
     ///
     /// A proportional face draws "1" narrower than "8", and most of the faces actually
     /// installed on a Linux box -- Liberation Sans among them -- carry no `tnum` table to ask
@@ -359,7 +360,7 @@ class Content : public QObject {
     ///
     /// Single-line only, which is what a countdown is. Anything with a newline in it falls back
     /// to ordinary layout, because wrapping is Qt's job and not worth reimplementing here.
-    static void draw_monospaced_digits(QPainter& painter, const QRect& box, int flags,
+    static void draw_levelled_digits(QPainter& painter, const QRect& box, int flags,
                                        const QString& text) {
         const QFontMetrics first(painter.font());
         // Only a caption that fits on one line is laid out by hand. An end message is prose
@@ -371,9 +372,9 @@ class Content : public QObject {
             return;
         }
         const QFontMetrics metrics = painter.fontMetrics();
-        int cell = 0;
-        for (char digit = '0'; digit <= '9'; ++digit)
-            cell = std::max(cell, metrics.horizontalAdvance(QLatin1Char(digit)));
+        // The same cell the surface was measured with, from the same function, so the drawing
+        // cannot be wider than the surface it is drawn into.
+        const int cell = lcomp::digit_cell(painter.font());
         int total = 0;
         for (const QChar c : text)
             total += c.isDigit() ? cell : metrics.horizontalAdvance(c);
@@ -393,7 +394,8 @@ class Content : public QObject {
     }
 
     void draw_text() {
-        auto label = text("text");
+        const std::int64_t now = countdown_epoch_ + countdown_clock_.elapsed();
+        const bool counting = flag("countdown.enabled", false);
         QColor colour(Qt::white);
         auto it = source_.settings.find("color");
         if (it != source_.settings.end())
@@ -401,35 +403,30 @@ class Content : public QObject {
                 auto bytes = rgba->to_srgb8();
                 colour = QColor(bytes[0], bytes[1], bytes[2], bytes[3]);
             }
-        if (flag("countdown.enabled", false)) {
-            const auto value = lcomp::countdown(source_.settings,
-                                                countdown_epoch_ + countdown_clock_.elapsed());
-            label = value.text;
+        if (counting) {
+            const auto value = lcomp::countdown(source_.settings, now);
             // A colour rule overrides the source's own colour, which is what makes "red under
-            // ten seconds" mean anything.
+            // ten seconds" mean anything. This and the string are the whole of what a countdown
+            // changes about a text source -- the face, the size, the spacing and the layout all
+            // come from the text source itself.
             if (value.has_colour) {
                 const auto bytes = value.colour.to_srgb8();
                 colour = QColor(bytes[0], bytes[1], bytes[2], bytes[3]);
             }
-            if (label == countdown_last_) return;
-            countdown_last_ = label;
+            if (value.text == countdown_last_) return;
+            countdown_last_ = value.text;
         }
         // The surface is whatever the laid-out text measures, not a fixed resolution the
         // operator also has to set. A text layer drawn larger than a fixed surface was scaled
         // up, which measured 3.1x softer glyph edges at 4K (4.24 px against 1.35) -- and the
         // softness followed the surface-to-drawn ratio, so it was there at every type size.
-        // Sizing the surface to the text removes the upscale instead of papering over it, and
-        // matches what an operator coming from OBS expects: type size is the only control,
-        // and the texture follows it.
         //
         // Measured in `lcomp::text_surface` rather than here, because the shell has to put
         // selection handles around this same rectangle and a second copy of the measurement is
-        // a second answer. When the two disagreed the handles sat in the middle of the canvas
-        // while the glyphs were somewhere else.
-        const auto surface = lcomp::text_surface(source_.settings);
-        const bool counting = flag("countdown.enabled", false);
+        // a second answer.
+        const auto surface = lcomp::text_surface(source_.settings, now);
+        const QString drawn = lcomp::text_shown(source_.settings, now);
         const int flags = lcomp::text_flags(source_.settings);
-        const QString drawn = QString::fromStdString(label);
         QImage image(surface.bounds.size(), QImage::Format_RGBA8888);
         image.fill(Qt::transparent);
         QPainter painter(&image);
@@ -440,8 +437,8 @@ class Content : public QObject {
         // otherwise have its first glyph clipped by exactly that much.
         const QRect box(-surface.bounds.left(), -surface.bounds.top(), surface.bounds.width(),
                         surface.bounds.height());
-        if (counting)
-            draw_monospaced_digits(painter, box, flags, drawn);
+        if (surface.fixed_digits)
+            draw_levelled_digits(painter, box, flags, drawn);
         else
             painter.drawText(box, flags, drawn);
         painter.end();

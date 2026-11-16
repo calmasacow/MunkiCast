@@ -442,21 +442,21 @@ LTEST_CASE(countdown_text_worker_draws_running_and_paused_timer) {
     REQUIRE(!capture(src).empty());
 }
 
-LTEST_CASE(countdown_digits_keep_their_place_as_the_time_changes) {
-    // A clock must not move while it runs. Two things used to make it: a proportional "1" is
-    // narrower than an "8", and the shrink-to-fit was measured against the current caption, so
-    // a narrower one picked a bigger size. Both are settled per configure now, so the ink keeps
-    // the same extent whatever the digits say.
-    const auto extent = [](const char* elapsed_from, std::int64_t elapsed) {
+LTEST_CASE(countdown_digits_keep_their_place_only_when_fixed_width_is_asked_for) {
+    // A proportional "1" is narrower than an "8", so a running clock shuffles as the digits
+    // change. Levelling the digit advances stops that -- but it is a departure from the face
+    // the operator chose, so it is a checkbox rather than something a countdown does to its
+    // text by itself. Both halves of that switch are checked here: without the flag the text
+    // behaves like any other text, with it the ink keeps its extent.
+    const auto extent = [](std::int64_t elapsed, bool fixed) {
         auto src = source("source.text");
-        src.settings["width"] = std::int64_t{128};
-        src.settings["height"] = std::int64_t{48};
         src.settings["size"] = std::int64_t{32};
         src.settings["countdown.enabled"] = true;
         src.settings["countdown.periodMinutes"] = std::int64_t{18};
         src.settings["countdown.periodSeconds"] = std::int64_t{51};
         src.settings["countdown.elapsedMs"] = elapsed;
-        (void)elapsed_from;
+        if (fixed)
+            src.settings["countdown.fixedWidth"] = true;
         auto frames = capture(src);
         REQUIRE(!frames.empty());
         const auto& pixels = frames.front().pixels;
@@ -474,52 +474,67 @@ LTEST_CASE(countdown_digits_keep_their_place_as_the_time_changes) {
                 }
         return std::array<int, 4>{left, right, top, bottom};
     };
-    // "18:51" against "11:11": same digit count, but all-ones is the narrowest a
-    // proportional face draws.
-    const auto eights = extent("18:51", 0);
-    const auto ones = extent("11:11", 460000);
+    // "18:51" against "11:11": same digit count, but all-ones is the narrowest a proportional
+    // face draws.
+    const auto eights = extent(0, true);
+    const auto ones = extent(460000, true);
     // Same baseline and same cap height: the caption is not being re-sized.
     CHECK_EQ(eights[2], ones[2]);
     CHECK_EQ(eights[3], ones[3]);
     // Same starting edge, and the same total width to within a pixel of hinting.
     CHECK_EQ(eights[0], ones[0]);
-    CHECK(std::abs((eights[1] - eights[0]) - (ones[1] - ones[0])) <= 1);
+    CHECK_MSG(std::abs((eights[1] - eights[0]) - (ones[1] - ones[0])) <= 1,
+              "with fixed width on, '18:51' inked {}px and '11:11' inked {}px",
+              eights[1] - eights[0], ones[1] - ones[0]);
+
+    // Off, which is the default: the timer is ordinary text, so the narrower caption is
+    // narrower. Asserted rather than merely allowed, because "the flag does nothing" would
+    // otherwise pass the half of this test above.
+    const auto loose_eights = extent(0, false);
+    const auto loose_ones = extent(460000, false);
+    CHECK_MSG((loose_ones[1] - loose_ones[0]) < (loose_eights[1] - loose_eights[0]),
+              "without fixed width, '11:11' should ink narrower than '18:51'; got {}px and {}px",
+              loose_ones[1] - loose_ones[0], loose_eights[1] - loose_eights[0]);
 }
 
-LTEST_CASE(countdown_end_message_is_shrunk_to_fit_rather_than_cropped) {
-    // The source is sized for the digits it normally shows, so a wordy end message is routinely
-    // wider than the box. It must be made to fit rather than run off the edge.
-    auto src = source("source.text");
-    src.settings["width"] = std::int64_t{96};
-    src.settings["height"] = std::int64_t{32};
-    src.settings["size"] = std::int64_t{28};
-    src.settings["countdown.enabled"] = true;
-    src.settings["countdown.periodSeconds"] = std::int64_t{0};
-    src.settings["countdown.showEndMessage"] = true;
-    src.settings["countdown.endMessage"] = std::string("WE WILL BE RIGHT BACK");
-    auto frames = capture(src);
-    REQUIRE(!frames.empty());
-    const auto& pixels = frames.front().pixels;
-    const int width = frames.front().width;
-    const int height = static_cast<int>(pixels.size() / 4) / width;
-    REQUIRE(height > 0);
-    const auto inked = [&](int x, int y) {
-        return pixels[(static_cast<std::size_t>(y) * static_cast<std::size_t>(width) +
-                       static_cast<std::size_t>(x)) *
-                          4 +
-                      3] > 0;
+LTEST_CASE(a_countdown_surface_follows_the_caption_on_screen) {
+    // The surface used to be measured against the widest caption the timer would ever produce,
+    // so it stayed the same size as the digits ticked. That made the layer bigger than its text
+    // at every other moment -- and because the node's anchor acts on the layer, anchoring a
+    // timer appeared to do nothing. The surface now follows the caption, so a long end message
+    // gets a wider layer rather than smaller type, and the digits get a layer their own size.
+    const auto published = [](const char* message, std::int64_t elapsed) {
+        auto src = source("source.text");
+        src.settings["size"] = std::int64_t{28};
+        src.settings["countdown.enabled"] = true;
+        src.settings["countdown.periodSeconds"] = std::int64_t{30};
+        src.settings["countdown.elapsedMs"] = elapsed;
+        src.settings["countdown.showEndMessage"] = true;
+        src.settings["countdown.endMessage"] = std::string(message);
+        auto frames = capture(src);
+        REQUIRE(!frames.empty());
+        return frames.front().width;
     };
-    bool any = false, touches_edge = false;
-    for (int y = 0; y < height; ++y)
-        for (int x = 0; x < width; ++x)
-            if (inked(x, y)) {
-                any = true;
-                // Ink in the last column or row means the glyphs ran out of the box.
-                if (x == width - 1 || y == height - 1)
-                    touches_edge = true;
-            }
-    CHECK(any);
-    CHECK(!touches_edge);
+    const auto counting = published("WE WILL BE RIGHT BACK", 0);
+    const auto ended = published("WE WILL BE RIGHT BACK", 30000);
+    CHECK_MSG(ended > counting,
+              "the end message is far longer than '00:30', so its layer should be wider; "
+              "counting published {}px and ended published {}px",
+              counting, ended);
+
+    // And the type is not shrunk to reach that: the same message at twice the size is wider.
+    auto big = source("source.text");
+    big.settings["size"] = std::int64_t{56};
+    big.settings["countdown.enabled"] = true;
+    big.settings["countdown.periodSeconds"] = std::int64_t{30};
+    big.settings["countdown.elapsedMs"] = std::int64_t{30000};
+    big.settings["countdown.showEndMessage"] = true;
+    big.settings["countdown.endMessage"] = std::string("WE WILL BE RIGHT BACK");
+    auto frames = capture(big);
+    REQUIRE(!frames.empty());
+    CHECK_MSG(static_cast<int>(frames.front().width) > ended,
+              "56px should lay out wider than 28px; got {}px against {}px",
+              frames.front().width, ended);
 }
 
 LTEST_CASE(countdown_colour_rule_reaches_the_drawn_pixels) {

@@ -290,6 +290,22 @@ Window {
                     font.pixelSize: 10
                     color: Theme.c.textMuted
                 }
+                // The one thing a timer is allowed to change about how its text looks, and it
+                // is off unless asked for. Everything else -- face, size, colour, alignment --
+                // comes from the text source, because a timer that restyled its own text made
+                // the source's own settings look broken.
+                CheckLabel {
+                    text: qsTr("Force fixed-width")
+                    checked: dialog.field("fixedWidth", false)
+                    onToggled: dialog.edit("fixedWidth", !checked)
+                }
+                Text {
+                    width: parent.width
+                    text: qsTr("Gives every digit the same width, so the clock does not shuffle as the numbers change. Needed for a proportional face; a monospaced one already does this. Applies while counting, not to the end message.")
+                    wrapMode: Text.WordWrap
+                    font.pixelSize: 10
+                    color: Theme.c.textMuted
+                }
             }
 
             Section {

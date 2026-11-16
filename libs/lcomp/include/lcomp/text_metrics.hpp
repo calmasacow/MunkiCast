@@ -40,11 +40,23 @@ inline QFont text_font(const ldoc::ParamMap& settings) {
         font.setStyleName(QString::fromStdString(style));
     font.setPixelSize(static_cast<int>(
         std::clamp(timer_number(settings, "size", 48), std::int64_t{1}, std::int64_t{1024})));
-    if (timer_flag(settings, "countdown.enabled")) {
-        font.setFeature(QFont::Tag("tnum"), 1);
-        font.setFeature(QFont::Tag("lnum"), 1);
-    }
     return font;
+}
+
+/// Whether the digits of a ticking counter are given a common width.
+///
+/// A timer is the one case where the text changes by itself, and in a proportional face a "1"
+/// is narrower than an "8", so "18:88" ticking to "11:11" moves the glyphs about. Levelling the
+/// digits stops that -- but it is a deliberate departure from the face the operator chose, so it
+/// is a checkbox and not a guess: a monospaced face needs it least and a face with real tabular
+/// figures needs it not at all, and neither can be detected reliably enough to decide silently.
+///
+/// Everything else about how a text source looks comes from the text source. This is the only
+/// thing a countdown is allowed to change, and only while it is counting: once the end message
+/// is on screen there are no ticking digits, so it stops applying.
+inline bool fixed_width_digits(const ldoc::ParamMap& settings, bool ended) {
+    return timer_flag(settings, "countdown.enabled") && !ended &&
+           timer_flag(settings, "countdown.fixedWidth");
 }
 
 /// The Qt draw flags for these settings. Horizontal alignment is justification *between* lines
@@ -69,7 +81,20 @@ inline int text_flags(const ldoc::ParamMap& settings) {
 ///
 /// `left()`/`top()` can be non-zero -- a face with a negative left bearing has its first glyph
 /// outside the box -- so a caller painting into a surface of this size offsets its origin by them.
-inline QRect text_bounds(const ldoc::ParamMap& settings, const QFont& font, const QString& text) {
+/// The common advance given to every digit when fixed width is on, or 0 when it is off.
+///
+/// The widest digit in the face, so nothing is squeezed: a narrow digit is centred in the cell
+/// rather than the wide one being cramped into it.
+inline int digit_cell(const QFont& font) {
+    const QFontMetrics metrics(font);
+    int cell = 0;
+    for (char digit = '0'; digit <= '9'; ++digit)
+        cell = std::max(cell, metrics.horizontalAdvance(QLatin1Char(digit)));
+    return cell;
+}
+
+inline QRect text_bounds(const ldoc::ParamMap& settings, const QFont& font, const QString& text,
+                         bool fixed_digits = false) {
     const QFontMetrics metrics(font);
     const auto wrap_at = timer_flag(settings, "wrap")
                              ? std::clamp(timer_number(settings, "wrapAt"), std::int64_t{0},
@@ -78,12 +103,11 @@ inline QRect text_bounds(const ldoc::ParamMap& settings, const QFont& font, cons
     const int limit = wrap_at > 0 ? static_cast<int>(wrap_at) : kMaxTextSurface;
     const int measured_flags = (text_flags(settings) & ~Qt::AlignHorizontal_Mask) | Qt::AlignLeft;
     QRect needed = metrics.boundingRect(QRect(0, 0, limit, kMaxTextSurface), measured_flags, text);
-    // A countdown is drawn with fixed-advance digits, which is wider than Qt's own layout for a
-    // proportional face, so measuring with Qt's alone would clip the digits.
-    if (timer_flag(settings, "countdown.enabled") && !text.contains(QLatin1Char('\n'))) {
-        int cell = 0;
-        for (char digit = '0'; digit <= '9'; ++digit)
-            cell = std::max(cell, metrics.horizontalAdvance(QLatin1Char(digit)));
+    // Levelled digits lay out wider than Qt's own advances for a proportional face, so measuring
+    // with Qt's alone would clip them. Only when the operator asked for levelling, and only on a
+    // single line -- wrapping is Qt's job and a wrapped timer has no ticking digits to steady.
+    if (fixed_digits && !text.contains(QLatin1Char('\n'))) {
+        const int cell = digit_cell(font);
         int total = 0;
         for (const QChar c : text)
             total += c.isDigit() ? cell : metrics.horizontalAdvance(c);
@@ -92,31 +116,18 @@ inline QRect text_bounds(const ldoc::ParamMap& settings, const QFont& font, cons
     return needed;
 }
 
-/// The string a text source lays itself out against: the widest the caption will ever be, not
-/// the one showing right now. A ticking timer whose surface followed the current digits would
-/// resize the caption under the viewer every time the width changed.
-inline QString text_widest(const ldoc::ParamMap& settings) {
+/// What a text source lays itself out against: the string on screen, nothing else.
+///
+/// A countdown used to be measured against the widest caption it would ever produce, so that a
+/// ticking surface never resized. That made the surface bigger than the text at every other
+/// moment, and since the node's anchor acts on the surface, the text floated inside a box that
+/// was not its size -- which is why anchoring a timer appeared to do nothing at all. The timer
+/// is allowed to change the string and, when asked, the width of its digits. It is not allowed
+/// to change the size of the layer.
+inline QString text_shown(const ldoc::ParamMap& settings, std::int64_t now = 0) {
     if (!timer_flag(settings, "countdown.enabled"))
         return QString::fromStdString(timer_text(settings, "text"));
-    auto probe = settings;
-    probe["countdown.running"] = false;
-    probe["countdown.elapsedMs"] = std::int64_t{0};
-    QString widest;
-    const auto consider = [&](const std::string& candidate) {
-        const auto value = QString::fromStdString(candidate);
-        if (value.size() > widest.size())
-            widest = value;
-    };
-    // The full period, one tick in, and the end -- which covers the widest the digits get and
-    // the end message, whichever is longer. Asking the formatter beats reasoning about digit
-    // counts, because the format string and the display-unit checkboxes are accounted for
-    // without this having to know how either works.
-    consider(countdown(probe, 0).text);
-    probe["countdown.elapsedMs"] = std::int64_t{1000};
-    consider(countdown(probe, 0).text);
-    probe["countdown.elapsedMs"] = countdown_period_ms(probe);
-    consider(countdown(probe, 0).text);
-    return widest;
+    return QString::fromStdString(countdown(settings, now).text);
 }
 
 /// The surface a text source draws onto, and the font it draws with.
@@ -127,19 +138,26 @@ inline QString text_widest(const ldoc::ParamMap& settings) {
 /// or it will paint at a size the surface was not measured for.
 struct TextSurface {
     QFont font;
-    QRect bounds; ///< `size()` is the surface; `topLeft()` is the bearing offset.
+    QRect bounds;      ///< `size()` is the surface; `topLeft()` is the bearing offset.
+    bool fixed_digits = false; ///< Whether this was laid out with levelled digit advances.
 };
 
-inline TextSurface text_surface(const ldoc::ParamMap& settings) {
-    TextSurface out{text_font(settings), {}};
-    const QString widest = text_widest(settings);
-    out.bounds = text_bounds(settings, out.font, widest);
+/// `now` is the countdown clock; it is ignored by a plain text source. The shell passes 0, which
+/// measures the timer at its starting value -- the selection handles then track the published
+/// frames as they tick, because the worker republishes a resized surface each time.
+inline TextSurface text_surface(const ldoc::ParamMap& settings, std::int64_t now = 0) {
+    const QString shown = text_shown(settings, now);
+    const bool ended = timer_flag(settings, "countdown.enabled")
+                           ? countdown(settings, now).ended
+                           : false;
+    TextSurface out{text_font(settings), {}, fixed_width_digits(settings, ended)};
+    out.bounds = text_bounds(settings, out.font, shown, out.fixed_digits);
     for (int size = out.font.pixelSize();
          size > 6 &&
          (out.bounds.height() > kMaxTextSurface || out.bounds.width() > kMaxTextSurface);
          size = size * 9 / 10) {
         out.font.setPixelSize(size * 9 / 10);
-        out.bounds = text_bounds(settings, out.font, widest);
+        out.bounds = text_bounds(settings, out.font, shown, out.fixed_digits);
     }
     out.bounds.setWidth(std::max(1, out.bounds.width()));
     out.bounds.setHeight(std::max(1, out.bounds.height()));

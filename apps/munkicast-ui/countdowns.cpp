@@ -77,7 +77,7 @@ constexpr bool countdown_is_flag(std::string_view key) {
            key == "showSeconds" || key == "leadingZero" || key == "showEndMessage" ||
            key == "showEndScene" || key == "countUp" || key == "steady" ||
            key == "useFormattedOutput" || key == "useTextColour" ||
-           key == "startOnStreamStart" || key == "resetOnStreamStart";
+           key == "startOnStreamStart" || key == "resetOnStreamStart" || key == "fixedWidth";
 }
 
 } // namespace
