@@ -913,6 +913,10 @@ QVariantMap Document::nodeProperties() const {
         // What the settings dialog is opened against. Empty when the node is bound to nothing,
         // which is what disables the gear rather than opening an empty panel.
         m["sourceId"] = placed->source ? id_str(*placed->source) : QString{};
+        // The type, so a panel can hide a control that means nothing for this kind of node.
+        // Text is the case: its surface is exactly the laid-out glyphs, so a fit mode and a box
+        // have nothing to act on.
+        m["sourceType"] = src ? qstr(src->type) : QString{};
         m["audioBus"] = placed->audio.bus ? id_str(*placed->audio.bus) : QString{};
         m["audioGain"] = placed->audio.gain_db;
         m["audioMute"] = placed->audio.mute;
@@ -930,6 +934,7 @@ QVariantMap Document::nodeProperties() const {
     } else {
         m["hasAudio"] = false;
         m["sourceId"] = QString{};
+        m["sourceType"] = QString{};
     }
     return m;
 }
@@ -2131,8 +2136,7 @@ constexpr FieldSpec kText[] = {
      "note"},
     {"alignment", "Line alignment", "choice", "Left", false, 0, "Left|Centre|Right"},
     {"",
-     "Which edge the lines line up on, once wrapping has made more than one of them. Where the "
-     "text sits on the canvas is Align, in the node's Layout.",
+     "Which edge the lines line up on, once wrapping has made more than one of them.",
      "note"},
 };
 
@@ -2858,6 +2862,26 @@ QVariantMap Document::sourceDetails(const QString& id) const {
     }
     m["settings"] = settings;
     m["fieldCount"] = static_cast<int>(settings.size());
+    // The anchor of the nodes drawing this source, so the settings page can show it. It lives on
+    // the node, not the source, and the page edits all of them at once -- so the value shown is
+    // the first node's, and "mixed" is reported when they disagree rather than one node's
+    // setting being presented as everyone's.
+    const ldoc::Project& p = session_->project();
+    std::optional<ldoc::Vec2> common;
+    bool mixed = false;
+    for (const ldoc::Scene& scene : p.scenes)
+        ldoc::visit(scene.roots, [&](const ldoc::Node& node) {
+            const auto* placed = std::get_if<ldoc::SourceData>(&node.data);
+            if (!placed || !placed->source || *placed->source != src->id)
+                return;
+            if (!common)
+                common = node.layout.anchor;
+            else if (!(*common == node.layout.anchor))
+                mixed = true;
+        });
+    m["anchorX"] = common ? common->x : 0.0;
+    m["anchorY"] = common ? common->y : 0.0;
+    m["anchorMixed"] = mixed;
     return m;
 }
 
@@ -5858,6 +5882,58 @@ void Document::setNodeAnchor(double x, double y) {
         run(ldoc::SetNodeTransform{s->id, n->id, t});
     }
     run(ldoc::SetNodeLayout{s->id, n->id, l});
+}
+
+/// The anchor for every node drawing this source, as one undo step.
+///
+/// The source settings page says "Used in N places. Changing it changes all of them" at the top,
+/// and this honours that rather than making one row on the page an exception. Properties stays
+/// the place to anchor a single node differently from its siblings.
+///
+/// Each node is compensated against its own drawn rectangle, because two nodes using one source
+/// can be at different scales, so the offset that keeps a node still is not the same for both.
+void Document::setSourceAnchor(const QString& sourceId, double x, double y) {
+    const auto id = ldoc::Id::parse(to_std(sourceId));
+    if (!id || !session_)
+        return;
+    const ldoc::Vec2 wanted{std::clamp(x, 0.0, 1.0), std::clamp(y, 0.0, 1.0)};
+    const ldoc::Project& p = session_->project();
+    std::vector<ldoc::Command> steps;
+    for (const ldoc::Scene& scene : p.scenes) {
+        const ldoc::Canvas* canvas = nullptr;
+        for (const ldoc::Canvas& c : p.canvases)
+            if (c.id == scene.canvas)
+                canvas = &c;
+        if (!canvas)
+            continue;
+        const ldoc::Vec2 space{static_cast<double>(canvas->width),
+                               static_cast<double>(canvas->height)};
+        ldoc::visit(scene.roots, [&](const ldoc::Node& node) {
+            const auto* placed = std::get_if<ldoc::SourceData>(&node.data);
+            if (!placed || !placed->source || *placed->source != *id)
+                return;
+            if (node.layout.anchor == wanted)
+                return;
+            double natural_w = 0.0;
+            double natural_h = 0.0;
+            const bool have = natural_size(p, *canvas, node, natural_w, natural_h);
+            lcomp::GapReason why = lcomp::GapReason::NoSize;
+            const auto frame =
+                lcomp::drawn_frame(node, space.x, space.y, natural_w, natural_h, have, why);
+            if (frame && frame->width > 0.0 && frame->height > 0.0) {
+                ldoc::Transform t = node.transform;
+                t.position.x += (wanted.x - node.layout.anchor.x) * frame->width / space.x;
+                t.position.y += (wanted.y - node.layout.anchor.y) * frame->height / space.y;
+                steps.push_back(ldoc::SetNodeTransform{scene.id, node.id, t});
+            }
+            ldoc::Layout l = node.layout;
+            l.anchor = wanted;
+            steps.push_back(ldoc::SetNodeLayout{scene.id, node.id, l});
+        });
+    }
+    if (steps.empty())
+        return;
+    run(ldoc::make_batch(std::move(steps), "Anchor text"));
 }
 
 void Document::setNodeBlendMode(const QString& mode) {

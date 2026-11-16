@@ -717,6 +717,9 @@ public:
     /// what every node did before), `{0.5,0.5}` centre, `{1,1}` bottom-right. Corrects the
     /// position so the content does not move when the anchor does.
     Q_INVOKABLE void setNodeAnchor(double x, double y);
+    /// The same anchor on every node drawing this source, as one undo step. What the source
+    /// settings page calls Anchor, because that page edits all the places a source is used.
+    Q_INVOKABLE void setSourceAnchor(const QString& sourceId, double x, double y);
 
     Q_PROPERTY(QStringList fitModes READ fitModes CONSTANT)
     [[nodiscard]] QStringList fitModes() const;

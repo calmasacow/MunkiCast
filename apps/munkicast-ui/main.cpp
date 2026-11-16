@@ -433,6 +433,83 @@ int main(int argc, char** argv) {
                     return false;
                 });
             };
+            // The text settings dialog shows its own anchor rows, and the Properties panel
+            // hides the box controls for text.
+            //
+            // Checked against the live scene graph, not the QML source, because the bug this
+            // covers was not a missing control: the vertical rows existed and were wired up,
+            // but as the second of a pair they carried an empty label and read as nothing at
+            // all. A control nobody can identify is a control nobody has, so the caption is
+            // checked as well as the visibility.
+            {
+                // No `settle` in this scope -- it is defined with the main check further down --
+                // so events are pumped directly.
+                const auto pump = [] {
+                    for (int i = 0; i < 20; ++i) {
+                        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+                        QThread::msleep(10);
+                    }
+                };
+                workspace.selectWorkspace(0);
+                workspace.resetLayout();
+                report(document.createCollection(QStringLiteral("Text controls QA")),
+                       "create isolated collection for the text control check");
+                document.addScene(QStringLiteral("Text scene"));
+                document.addNewSourceToScene(QStringLiteral("Anchor check"),
+                                             QStringLiteral("source.text"));
+                // Properties is a tab beside Info and Log, so it has to be brought to the
+                // front: a panel that is not the active tab is not loaded, and its rows do not
+                // exist to be found.
+                workspace.openPanel(QStringLiteral("properties"));
+                workspace.activate(QStringLiteral("properties"));
+                pump();
+                const auto labelled = [&](const QString& name, const QString& caption) {
+                    return wait_until([&] {
+                        for (auto* field : collect(window->contentItem(), name)) {
+                            if (!field->isVisible() || field->width() <= 0.0) continue;
+                            QList<QQuickItem*> stack{field};
+                            while (!stack.isEmpty()) {
+                                QQuickItem* item = stack.takeLast();
+                                if (item->isVisible() &&
+                                    item->property("text").toString() == caption)
+                                    return true;
+                                stack.append(item->childItems());
+                            }
+                        }
+                        return false;
+                    });
+                };
+                const auto absent = [&](const QString& name) {
+                    for (auto* field : collect(window->contentItem(), name))
+                        if (field->isVisible() && field->width() > 0.0) return false;
+                    return true;
+                };
+                report(labelled(QStringLiteral("anchorH"), QStringLiteral("Anchor H")) &&
+                           labelled(QStringLiteral("anchorV"), QStringLiteral("Anchor V")),
+                       "Properties shows both anchor axes, each saying which one it is");
+                report(absent(QStringLiteral("alignH")) && absent(QStringLiteral("alignV")),
+                       "and hides the box alignment, which a text node has no box for");
+                for (auto* dialog : collect(window->contentItem(),
+                                            QStringLiteral("sourceSettingsDialog"))) {
+                    QMetaObject::invokeMethod(dialog, "open",
+                                              Q_ARG(QVariant, document.nodeProperties()
+                                                                  .value("sourceId")));
+                    pump();
+                    report(labelled(QStringLiteral("sourceAnchorH"),
+                                    QStringLiteral("Anchor H")) &&
+                               labelled(QStringLiteral("sourceAnchorV"),
+                                        QStringLiteral("Anchor V")),
+                           "the text settings page carries both anchor axes itself");
+                    if (parser.isSet(shot_opt)) {
+                        QDir().mkpath(parser.value(shot_opt));
+                        window->grabWindow().save(parser.value(shot_opt) +
+                                                  QStringLiteral("/text-settings.png"));
+                    }
+                    QMetaObject::invokeMethod(dialog, "close");
+                    pump();
+                }
+            }
+
             workspace.selectWorkspace(0);
             workspace.resetLayout();
             report(document.createCollection(QStringLiteral("Panel QA first")),

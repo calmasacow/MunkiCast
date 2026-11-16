@@ -14,6 +14,13 @@ Item {
     /// node, and showing the leader's values while three are selected invites an edit that
     /// looks like it applies to all of them and does not.
     readonly property int selectedCount: Document.selectedNodes.length
+    /// Text draws at exactly the size of its laid-out glyphs, so a fit mode and a box have
+    /// nothing to act on: Natural is the only answer and an empty box is the only box. The
+    /// controls are hidden rather than disabled, because a row that can never be used is
+    /// clutter, not information. Where the type sits is Anchor, which is on the source's own
+    /// settings page as well as here.
+    readonly property bool boxable: panel.hasNode &&
+        panel.props.sourceType !== "source.text"
     readonly property bool hasNode: Object.keys(panel.props).length > 0 &&
                                     panel.selectedCount <= 1
 
@@ -168,6 +175,7 @@ Item {
 
             ChoiceField {
                 width: parent.width
+                visible: panel.boxable
                 label: qsTr("Fit")
                 choices: Document.fitModes
                 value: panel.hasNode ? panel.props.fit : ""
@@ -177,7 +185,7 @@ Item {
             Text {
                 width: parent.width
                 wrapMode: Text.WordWrap
-                visible: panel.hasNode && panel.props.fit === "natural"
+                visible: panel.boxable && panel.props.fit === "natural"
                 text: qsTr("Natural size: the source is drawn at its own dimensions and placed in the box by the alignment below. A box of 0 means the source's own size.")
                 font.pixelSize: 9
                 color: Theme.c.textMuted
@@ -187,6 +195,7 @@ Item {
 
             NumberField {
                 width: parent.width
+                visible: panel.boxable
                 label: qsTr("Box W")
                 decimals: 0
                 // Enabled for Natural as well. Natural no longer means "no box": it draws the
@@ -200,6 +209,7 @@ Item {
 
             NumberField {
                 width: parent.width
+                visible: panel.boxable
                 label: qsTr("Box H")
                 decimals: 0
                 enabled: panel.hasNode
@@ -213,6 +223,7 @@ Item {
             ChoiceField {
                 width: parent.width
                 objectName: "alignH"
+                visible: panel.boxable
                 label: qsTr("Align H")
                 choices: ["0", "0.5", "1"]
                 choiceLabels: ({"0": qsTr("Left"), "0.5": qsTr("Centre"), "1": qsTr("Right")})
@@ -224,6 +235,7 @@ Item {
             ChoiceField {
                 width: parent.width
                 objectName: "alignV"
+                visible: panel.boxable
                 label: qsTr("Align V")
                 choices: ["0", "0.5", "1"]
                 choiceLabels: ({"0": qsTr("Top"), "0.5": qsTr("Middle"), "1": qsTr("Bottom")})

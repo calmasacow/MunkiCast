@@ -4,6 +4,7 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import QtQuick.Controls as Controls
 import MunkiCast
 
 /// What one source is configured to be: the gear at the bottom of the Sources panel, and a
@@ -152,7 +153,17 @@ Item {
         y: (parent.height - height) / 2
         DialogGeometry { minimumWidth: 480; minimumHeight: 400 }
         width: Math.min(parent.width - 48, 760)
-        height: Math.min(parent.height - 48, 660)
+        // Tall enough for the fields it actually has, up to what the window will give it. The
+        // old fixed 660 cut the last rows off below the fold of a dialog that does not scroll by
+        // dragging and showed no scrollbar, so a setting that was present read as missing --
+        // which is exactly how the text anchor rows were reported as not existing.
+        // Sized from the fields alone, never from `preview`: the preview's own height is a
+        // fraction of this one, so including it is a binding loop that QML breaks by keeping a
+        // stale value -- measured, that made the dialog *shorter* than the fixed height it
+        // replaced. The preview is 30% of the frame, hence dividing by 0.7 rather than adding
+        // it, and 110 covers the title and button bars.
+        height: Math.min(parent.height - 48,
+                         Math.max(400, (fields.implicitHeight + 110) / 0.7))
         color: Theme.c.panelBackground
         border.width: 1
         border.color: Theme.c.accent
@@ -385,6 +396,9 @@ Item {
             contentHeight: fields.implicitHeight
             clip: true
             boundsBehavior: Flickable.StopAtBounds
+            // Shown whenever the fields do not fit, so "there is more below" is visible rather
+            // than something the operator has to guess at by scrolling.
+            Controls.ScrollBar.vertical: Controls.ScrollBar { policy: Controls.ScrollBar.AsNeeded }
             // Nothing here scrolls by being dragged (ADR-0039). The wheel has to come back,
             // because Flickable drops it along with the drag.
             interactive: false
@@ -474,6 +488,63 @@ Item {
                             else if (FileDialog.lastError() !== "")
                                 NoticeLog.add(FileDialog.lastError());
                         }
+                    }
+                }
+
+                // Where the type sits on the canvas, on the page the type is set on rather than
+                // only in Properties. These are the node's, not the source's -- so unlike every
+                // field above they are applied immediately, to all the places this source is
+                // used, which is what the header promises. OK and Cancel govern the settings;
+                // these say so themselves rather than pretending to be pending edits.
+                Column {
+                    width: fields.width
+                    visible: dialog.typeId === "source.text"
+                    spacing: 2
+
+                    ChoiceField {
+                        width: parent.width
+                        objectName: "sourceAnchorH"
+                        label: qsTr("Anchor H")
+                        labelWidth: 150
+                        // Right-aligned like every SettingRow caption above, so these sit in the
+                        // same column rather than reading as a different kind of field.
+                        labelAlign: Text.AlignRight
+                        choices: ["0", "0.5", "1"]
+                        choiceLabels: ({"0": qsTr("Left"), "0.5": qsTr("Centre"), "1": qsTr("Right")})
+                        value: dialog.known ? String(dialog.details.anchorX) : "0"
+                        onCommitted: newValue => Document.setSourceAnchor(
+                            dialog.sourceId, Number(newValue),
+                            dialog.known ? dialog.details.anchorY : 0)
+                    }
+
+                    ChoiceField {
+                        width: parent.width
+                        objectName: "sourceAnchorV"
+                        label: qsTr("Anchor V")
+                        labelWidth: 150
+                        // Right-aligned like every SettingRow caption above, so these sit in the
+                        // same column rather than reading as a different kind of field.
+                        labelAlign: Text.AlignRight
+                        choices: ["0", "0.5", "1"]
+                        choiceLabels: ({"0": qsTr("Top"), "0.5": qsTr("Middle"), "1": qsTr("Bottom")})
+                        value: dialog.known ? String(dialog.details.anchorY) : "0"
+                        onCommitted: newValue => Document.setSourceAnchor(
+                            dialog.sourceId, dialog.known ? dialog.details.anchorX : 0,
+                            Number(newValue))
+                    }
+
+                    Text {
+                        x: 154
+                        width: Math.max(40, parent.width - x)
+                        wrapMode: Text.WordWrap
+                        text: dialog.known && dialog.details.anchorMixed
+                            ? qsTr("Which corner or edge of the text its position marks. The places this text is used do not agree right now; choosing here sets all of them.")
+                            : qsTr("Which corner or edge of the text its position marks. Right pins the text's right edge, so it grows leftwards. Applied as soon as you choose it, to every place this text is used.")
+                        font.pixelSize: 10
+                        color: dialog.known && dialog.details.anchorMixed
+                            ? Theme.c.warning : Theme.c.textMuted
+                        topPadding: 2
+                        bottomPadding: 6
                     }
                 }
 
