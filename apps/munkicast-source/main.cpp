@@ -363,11 +363,18 @@ class Content : public QObject {
     static void draw_levelled_digits(QPainter& painter, const QRect& box, int flags,
                                        const QString& text) {
         const QFontMetrics first(painter.font());
-        // Only a caption that fits on one line is laid out by hand. An end message is prose
+        // Only a caption that stays on one line is laid out by hand. An end message is prose
         // that wraps, and wrapping is Qt's job; it also has no digits ticking in it, so there
         // is nothing here for it to gain.
-        if (text.contains(QLatin1Char('\n')) ||
-            first.boundingRect(box, flags, text).height() > first.height()) {
+        //
+        // Counted in lines, not compared in pixels. Comparing the laid-out height against
+        // `height()` looks equivalent and is not: the surface is measured from `boundingRect`,
+        // which includes the font's bearing, so a single line routinely lays out a pixel or two
+        // taller than the nominal line height. Measured on Durandal at 120px, 155 against 154 --
+        // enough for every caption to take the wrapped path and never have its digits levelled,
+        // which is exactly what "fixed width does nothing" turned out to be.
+        const int laid_out = first.boundingRect(box, flags, text).height();
+        if (text.contains(QLatin1Char('\n')) || laid_out >= first.lineSpacing() * 2) {
             painter.drawText(box, flags, text);
             return;
         }

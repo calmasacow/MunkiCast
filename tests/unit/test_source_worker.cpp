@@ -15,6 +15,7 @@
 #include <lcomp/text_metrics.hpp>
 #include <mutex>
 #include <utility>
+#include <vector>
 
 namespace {
 ldoc::Source source(const char* type) {
@@ -157,6 +158,93 @@ LTEST_CASE(fixed_width_holds_a_timer_still_on_a_face_with_uneven_digits) {
               "on {}, fixed width should give '18:88' and '11:11' the same layer; "
               "got {}px and {}px",
               uneven.family().toStdString(), fixed_wide, fixed_narrow);
+}
+
+/// The levelled digits reach the glyphs, not just the measurement.
+///
+/// The measurement test above passed throughout a bug where no caption was ever levelled: the
+/// drawing had a guard meant to skip wrapped prose, and it compared the laid-out height against
+/// the nominal line height. Those differ by a pixel or two for a single line, because the
+/// surface is measured from `boundingRect` and that includes bearing -- so every caption took
+/// the wrapped path. The surface was the right size and the digits inside it were not spaced.
+/// This looks at the published pixels, which is the only thing that could have caught it.
+LTEST_CASE(fixed_width_actually_spaces_the_drawn_digits) {
+    const MeasuringApp gui;
+    QString uneven;
+    int narrow = 0, wide = 0;
+    for (const QString& family : QFontDatabase::families()) {
+        QFont font(family);
+        font.setPixelSize(64);
+        const QFontMetrics metrics(font);
+        const int one = metrics.horizontalAdvance(QLatin1Char('1'));
+        int widest = 0;
+        for (char digit = '0'; digit <= '9'; ++digit)
+            widest = std::max(widest, metrics.horizontalAdvance(QLatin1Char(digit)));
+        if (!(one > 0 && widest > one + widest / 4))
+            continue;
+        // Both conditions, not just the uneven digits. The guard this covers only misfires when
+        // a single line lays out taller than the nominal line height, and on many faces those
+        // two numbers are equal -- on such a face the broken guard behaves correctly and the
+        // test proves nothing. Checked: picking merely the first uneven family chose one where
+        // they matched, and the mutation survived.
+        const QRect laid = metrics.boundingRect(QRect(0, 0, 4096, 4096),
+                                                Qt::AlignTop | Qt::AlignLeft, "00:11");
+        if (laid.height() <= metrics.height())
+            continue;
+        uneven = family;
+        narrow = one;
+        wide = widest;
+        break;
+    }
+    if (uneven.isEmpty()) {
+        CHECK_MSG(true, "no installed face both draws a narrow '1' and lays out taller than "
+                        "its line height; nothing here to measure");
+        return;
+    }
+
+    auto src = source("source.text");
+    src.settings["font"] = uneven.toStdString();
+    src.settings["size"] = std::int64_t{64};
+    src.settings["countdown.enabled"] = true;
+    src.settings["countdown.periodSeconds"] = std::int64_t{11};
+    src.settings["countdown.fixedWidth"] = true;
+    auto frames = capture(src);
+    REQUIRE(!frames.empty());
+
+    // The pitch between the two "1"s of "00:11", which is the whole point of the feature.
+    //
+    // Not the widest gap in the frame: that is the space beside the colon, and it is wide on
+    // both paths, so a test keyed on it passes whether or not the digits were levelled --
+    // checked, and the mutation survived. Levelling moves the second "1" a full cell from the
+    // first instead of its own narrow advance, so the pitch is what tells the paths apart.
+    const auto& pixels = frames.front().pixels;
+    const int width = static_cast<int>(frames.front().width);
+    const int height = static_cast<int>(pixels.size() / 4) / width;
+    const auto inked_column = [&](int x) {
+        for (int y = 0; y < height; ++y)
+            if (pixels[(static_cast<std::size_t>(y) * static_cast<std::size_t>(width) +
+                        static_cast<std::size_t>(x)) * 4 + 3] > 0)
+                return true;
+        return false;
+    };
+    // The left edge of each inked run. "00:11" gives five runs for a face whose colon is one
+    // mark; the last two are the digits being measured.
+    std::vector<int> runs;
+    bool in_run = false;
+    for (int x = 0; x < width; ++x) {
+        const bool ink = inked_column(x);
+        if (ink && !in_run)
+            runs.push_back(x);
+        in_run = ink;
+    }
+    REQUIRE(runs.size() >= 2);
+    const int pitch = runs.back() - runs[runs.size() - 2];
+    // A levelled digit starts one full cell after the one before it, give or take the centring
+    // of a narrow glyph inside its cell. An unlevelled "1" starts one narrow advance along.
+    CHECK_MSG(pitch > (narrow + wide) / 2,
+              "on {}, '1' advances {}px and the widest digit {}px, so levelled digits should be "
+              "about {}px apart; the published frame has them {}px apart",
+              uneven.toStdString(), narrow, wide, wide, pitch);
 }
 
 LTEST_CASE(the_shell_measures_a_text_surface_the_same_size_the_worker_publishes) {
