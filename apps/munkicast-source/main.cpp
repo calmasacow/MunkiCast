@@ -413,8 +413,18 @@ class Content : public QObject {
                 const auto bytes = value.colour.to_srgb8();
                 colour = QColor(bytes[0], bytes[1], bytes[2], bytes[3]);
             }
-            if (value.text == countdown_last_) return;
-            countdown_last_ = value.text;
+            // Skipped only when nothing about the drawing would change. The caption is the
+            // usual case -- a timer ticks four times a second and the string changes once --
+            // but the fixed-width setting and the colour are part of the picture too, so a
+            // toggle that leaves the digits reading the same must still repaint. Keyed on all
+            // three rather than the string alone, which is what made Force fixed-width look
+            // dead until the next tick that happened to change a digit.
+            const auto stamp = value.text + (lcomp::fixed_width_digits(source_.settings,
+                                                                       value.ended)
+                                                 ? "\x01" : "\x02") +
+                               colour.name(QColor::HexArgb).toStdString();
+            if (stamp == countdown_last_) return;
+            countdown_last_ = stamp;
         }
         // The surface is whatever the laid-out text measures, not a fixed resolution the
         // operator also has to set. A text layer drawn larger than a fixed surface was scaled

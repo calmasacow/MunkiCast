@@ -10,6 +10,7 @@
 #include <csignal>
 #include <fstream>
 #include <lcomp/countdown.hpp>
+#include <QFontDatabase>
 #include <QGuiApplication>
 #include <lcomp/text_metrics.hpp>
 #include <mutex>
@@ -90,6 +91,73 @@ struct MeasuringApp {
     char* argv[2] = {name, nullptr};
     std::unique_ptr<QGuiApplication> app;
 };
+
+/// Fixed width holds the layer still, measured on a face whose digits genuinely differ.
+///
+/// This is the test that was missing when the fault was reported. The existing digit test used
+/// "Sans", which resolves to Liberation Sans -- and every stock font on a Linux box, checked,
+/// draws all ten digits at one width. On such a face the fixed-width path cannot be told from
+/// doing nothing, so it was never really exercised. A face is synthesised here instead of
+/// trusting one to be installed: the rule under test is the layout, not anybody's typography.
+LTEST_CASE(fixed_width_holds_a_timer_still_on_a_face_with_uneven_digits) {
+    const MeasuringApp gui;
+    const QFont uneven = [] {
+        // Found rather than assumed: the first installed family whose digits are not all one
+        // width. Skipped, not failed, when the machine has none -- a CI box with three stock
+        // fonts is not a broken build.
+        for (const QString& family : QFontDatabase::families()) {
+            QFont font(family);
+            font.setPixelSize(64);
+            const QFontMetrics metrics(font);
+            int lo = 1 << 30, hi = 0;
+            for (char digit = '0'; digit <= '9'; ++digit) {
+                const int advance = metrics.horizontalAdvance(QLatin1Char(digit));
+                lo = std::min(lo, advance);
+                hi = std::max(hi, advance);
+            }
+            if (lo > 0 && hi > lo + hi / 8)
+                return font;
+        }
+        return QFont{};
+    }();
+    if (uneven.family().isEmpty()) {
+        CHECK_MSG(true, "no installed face has uneven digits; nothing to measure here");
+        return;
+    }
+
+    const auto measure = [&](const char* caption, bool fixed) {
+        ldoc::ParamMap settings;
+        settings["font"] = uneven.family().toStdString();
+        settings["size"] = std::int64_t{64};
+        settings["text"] = std::string(caption);
+        settings["countdown.enabled"] = true;
+        settings["countdown.periodMinutes"] = std::int64_t{18};
+        settings["countdown.periodSeconds"] = std::int64_t{51};
+        settings["countdown.format"] = std::string(caption);
+        settings["countdown.useFormattedOutput"] = true;
+        if (fixed)
+            settings["countdown.fixedWidth"] = true;
+        return gui.measure(settings).width();
+    };
+
+    // Off: the layer follows the caption, so the narrower digits give a narrower layer. This is
+    // the collapse that was reported, and it is the honest behaviour of plain text.
+    const int loose_wide = measure("18:88", false);
+    const int loose_narrow = measure("11:11", false);
+    CHECK_MSG(loose_narrow < loose_wide,
+              "on {}, '11:11' should lay out narrower than '18:88' without fixed width; "
+              "got {}px and {}px",
+              uneven.family().toStdString(), loose_narrow, loose_wide);
+
+    // On: every digit gets the widest digit's cell, so both captions occupy the same layer and
+    // nothing moves as the clock ticks.
+    const int fixed_wide = measure("18:88", true);
+    const int fixed_narrow = measure("11:11", true);
+    CHECK_MSG(fixed_wide == fixed_narrow,
+              "on {}, fixed width should give '18:88' and '11:11' the same layer; "
+              "got {}px and {}px",
+              uneven.family().toStdString(), fixed_wide, fixed_narrow);
+}
 
 LTEST_CASE(the_shell_measures_a_text_surface_the_same_size_the_worker_publishes) {
     const MeasuringApp gui;

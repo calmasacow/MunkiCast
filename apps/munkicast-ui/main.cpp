@@ -8407,6 +8407,14 @@ int main(int argc, char** argv) {
                     settle();
                     report(document.countdowns().front().toMap().value("periodMs").toLongLong() == 5000,
                            "the four period fields set the timer's duration");
+                    // Force fixed-width is the one thing a timer may change about how its text
+                    // looks, so it has to survive the write and come back: a checkbox that
+                    // reads back false is a checkbox that does nothing, which is how this was
+                    // first reported.
+                    document.configureCountdown(timer, {{"fixedWidth", true}});
+                    settle();
+                    report(document.countdowns().front().toMap().value("fixedWidth").toBool(),
+                           "Force fixed-width is stored on the timer and reads back");
                     auto buttons = collect(window->contentItem(), "countdownStartPause");
                     report(!buttons.isEmpty(), "timer row exposes Start/Pause");
                     if (!buttons.isEmpty()) clickTimer(buttons.front());
