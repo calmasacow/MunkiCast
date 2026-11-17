@@ -18,6 +18,8 @@
 #include <QProcess>
 #include <QQuickImageProvider>
 #include <QSocketNotifier>
+#include <QCryptographicHash>
+#include <QDir>
 #include <QStandardPaths>
 #include <QTimer>
 #include <QUrl>
@@ -70,6 +72,63 @@ QImage image_from(lcomp::PreviewFrame& frame) {
     return image;
 }
 
+///
+/// Typed off the existing value rather than off the QVariant: QML hands back a double for every
+/// number it has touched, so a width would arrive as 1920.0 and land in the `double` arm of a
+/// setting the worker reads as an integer. The stored value is the schema that is actually here.
+/// Where a source's still is kept between runs.
+///
+/// Under the cache location rather than the project, because it is a picture of what a source
+/// looked like, not part of the document -- and a cache the operator can delete is a cache that
+/// cannot corrupt a show. The source id names the file; a project opened on another machine
+/// simply finds nothing and warms again.
+QString still_path(const QString& sourceId) {
+    static const QString base = [] {
+        const auto root = QStandardPaths::writableLocation(QStandardPaths::GenericCacheLocation);
+        if (root.isEmpty())
+            return QString{};
+        const QString dir = root + QStringLiteral("/munkicast/stills");
+        QDir{}.mkpath(dir);
+        return dir;
+    }();
+    // A ULID is already filename-safe, but it arrives from the document, so it is hashed rather
+    // than trusted: a malformed id must not be able to name a path of its own choosing.
+    if (base.isEmpty() || sourceId.isEmpty())
+        return {};
+    const auto digest = QCryptographicHash::hash(sourceId.toUtf8(), QCryptographicHash::Sha256);
+    return base + QLatin1Char('/') + QString::fromLatin1(digest.toHex().left(32)) +
+           QStringLiteral(".png");
+}
+
+/// One QVariant from QML as the same alternative the stored value already holds.
+///
+/// Typed off the existing value rather than off the QVariant: QML hands back a double for every
+/// number it has touched, so a width would arrive as 1920.0 and land in the `double` arm of a
+/// setting the worker reads as an integer. The stored value is the schema that is actually here.
+std::optional<ldoc::ParamValue> param_like(const ldoc::ParamValue& stored, const QVariant& given) {
+    if (std::holds_alternative<std::string>(stored)) {
+        if (!given.canConvert<QString>())
+            return std::nullopt;
+        return ldoc::ParamValue{given.toString().toStdString()};
+    }
+    if (std::holds_alternative<bool>(stored))
+        return ldoc::ParamValue{given.toBool()};
+    if (std::holds_alternative<std::int64_t>(stored)) {
+        bool ok = false;
+        const auto value = given.toLongLong(&ok);
+        return ok ? std::optional<ldoc::ParamValue>{value} : std::nullopt;
+    }
+    if (std::holds_alternative<double>(stored)) {
+        bool ok = false;
+        const auto value = given.toDouble(&ok);
+        return ok ? std::optional<ldoc::ParamValue>{value} : std::nullopt;
+    }
+    // Colours, vectors, ids and explicit nulls: a preview of an edit to one of those is not
+    // something this path offers, and guessing at the encoding would be worse than leaving the
+    // stored value alone.
+    return std::nullopt;
+}
+
 } // namespace
 
 struct Preview::Held {
@@ -98,6 +157,13 @@ struct Preview::State {
     };
 
     std::map<QString, std::deque<Sample>> recent;
+    /// The last picture seen of each source, kept by source id after its live slot moved on.
+    ///
+    /// A dialog showing a grid of sources cannot have them all live -- that is one composite per
+    /// tick each -- but a source that has been previewed once can keep what it looked like. The
+    /// frames above are keyed by *canvas* and are cleared on every commit; these are keyed by
+    /// source and outlive it, which is the whole point of a still.
+    std::map<QString, QImage> stills;
     int generation = 0;
 };
 
@@ -133,6 +199,16 @@ class ProgramImageProvider : public QQuickImageProvider {
     QImage requestImage(const QString& id, QSize* size, const QSize& /*requested*/) override {
         const QString key = id.section(QLatin1Char('/'), 0, 0);
         std::lock_guard lock(state_->mu);
+        // A canvas key first: that is a live picture, and it is the fresher of the two. A key
+        // that names no canvas is a source id, answered from the stills if one was kept.
+        if (!state_->frames.contains(key)) {
+            if (const auto kept = state_->stills.find(key);
+                kept != state_->stills.end() && !kept->second.isNull()) {
+                if (size != nullptr)
+                    *size = kept->second.size();
+                return kept->second;
+            }
+        }
         const auto it = state_->frames.find(key);
         if (it == state_->frames.end() || it->second.image.isNull()) {
             if (size != nullptr)
@@ -784,7 +860,18 @@ void Preview::stage_spot(const ldoc::Project& project, Spot& spot) {
     if (const auto* source = project.source(*owner)) {
         auto node = ldoc::make_node(ldoc::NodeKind::Source, source->name);
         node.id = spot.node;
-        std::get<ldoc::SourceData>(node.data).source = source->id;
+        auto shown = source->id;
+        if (!spot.overrides.empty()) {
+            // A copy carrying the unsaved settings, under an id of this slot's own. The real
+            // source is left alone, so the scene on air keeps playing what it was playing while
+            // the dialog shows what the operator is choosing.
+            ldoc::Source edited = *source;
+            edited.id = spot.edited;
+            edited.settings = spot.overrides;
+            shown = edited.id;
+            link_->pending.sources.push_back(std::move(edited));
+        }
+        std::get<ldoc::SourceData>(node.data).source = shown;
         node.layout.fit = ldoc::FitMode::Contain;
         // A box of the whole canvas, which is {1, 1} now that a box is a fraction of the space
         // it sits in (ADR-0070). Independent of the preview canvas's size, which is the point.
@@ -841,19 +928,87 @@ void Preview::stage_spot(const ldoc::Project& project, Spot& spot) {
 }
 
 QString Preview::setPreviewTarget(const QString& slot, const QString& owner) {
+    return setPreviewTargetWith(slot, owner, {});
+}
+
+QString Preview::setPreviewTargetWith(const QString& slot, const QString& owner,
+                                      const QVariantMap& overrides) {
     Spot& chosen = spot(slot);
-    if (chosen.target != owner) {
-        chosen.target = owner;
-        chosen.ids.clear();
-        {
-            std::lock_guard lock(state_->mu);
-            state_->frames.erase(QString::fromStdString(chosen.canvas.to_string()));
+    ldoc::ParamMap wanted;
+    if (!owner.isEmpty() && !overrides.isEmpty()) {
+        if (const auto id = ldoc::Id::parse(owner.toStdString())) {
+            if (const auto* source = latest_.source(*id)) {
+                // Merged onto the stored settings rather than replacing them: the dialog sends
+                // the keys it has an opinion about, and a source needs all of its own to open.
+                wanted = source->settings;
+                for (auto it = overrides.constBegin(); it != overrides.constEnd(); ++it) {
+                    const auto key = it.key().toStdString();
+                    const auto existing = wanted.find(key);
+                    if (existing == wanted.end())
+                        continue; // Not a setting of this type; a dialog typo is not a document.
+                    if (auto value = param_like(existing->second, it.value()))
+                        existing->second = std::move(*value);
+                }
+            }
         }
-        setLive(program_live_,
-                latest_.canvases.empty() ? ldoc::Fps{} : latest_.canvases.front().fps);
-        publish(latest_);
     }
+    if (chosen.target == owner && chosen.overrides == wanted)
+        return owner.isEmpty() ? QString{} : QString::fromStdString(chosen.canvas.to_string());
+
+    // Keep what this slot was showing, so a grid of tiles can draw sources it is no longer
+    // previewing. Done before the frame is dropped, which is the only moment it still exists.
+    const QString canvas_key = QString::fromStdString(chosen.canvas.to_string());
+    {
+        std::lock_guard lock(state_->mu);
+        if (!chosen.target.isEmpty()) {
+            const auto frame = state_->frames.find(canvas_key);
+            if (frame != state_->frames.end() && !frame->second.image.isNull()) {
+                state_->stills.insert_or_assign(chosen.target, frame->second.image);
+                // And to disk, so the next run of the application starts with the grid already
+                // drawn instead of warming every tile again. Small: a thumbnail, not a frame.
+                if (const auto path = still_path(chosen.target); !path.isEmpty()) {
+                    QImage small = frame->second.image;
+                    if (small.width() > 320 || small.height() > 320)
+                        small = small.scaled(320, 320, Qt::KeepAspectRatio,
+                                             Qt::SmoothTransformation);
+                    // A failed write is not worth telling the operator about: the picture is
+                    // still in memory for this session, and the cache rebuilds itself.
+                    (void)small.save(path, "PNG");
+                }
+            }
+        }
+        state_->frames.erase(canvas_key);
+    }
+    chosen.target = owner;
+    chosen.overrides = std::move(wanted);
+    chosen.ids.clear();
+    setLive(program_live_,
+            latest_.canvases.empty() ? ldoc::Fps{} : latest_.canvases.front().fps);
+    publish(latest_);
     return owner.isEmpty() ? QString{} : QString::fromStdString(chosen.canvas.to_string());
+}
+
+bool Preview::hasStill(const QString& sourceId) const {
+    if (sourceId.isEmpty())
+        return false;
+    std::lock_guard lock(state_->mu);
+    const auto found = state_->stills.find(sourceId);
+    if (found != state_->stills.end())
+        return !found->second.isNull();
+    // Nothing in memory, so this is the first time this run has asked about this source. A
+    // picture from a previous run counts: that is the whole point of writing them down. The
+    // answer is remembered either way -- a null entry stops a missing file being opened again
+    // on every repaint.
+    QImage kept;
+    if (const auto path = still_path(sourceId); !path.isEmpty())
+        (void)kept.load(path);
+    const bool have = !kept.isNull();
+    state_->stills.emplace(sourceId, std::move(kept));
+    return have;
+}
+
+QString Preview::keepStill(const QString& sourceId) {
+    return setPreviewTarget(QStringLiteral("thumbs"), sourceId);
 }
 
 QString Preview::setFilterTarget(const QString& owner) {

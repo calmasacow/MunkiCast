@@ -70,9 +70,30 @@ Item {
                                            "source.slideshow", "source.playlist", "source.screen",
                                            "source.window", "source.game", "source.browser"]
                                           .indexOf(dialog.typeId) >= 0
+    /// Settings worth previewing before OK: the ones chosen in one go, rather than typed.
+    ///
+    /// A file, a device, a screen, a window. Picking one of these is a single decision with a
+    /// single answer, and seeing it is the reason the operator picked it. The typed fields --
+    /// a resolution, a URL, a frame rate -- are deliberately not here: each keystroke would be
+    /// a reconfigure, and the picture would blank on the way to every digit.
+    readonly property var previewKeys: ["file", "device", "output", "window", "url", "playlist"]
+
+    function previewEdits() {
+        const out = {};
+        for (const key of dialog.previewKeys) {
+            const value = dialog.pending[key];
+            if (value !== undefined && String(value) !== String(dialog.details.settings[key]))
+                out[key] = value;
+        }
+        return out;
+    }
+
     function refreshPreview() {
-        dialog.previewKey = Preview.setPreviewTarget(
-            "settings", dialog.visible && dialog.renderPreview ? dialog.sourceId : "");
+        const wanted = dialog.visible && dialog.renderPreview ? dialog.sourceId : "";
+        // Opening and closing the dialog has to re-ask, not only a resize of the card.
+        Preview.requestSize(preview, wanted === "" ? 0 : preview.previewEdge);
+        dialog.previewKey = Preview.setPreviewTargetWith(
+            "settings", wanted, wanted === "" ? ({}) : dialog.previewEdits());
     }
 
     signal closed
@@ -119,6 +140,10 @@ Item {
         const next = Object.assign({}, dialog.pending);
         next[key] = value;
         dialog.pending = next;
+        // Picking a file or a device is the moment to show it, not OK. `refreshPreview` is a
+        // no-op when nothing it cares about moved, so this costs nothing on the other keys.
+        if (dialog.previewKeys.indexOf(key) >= 0)
+            dialog.refreshPreview();
     }
 
     /// Back to what a brand-new source of this type would be. The name is left alone: nobody
@@ -133,6 +158,11 @@ Item {
     }
 
     function accept() {
+        // A click on OK does not move keyboard focus, so a field still being typed into never
+        // fires its own commit: the URL you just typed stays in the TextInput and `pending`
+        // keeps the value it had when the dialog opened. Taking focus first makes every
+        // half-typed field finish into `pending` before it is read.
+        dialog.forceActiveFocus();
         Document.applySourceSettings(dialog.sourceId, dialog.pendingName, dialog.pending);
         dialog.close();
     }
@@ -238,6 +268,19 @@ Item {
             id: preview
 
             objectName: "sourceSettingsPreview"
+
+            // Every other preview surface tells the renderer how big a picture it wants; this
+            // one never did, so the hidden canvas it asks for was composited at whatever edge
+            // the rest of the shell happened to want -- and with no other preview on screen,
+            // at a single pixel. The card then drew "waiting for a picture" indefinitely.
+            readonly property int previewEdge:
+                Math.ceil(Math.max(width, height) * Screen.devicePixelRatio)
+            onPreviewEdgeChanged:
+                Preview.requestSize(preview,
+                                    dialog.visible && dialog.renderPreview ? previewEdge : 0)
+            Component.onCompleted:
+                Preview.requestSize(preview,
+                                    dialog.visible && dialog.renderPreview ? previewEdge : 0)
             anchors.left: parent.left
             anchors.right: parent.right
             anchors.top: titleBar.bottom

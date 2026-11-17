@@ -17,9 +17,10 @@ import MunkiCast
 /// somewhere they could not be found. A modal that cannot leave the window cannot be lost behind
 /// it, and on a second monitor it still appears where the application is.
 ///
-/// Thumbnails are honest. A colour is the one source this build can draw correctly with no
-/// renderer, so colours show their real swatch; everything else shows its type glyph until there
-/// is a pipeline to ask. Drawing a fake camera frame would make the dialog look finished.
+/// Thumbnails are honest. A colour draws its own swatch with no renderer at all; everything else
+/// shows a still the renderer actually produced, and its type glyph until there is one. A tile
+/// never shows a stand-in picture, so an empty one means the source has not drawn yet rather than
+/// that the dialog gave up on it.
 Item {
     id: dialog
 
@@ -49,7 +50,27 @@ Item {
     }
 
     function showSourceMenu(x, y, sourceId, sourceName) {
+        // "Used by 3" on the tile says how many, not which. This says which, and picking one
+        // selects that scene behind the dialog so it is there when the dialog is closed.
+        const used = Document.scenesUsingDetail(sourceId);
+        const where = used.map(scene => ({
+            text: scene.canvasName === ""
+                ? scene.name
+                : scene.name + "  ·  " + scene.canvasName,
+            checked: false,
+            action: () => Document.showSceneInBackground(scene.id)
+        }));
         sourceMenu.popup(x, y, [{
+            text: used.length === 0 ? qsTr("Used by: nothing")
+                                    : qsTr("Used by: %1 scene(s)").arg(used.length),
+            checked: false,
+            enabled: used.length > 0,
+            // No `children` key at all when nothing uses it: a hover opens a flyout whether or
+            // not the row is enabled, and an empty flyout is a blank panel with no way out.
+            children: used.length > 0 ? where : undefined
+        }, {
+            separator: true
+        }, {
             text: qsTr("Filters"), checked: false,
             action: () => Document.showFilters(sourceId)
         }, {
@@ -71,6 +92,7 @@ Item {
     function open() {
         dialog.selectedType = "";
         dialog.selectedSource = "";
+        dialog.warmAt = 0;
         dialog.refreshSources();
         dialog.visible = true;
         dialog.forceActiveFocus();
@@ -80,6 +102,8 @@ Item {
         sourceMenu.close();
         dialog.cancelDelete();
         dialog.visible = false;
+        // The renderer would otherwise keep compositing a source for a dialog nobody can see.
+        Preview.keepStill("");
         dialog.closed();
     }
 
@@ -108,7 +132,54 @@ Item {
             dialog.selectedSource = "";
     }
 
-    onSelectedTypeChanged: refreshSources()
+    /// Filling the grid with real pictures, one source at a time.
+    ///
+    /// A tile shows a still kept from the last time that source was previewed. Nothing has one
+    /// the first time the dialog is opened, so this walks the tiles that are missing one and
+    /// gives each a turn at the single live slot; `Preview.setPreviewTarget` keeps the picture
+    /// when the slot moves on, so one pass leaves the whole grid drawn.
+    ///
+    /// One at a time on purpose. Every live preview is a composite per tick on the renderer, and
+    /// a grid of twenty-four would cost more than the programme does. A turn each is slower to
+    /// fill and costs exactly one.
+    property int warmAt: 0
+
+    function warmNext() {
+        if (!dialog.visible || dialog.pickingScene) {
+            Preview.keepStill("");
+            return;
+        }
+        const sources = dialog.shownSources;
+        for (let i = 0; i < sources.length; ++i) {
+            const at = (dialog.warmAt + i) % sources.length;
+            const source = sources[at];
+            // A colour draws its own swatch and an image its own file; neither needs the
+            // renderer, and one that already has a still does not need another turn.
+            if (source.swatch !== "" || source.file !== "" || Preview.hasStill(source.id))
+                continue;
+            dialog.warmAt = (at + 1) % sources.length;
+            Preview.keepStill(source.id);
+            return;
+        }
+        // Everything on screen has a picture. Release the slot rather than hold a composite
+        // open for a grid that is already drawn.
+        Preview.keepStill("");
+    }
+
+    Timer {
+        // Slow enough that a source has time to open and publish a frame -- a camera or a media
+        // file does not have one the instant it is asked for -- and slow enough that filling a
+        // grid is not a burst of worker starts.
+        interval: 700
+        running: dialog.visible && !dialog.pickingScene
+        repeat: true
+        onTriggered: dialog.warmNext()
+    }
+
+    onSelectedTypeChanged: {
+        dialog.warmAt = 0;
+        refreshSources();
+    }
     Connections {
         target: Document
         // Every Sources dock owns a dialog. Hidden dialogs need no model rebuild for each
@@ -446,10 +517,39 @@ Item {
                                         ? tile.modelData.swatch : Theme.c.panelHeader
                                     border.width: 1
                                     border.color: Theme.c.border
+                                    clip: true
+
+                                    // The still kept from the last time this source was drawn.
+                                    // Missing until `warmNext` has given it a turn, which is why
+                                    // the glyph below stays until the picture arrives rather than
+                                    // the tile going blank.
+                                    Image {
+                                        id: shot
+
+                                        objectName: "existingSourceThumb"
+                                        anchors.fill: parent
+                                        anchors.margins: 1
+                                        fillMode: Image.PreserveAspectFit
+                                        // The provider hands back an image it already holds; an
+                                        // asynchronous reload would only add a frame of blank.
+                                        asynchronous: false
+                                        cache: false
+                                        visible: shot.status === Image.Ready
+                                        sourceSize.width: 300
+                                        // An image draws from its own file; everything else
+                                        // from the still the renderer produced.
+                                        source: tile.modelData.file !== ""
+                                            ? "file://" + encodeURI(tile.modelData.file)
+                                            : tile.modelData.swatch === "" &&
+                                              Preview.hasStill(tile.modelData.id)
+                                            ? "image://program/" + tile.modelData.id +
+                                              "/" + Preview.generation
+                                            : ""
+                                    }
 
                                     Text {
                                         anchors.centerIn: parent
-                                        visible: tile.modelData.swatch === ""
+                                        visible: tile.modelData.swatch === "" && !shot.visible
                                         text: tile.modelData.icon
                                         font.pixelSize: 28
                                         color: Theme.c.textMuted

@@ -102,6 +102,24 @@ class Preview : public QObject {
     /// source list previews only the selected row, not every visible one.
     Q_INVOKABLE QString setPreviewTarget(const QString& slot, const QString& owner);
 
+    /// The same, with the settings the operator is *editing* standing in for the stored ones.
+    ///
+    /// The plain overload previews a source as it is, which is right while a text field is being
+    /// typed into -- reconfiguring the worker on every keystroke blanks the picture on the way to
+    /// each digit of a resolution. A discrete choice is different: picking a file or a device is
+    /// one event with one answer, and the operator is picking it *because* they want to see it.
+    /// So the dialog calls this one from those commits, and the plain one everywhere else.
+    Q_INVOKABLE QString setPreviewTargetWith(const QString& slot, const QString& owner,
+                                             const QVariantMap& overrides);
+
+    /// Whether a still of this source has been kept from some earlier preview of it.
+    Q_INVOKABLE [[nodiscard]] bool hasStill(const QString& sourceId) const;
+
+    /// Draw one source into the "thumbs" slot so a still of it is kept, for a dialog showing a
+    /// grid of sources that have never been selected. One at a time, by design: each live slot
+    /// costs the renderer a composite per tick.
+    Q_INVOKABLE QString keepStill(const QString& sourceId);
+
     /// Projectors use renderer-owned GPU windows, independent of dock resolution/UI activity.
     Q_INVOKABLE QVariantList projectorScreens() const;
     Q_INVOKABLE QVariantList projectors() const { return projectors_; }
@@ -242,10 +260,16 @@ class Preview : public QObject {
     /// its ids are fixed at construction so its image URL survives a target change.
     struct Spot {
         QString target;
+        /// Settings standing in for the stored ones, or empty. When set, the staged node points
+        /// at a *copy* of the source carrying these -- see `stage_spot`.
+        ldoc::ParamMap overrides;
         ldoc::Id canvas = ldoc::Id::generate();
         ldoc::Id scene = ldoc::Id::generate();
         ldoc::Id node = ldoc::Id::generate();
         ldoc::Id deck = ldoc::Id::generate();
+        /// The overridden copy's id. Fixed per slot so an edit does not make the renderer throw
+        /// away the worker it just started and open the file again.
+        ldoc::Id edited = ldoc::Id::generate();
         /// Cloned node ids, so a previewed node keeps stable ids across republishes.
         std::map<ldoc::Id, ldoc::Id> ids;
     };
