@@ -29,7 +29,30 @@ namespace {
 struct KnownPanel {
     const char* id;
     const char* title;
+    /// Which workspace this panel belongs to, or empty for the show's own panels, which the
+    /// Build and Live arrangements share.
+    ///
+    /// A panel closed on the Edit tab has to be reopenable from the Edit tab and from nowhere
+    /// else: the reopen list is a strip across the status bar, and filling it with the fifteen
+    /// panels of three other workspaces leaves no room for the one the operator is looking at
+    /// -- and offers to open a timeline into the middle of a live show.
+    const char* workspace = "";
 };
+
+/// Whether a panel belongs on the workspace named `workspace`.
+///
+/// The Encode tab draws a fixed view and has no dock tree at all, so nothing is ever reopenable
+/// there; `closedPanels` returns nothing for it rather than offering panels that its one view
+/// would have no room for.
+bool panel_belongs_to(const KnownPanel& panel, const QString& workspace) {
+    if (workspace == QLatin1String("Encode"))
+        return false;
+    if (workspace == QLatin1String("Media") || workspace == QLatin1String("Edit") ||
+        workspace == QLatin1String("Graphics"))
+        return workspace == QLatin1String(panel.workspace);
+    // Build, Live, and any arrangement the operator added: the show's panels.
+    return panel.workspace[0] == '\0';
+}
 
 constexpr std::array kKnownPanels = {
     KnownPanel{"program", "Program"},
@@ -46,6 +69,28 @@ constexpr std::array kKnownPanels = {
     KnownPanel{"broadcast-stats", "Broadcast Stats"},
     KnownPanel{"log", "Log"},
     KnownPanel{"shortcuts", "Shortcuts"},
+
+    // Media.
+    KnownPanel{"media-tree", "Folders", "Media"},
+    KnownPanel{"media-player", "Player", "Media"},
+    KnownPanel{"media-table", "Media", "Media"},
+    KnownPanel{"media-details", "File Details", "Media"},
+    KnownPanel{"export-queue", "Export Queue", "Media"},
+
+    // Edit.
+    KnownPanel{"edit-bins", "Bins", "Edit"},
+    KnownPanel{"edit-program", "Program", "Edit"},
+    KnownPanel{"edit-properties", "Clip", "Edit"},
+    KnownPanel{"edit-effects", "Effects", "Edit"},
+    KnownPanel{"edit-timeline", "Timeline", "Edit"},
+
+    // Graphics.
+    KnownPanel{"graphics-tools", "Tools", "Graphics"},
+    KnownPanel{"graphics-stage", "Stage", "Graphics"},
+    KnownPanel{"graphics-properties", "Properties", "Graphics"},
+    KnownPanel{"graphics-data", "Data", "Graphics"},
+    KnownPanel{"graphics-library", "Library", "Graphics"},
+    KnownPanel{"graphics-timeline", "Timeline", "Graphics"},
 };
 
 QRectF to_qrect(const llayout::Rect& r) {
@@ -544,24 +589,39 @@ QStringList Workspace::closedPanels() const {
     // The answer to "losing the main canvas, or having it pop out and go off screen completely":
     // every panel the shell knows about, including the program canvas, can always be brought
     // back, because it was never an OS window to lose.
+    // Only the panels that belong to the workspace on screen. The Encode tab draws a fixed
+    // view rather than a dock tree, so it offers none at all.
+    const QString active = activeWorkspaceName();
+    const bool show_workspace = active != QLatin1String("Encode");
+    const bool shows_show_panels = show_workspace && active != QLatin1String("Media") &&
+                                   active != QLatin1String("Edit") &&
+                                   active != QLatin1String("Graphics");
+
     QStringList out;
     for (const KnownPanel& p : kKnownPanels) {
-        if (!layout().has_panel(p.id))
+        if (panel_belongs_to(p, active) && !layout().has_panel(p.id))
             out << QString::fromLatin1(p.id);
     }
     // And the per-canvas panels. The first canvas's three are already in the table above under
-    // their plain ids, so this starts at the second.
-    for (int i = 1; i < canvas_ids_.size(); ++i) {
-        for (const char* kind : {"program", "scenes", "sources"}) {
-            const QString id = QString::fromLatin1(kind) + QLatin1Char(':') + canvas_ids_[i];
+    // their plain ids, so this starts at the second. These are the show's, so they follow the
+    // same rule as the rest of it.
+    if (shows_show_panels) {
+        for (int i = 1; i < canvas_ids_.size(); ++i) {
+            for (const char* kind : {"program", "scenes", "sources"}) {
+                const QString id = QString::fromLatin1(kind) + QLatin1Char(':') + canvas_ids_[i];
+                if (!layout().has_panel(to_std(id)))
+                    out << id;
+            }
+        }
+    }
+    // A browser dock is the operator's own, not a workspace's, so it can be reopened wherever
+    // there is a dock tree to put it in.
+    if (show_workspace) {
+        for (const auto& dock : browser_docks_) {
+            const auto id = dock.toMap().value("id").toString();
             if (!layout().has_panel(to_std(id)))
                 out << id;
         }
-    }
-    for (const auto& dock : browser_docks_) {
-        const auto id = dock.toMap().value("id").toString();
-        if (!layout().has_panel(to_std(id)))
-            out << id;
     }
     return out;
 }

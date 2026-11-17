@@ -353,6 +353,55 @@ Jv body(const SetOutput& c) {
     return o;
 }
 
+/// A sub-document manifest entry, shared by the add commands for both kinds.
+Jv enc_subdoc_ref(const SubdocRef& r) {
+    Jv o{Json::objectValue};
+    o["id"] = detail::enc(r.id);
+    o["name"] = r.name;
+    o["generation"] = static_cast<Json::UInt64>(r.generation);
+    return o;
+}
+
+Jv body(const AddTimelineRef& c) {
+    Jv o{Json::objectValue};
+    o["ref"] = enc_subdoc_ref(c.ref);
+    o["index"] = static_cast<Json::UInt64>(c.index);
+    return o;
+}
+
+Jv body(const RemoveTimelineRef& c) {
+    Jv o{Json::objectValue};
+    o["timeline"] = detail::enc(c.timeline);
+    return o;
+}
+
+Jv body(const RenameTimelineRef& c) {
+    Jv o{Json::objectValue};
+    o["timeline"] = detail::enc(c.timeline);
+    o["name"] = c.name;
+    return o;
+}
+
+Jv body(const AddGraphicRef& c) {
+    Jv o{Json::objectValue};
+    o["ref"] = enc_subdoc_ref(c.ref);
+    o["index"] = static_cast<Json::UInt64>(c.index);
+    return o;
+}
+
+Jv body(const RemoveGraphicRef& c) {
+    Jv o{Json::objectValue};
+    o["graphic"] = detail::enc(c.graphic);
+    return o;
+}
+
+Jv body(const RenameGraphicRef& c) {
+    Jv o{Json::objectValue};
+    o["graphic"] = detail::enc(c.graphic);
+    o["name"] = c.name;
+    return o;
+}
+
 Jv body(const SetProjectSettings& c) {
     Jv o{Json::objectValue};
     o["value"] = detail::enc(c.value);
@@ -606,6 +655,28 @@ std::expected<Command, std::string> command_from_value(Rd& rd, const Jv& o,
         if (!sv)
             return std::unexpected("project.set-settings has no value");
         out = SetProjectSettings{detail::dec_settings(rd, *sv, path)};
+    } else if (name == "timeline.add" || name == "graphic.add") {
+        const Jv* rv = rd.object(o, "ref", path);
+        if (!rv)
+            return std::unexpected(std::format("{} has no ref", name));
+        SubdocRef ref;
+        ref.id = rd.id(*rv, "id", path);
+        ref.name = rd.text(*rv, "name", path);
+        const std::int64_t g = rd.integer(*rv, "generation", path, 0);
+        ref.generation = g < 0 ? 0 : static_cast<std::uint64_t>(g);
+        const std::size_t index = dec_index(rd, o, "index", path);
+        if (name == "timeline.add")
+            out = AddTimelineRef{std::move(ref), index};
+        else
+            out = AddGraphicRef{std::move(ref), index};
+    } else if (name == "timeline.remove") {
+        out = RemoveTimelineRef{rd.id(o, "timeline", path)};
+    } else if (name == "timeline.rename") {
+        out = RenameTimelineRef{rd.id(o, "timeline", path), rd.text(o, "name", path)};
+    } else if (name == "graphic.remove") {
+        out = RemoveGraphicRef{rd.id(o, "graphic", path)};
+    } else if (name == "graphic.rename") {
+        out = RenameGraphicRef{rd.id(o, "graphic", path), rd.text(o, "name", path)};
     } else if (name == "canvas.set") {
         const Jv* cv = rd.object(o, "value", path);
         if (!cv)

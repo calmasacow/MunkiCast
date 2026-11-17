@@ -173,6 +173,11 @@ Document::~Document() = default;
 
 QString Document::projectName() const { return qstr(session_->project().name); }
 
+QString Document::projectDirectory() const {
+    return session_->path().empty() ? QString{}
+                                    : QString::fromStdString(session_->path().string());
+}
+
 QString Document::projectPath() const {
     return session_->path().empty() ? QStringLiteral("(unsaved)")
                                     : qstr(session_->path().string());
@@ -4059,6 +4064,11 @@ void Document::initializeEncodeGraph() {
         if (!audio.empty())
             o.audio_encode = audio.front().id;
         o.destination.kind = kind;
+        // A recording goes into the project's own Recordings folder unless the operator says
+        // otherwise, which is what puts it in front of them on the Media tab afterwards. Only
+        // for an output being created here: an existing one keeps wherever it was pointed.
+        if (kind == ldoc::DestinationKind::File && !session_->path().empty())
+            o.destination.url = (session_->path() / "Recordings").string();
         o.position = {origin.x + 360.0, next_y};
         next_y += 170.0;
         steps.push_back(ldoc::AddOutput{o, outputs.size()});

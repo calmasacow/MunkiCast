@@ -483,6 +483,23 @@ std::string project_to_json(const Project& project) {
         scenes.append(e);
     }
     root["scenes"] = scenes;
+
+    // The sub-document manifests. The documents themselves live in timelines/<ulid>.mtime and
+    // graphics/<ulid>.manim; these entries say which files to look for and what generation each
+    // was last written in, exactly as the scene manifest does.
+    auto manifest = [](const std::vector<SubdocRef>& refs) {
+        Jv a{Json::arrayValue};
+        for (const SubdocRef& r : refs) {
+            Jv e{Json::objectValue};
+            e["id"] = enc(r.id);
+            e["name"] = r.name;
+            e["generation"] = static_cast<Json::UInt64>(r.generation);
+            a.append(e);
+        }
+        return a;
+    };
+    root["timelines"] = manifest(project.timelines);
+    root["graphics"] = manifest(project.graphics);
     return write(root);
 }
 
@@ -1169,6 +1186,289 @@ std::expected<SceneFile, std::string> scene_from_json(std::string_view text) {
     return out;
 }
 
+// ---- sub-documents ---------------------------------------------------------------------------
+
+namespace {
+
+Jv enc_channel(const Channel& c) {
+    Jv o{Json::objectValue};
+    o["constant"] = c.constant;
+    // An unanimated channel writes no key array at all, which keeps a static layer's entry in
+    // the file down to the handful of numbers it actually is.
+    if (!c.keys.empty()) {
+        Jv keys{Json::arrayValue};
+        for (const Keyframe& k : c.keys) {
+            Jv key{Json::objectValue};
+            key["at"] = static_cast<Json::Int64>(k.at);
+            key["value"] = k.value;
+            key["ease"] = k.ease;
+            keys.append(key);
+        }
+        o["keys"] = keys;
+    }
+    return o;
+}
+
+Channel dec_channel(Rd& rd, const Jv& parent, const char* key, std::string_view path) {
+    Channel c;
+    const Jv* o = rd.object(parent, key, path);
+    if (!o)
+        return c;
+    c.constant = rd.number(*o, "constant", path, 0.0);
+    if (const Jv* keys = rd.array(*o, "keys", path)) {
+        for (const Jv& k : *keys) {
+            Keyframe f;
+            f.at = rd.integer(k, "at", path, 0);
+            f.value = rd.number(k, "value", path, 0.0);
+            f.ease = rd.boolean(k, "ease", path, true);
+            c.keys.push_back(f);
+        }
+    }
+    return c;
+}
+
+Jv enc_clip(const Clip& c) {
+    Jv o{Json::objectValue};
+    o["id"] = enc(c.id);
+    o["source"] = c.source;
+    o["name"] = c.name;
+    o["start"] = static_cast<Json::Int64>(c.start);
+    o["duration"] = static_cast<Json::Int64>(c.duration);
+    o["source_in"] = static_cast<Json::Int64>(c.source_in);
+    o["gain_db"] = c.gain_db;
+    return o;
+}
+
+Jv enc_track(const Track& t) {
+    Jv o{Json::objectValue};
+    o["id"] = enc(t.id);
+    o["name"] = t.name;
+    o["kind"] = std::string{to_string(t.kind)};
+    o["enabled"] = t.enabled;
+    o["locked"] = t.locked;
+    Jv clips{Json::arrayValue};
+    for (const Clip& c : t.clips)
+        clips.append(enc_clip(c));
+    o["clips"] = clips;
+    return o;
+}
+
+Jv enc_layer(const Layer& l) {
+    Jv o{Json::objectValue};
+    o["id"] = enc(l.id);
+    o["name"] = l.name;
+    o["kind"] = std::string{to_string(l.kind)};
+    o["visible"] = l.visible;
+    o["locked"] = l.locked;
+    o["x"] = enc_channel(l.x);
+    o["y"] = enc_channel(l.y);
+    o["width"] = enc_channel(l.width);
+    o["height"] = enc_channel(l.height);
+    o["rotation"] = enc_channel(l.rotation);
+    o["opacity"] = enc_channel(l.opacity);
+    o["color"] = static_cast<Json::UInt>(l.color);
+    o["text"] = l.text;
+    o["data_field"] = l.data_field;
+    o["font_size"] = l.font_size;
+    o["source"] = l.source;
+    return o;
+}
+
+} // namespace
+
+std::string timeline_to_json(const Timeline& timeline, std::uint64_t generation) {
+    Jv root{Json::objectValue};
+    root["format"] = "munkicast.timeline";
+    root["schema_version"] = kSchemaVersion;
+    root["generation"] = static_cast<Json::UInt64>(generation);
+    root["id"] = enc(timeline.id);
+    root["name"] = timeline.name;
+    root["fps"] = enc(timeline.fps);
+    root["width"] = timeline.width;
+    root["height"] = timeline.height;
+    root["playhead"] = static_cast<Json::Int64>(timeline.playhead);
+    if (timeline.in_point)
+        root["in_point"] = static_cast<Json::Int64>(*timeline.in_point);
+    if (timeline.out_point)
+        root["out_point"] = static_cast<Json::Int64>(*timeline.out_point);
+
+    Jv tracks{Json::arrayValue};
+    for (const Track& t : timeline.tracks)
+        tracks.append(enc_track(t));
+    root["tracks"] = tracks;
+
+    Jv markers{Json::arrayValue};
+    for (const Marker& m : timeline.markers) {
+        Jv o{Json::objectValue};
+        o["id"] = enc(m.id);
+        o["at"] = static_cast<Json::Int64>(m.at);
+        o["name"] = m.name;
+        o["color"] = static_cast<Json::UInt>(m.color);
+        markers.append(o);
+    }
+    root["markers"] = markers;
+    return write(root);
+}
+
+std::string graphic_to_json(const Graphic& graphic, std::uint64_t generation) {
+    Jv root{Json::objectValue};
+    root["format"] = "munkicast.graphic";
+    root["schema_version"] = kSchemaVersion;
+    root["generation"] = static_cast<Json::UInt64>(generation);
+    root["id"] = enc(graphic.id);
+    root["name"] = graphic.name;
+    root["fps"] = enc(graphic.fps);
+    root["width"] = graphic.width;
+    root["height"] = graphic.height;
+    root["duration"] = static_cast<Json::Int64>(graphic.duration);
+    root["playhead"] = static_cast<Json::Int64>(graphic.playhead);
+
+    Jv layers{Json::arrayValue};
+    for (const Layer& l : graphic.layers)
+        layers.append(enc_layer(l));
+    root["layers"] = layers;
+    return write(root);
+}
+
+std::expected<SubdocFile<Timeline>, std::string> timeline_from_json(std::string_view text) {
+    std::string parse_error;
+    const auto root = parse_text(text, parse_error);
+    if (!root)
+        return std::unexpected(parse_error);
+    if (!root->isObject())
+        return std::unexpected("the timeline file is not a JSON object");
+
+    Rd rd;
+    if (!detail::check_version(rd, *root, "timeline"))
+        return std::unexpected(rd.error());
+
+    SubdocFile<Timeline> out;
+    out.schema_version =
+        static_cast<int>(rd.integer(*root, "schema_version", "timeline", kSchemaVersion));
+    const std::int64_t gen = rd.integer(*root, "generation", "timeline", 0);
+    out.generation = gen < 0 ? 0 : static_cast<std::uint64_t>(gen);
+
+    Timeline& t = out.document;
+    t.id = rd.id(*root, "id", "timeline");
+    t.name = rd.text(*root, "name", "timeline");
+    if (const Jv* f = rd.object(*root, "fps", "timeline")) {
+        t.fps.num = rd.integer32(*f, "num", "timeline", t.fps.num);
+        t.fps.den = rd.integer32(*f, "den", "timeline", t.fps.den);
+    }
+    t.width = rd.integer32(*root, "width", "timeline", t.width);
+    t.height = rd.integer32(*root, "height", "timeline", t.height);
+    t.playhead = rd.integer(*root, "playhead", "timeline", 0);
+    if (root->isMember("in_point"))
+        t.in_point = rd.integer(*root, "in_point", "timeline", 0);
+    if (root->isMember("out_point"))
+        t.out_point = rd.integer(*root, "out_point", "timeline", 0);
+
+    if (const Jv* tracks = rd.array(*root, "tracks", "timeline")) {
+        for (const Jv& tv : *tracks) {
+            Track track;
+            track.id = rd.id(tv, "id", "track");
+            track.name = rd.text(tv, "name", "track");
+            track.kind = rd.enumerated(tv, "kind", "track", track_kind_from_string,
+                                       TrackKind::Video);
+            track.enabled = rd.boolean(tv, "enabled", "track", true);
+            track.locked = rd.boolean(tv, "locked", "track", false);
+            if (const Jv* clips = rd.array(tv, "clips", "track")) {
+                for (const Jv& cv : *clips) {
+                    Clip clip;
+                    clip.id = rd.id(cv, "id", "clip");
+                    clip.source = rd.text(cv, "source", "clip");
+                    clip.name = rd.text(cv, "name", "clip");
+                    clip.start = rd.integer(cv, "start", "clip", 0);
+                    clip.duration = rd.integer(cv, "duration", "clip", 0);
+                    clip.source_in = rd.integer(cv, "source_in", "clip", 0);
+                    clip.gain_db = rd.number(cv, "gain_db", "clip", 0.0);
+                    track.clips.push_back(std::move(clip));
+                }
+            }
+            t.tracks.push_back(std::move(track));
+        }
+    }
+
+    if (const Jv* markers = rd.array(*root, "markers", "timeline")) {
+        for (const Jv& mv : *markers) {
+            Marker m;
+            m.id = rd.id(mv, "id", "marker");
+            m.at = rd.integer(mv, "at", "marker", 0);
+            m.name = rd.text(mv, "name", "marker");
+            m.color = static_cast<std::uint32_t>(rd.integer(mv, "color", "marker", 0xFFCC00));
+            t.markers.push_back(std::move(m));
+        }
+    }
+
+    if (!rd.ok())
+        return std::unexpected(rd.error());
+    // A file that parses but does not describe a timeline is corruption, and it must not reach
+    // the editor: every edit operation assumes clips are sorted and do not overlap.
+    if (const auto bad = t.validate())
+        return std::unexpected(*bad);
+    return out;
+}
+
+std::expected<SubdocFile<Graphic>, std::string> graphic_from_json(std::string_view text) {
+    std::string parse_error;
+    const auto root = parse_text(text, parse_error);
+    if (!root)
+        return std::unexpected(parse_error);
+    if (!root->isObject())
+        return std::unexpected("the graphic file is not a JSON object");
+
+    Rd rd;
+    if (!detail::check_version(rd, *root, "graphic"))
+        return std::unexpected(rd.error());
+
+    SubdocFile<Graphic> out;
+    out.schema_version =
+        static_cast<int>(rd.integer(*root, "schema_version", "graphic", kSchemaVersion));
+    const std::int64_t gen = rd.integer(*root, "generation", "graphic", 0);
+    out.generation = gen < 0 ? 0 : static_cast<std::uint64_t>(gen);
+
+    Graphic& g = out.document;
+    g.id = rd.id(*root, "id", "graphic");
+    g.name = rd.text(*root, "name", "graphic");
+    if (const Jv* f = rd.object(*root, "fps", "graphic")) {
+        g.fps.num = rd.integer32(*f, "num", "graphic", g.fps.num);
+        g.fps.den = rd.integer32(*f, "den", "graphic", g.fps.den);
+    }
+    g.width = rd.integer32(*root, "width", "graphic", g.width);
+    g.height = rd.integer32(*root, "height", "graphic", g.height);
+    g.duration = rd.integer(*root, "duration", "graphic", g.duration);
+    g.playhead = rd.integer(*root, "playhead", "graphic", 0);
+
+    if (const Jv* layers = rd.array(*root, "layers", "graphic")) {
+        for (const Jv& lv : *layers) {
+            Layer l;
+            l.id = rd.id(lv, "id", "layer");
+            l.name = rd.text(lv, "name", "layer");
+            l.kind = rd.enumerated(lv, "kind", "layer", layer_kind_from_string, LayerKind::Rect);
+            l.visible = rd.boolean(lv, "visible", "layer", true);
+            l.locked = rd.boolean(lv, "locked", "layer", false);
+            l.x = dec_channel(rd, lv, "x", "layer");
+            l.y = dec_channel(rd, lv, "y", "layer");
+            l.width = dec_channel(rd, lv, "width", "layer");
+            l.height = dec_channel(rd, lv, "height", "layer");
+            l.rotation = dec_channel(rd, lv, "rotation", "layer");
+            l.opacity = dec_channel(rd, lv, "opacity", "layer");
+            l.color = static_cast<std::uint32_t>(rd.integer(lv, "color", "layer", 0xFFFFFF));
+            l.text = rd.text(lv, "text", "layer");
+            l.data_field = rd.text(lv, "data_field", "layer");
+            l.font_size = rd.number(lv, "font_size", "layer", 48.0);
+            l.source = rd.text(lv, "source", "layer");
+            g.layers.push_back(std::move(l));
+        }
+    }
+
+    if (!rd.ok())
+        return std::unexpected(rd.error());
+    if (const auto bad = g.validate())
+        return std::unexpected(*bad);
+    return out;
+}
+
 std::expected<std::vector<Asset>, std::string> assets_from_json(std::string_view text) {
     std::string parse_error;
     const auto root = parse_text(text, parse_error);
@@ -1295,6 +1595,29 @@ std::expected<ProjectFile, std::string> project_from_json(std::string_view text)
             scene_refs.push_back(std::move(ref));
         }
     }
+
+    // The sub-document manifests. Absent in a file written before they existed, which reads as
+    // a project with no timelines and no graphics -- exactly what it is.
+    auto read_manifest = [&rd, &root](const char* key, const char* path) {
+        std::vector<SubdocRef> refs;
+        if (const Jv* a = rd.array(*root, key, path)) {
+            for (const Jv& v : *a) {
+                if (!v.isObject()) {
+                    rd.fail(path, "an entry is not an object");
+                    break;
+                }
+                SubdocRef ref;
+                ref.id = rd.id(v, "id", path);
+                ref.name = rd.text(v, "name", path);
+                const std::int64_t g = rd.integer(v, "generation", path, 0);
+                ref.generation = g < 0 ? 0 : static_cast<std::uint64_t>(g);
+                refs.push_back(std::move(ref));
+            }
+        }
+        return refs;
+    };
+    p.timelines = read_manifest("timelines", "project.timelines");
+    p.graphics = read_manifest("graphics", "project.graphics");
 
     if (!rd.ok())
         return std::unexpected(rd.error());

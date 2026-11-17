@@ -529,7 +529,11 @@ Migration migrate(Project& project, const std::vector<LegacyOutputEncode>& legac
         to_v6(project, m.problems);
     if (project.schema_version < 7)
         clones_of_scenes(project, m.problems);
-
+    // Version 8 added the timeline and graphic manifests. Nothing to convert: a version 7
+    // project simply has neither, which reads correctly as a project with no timelines and no
+    // graphics. The version exists so that an older build *refuses* a project that has them,
+    // rather than opening it, ignoring the manifests and dropping them on its next save --
+    // which would delete the operator's edits without saying so.
     project.schema_version = kSchemaVersion;
     return m;
 }

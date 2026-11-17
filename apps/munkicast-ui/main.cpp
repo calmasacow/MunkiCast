@@ -6,6 +6,8 @@
 #include "connectors.hpp"
 #include "assetcache.hpp"
 #include "document.hpp"
+#include "edit.hpp"
+#include "graphics.hpp"
 #include "lcomp/composite.hpp"
 #include "ldoc/json.hpp"
 #include "ldoc/project_io.hpp"
@@ -41,6 +43,7 @@
 #include <QQmlContext>
 #include <QQmlComponent>
 #include <QQmlExpression>
+#include <QQmlError>
 #include <QQuickImageProvider>
 #include <QQuickItem>
 #include <QQuickItemGrabResult>
@@ -181,6 +184,9 @@ int main(int argc, char** argv) {
     const QCommandLineOption scene_reorder_check_opt{QStringLiteral("check-scene-reorder"),
         QStringLiteral("With --check, run scene and favourites reorder gesture checks.")};
     parser.addOption(scene_reorder_check_opt);
+    const QCommandLineOption subdocument_check_opt{QStringLiteral("check-subdocuments"),
+        QStringLiteral("With --check, run the timeline and graphic undo isolation checks.")};
+    parser.addOption(subdocument_check_opt);
     const QCommandLineOption panels_check_opt{QStringLiteral("check-panels"),
         QStringLiteral("With --check, exercise panel loading and collection switches.")};
     parser.addOption(panels_check_opt);
@@ -356,6 +362,16 @@ int main(int argc, char** argv) {
     QObject::connect(&app, &QCoreApplication::aboutToQuit, &document,
                      [&document] { document.flushSaves(); });
     follow_live();
+
+    // Printed before the load, so a QML error says *what* was wrong rather than only that
+    // something was. Without this a mistyped property in one panel reads as "the shell failed
+    // to load", which is the least useful sentence a build can produce.
+    QObject::connect(&engine, &QQmlEngine::warnings, &app,
+                     [](const QList<QQmlError>& warnings) {
+                         for (const QQmlError& error : warnings)
+                             std::fprintf(stderr, "qml: %s\n",
+                                          qPrintable(error.toString()));
+                     });
 
     engine.load(QUrl(QStringLiteral("qrc:/qt/qml/MunkiCast/qml/Main.qml")));
 
@@ -619,7 +635,16 @@ int main(int argc, char** argv) {
             // contents. Wait on actual geometry, not a fixed number of event-loop iterations.
             for (const auto* id : {"scenes", "sources", "properties", "shortcuts", "info",
                                   "broadcast-stats", "log", "audio-mixer", "countdowns",
-                                  "controls", "outputs", "canvas", "favourites"}) {
+                                  "controls", "outputs", "canvas", "favourites",
+                                  // Media, Edit and Graphics. Every one of these draws an
+                                  // empty state with no project open, which is the state this
+                                  // check runs in -- so a panel that only renders once it has
+                                  // a document would be caught here as a zero-size body.
+                                  "media-tree", "media-player", "media-table", "media-details",
+                                  "export-queue", "edit-bins", "edit-program",
+                                  "edit-properties", "edit-timeline", "graphics-tools",
+                                  "graphics-stage", "graphics-properties", "graphics-data",
+                                  "graphics-library", "graphics-timeline"}) {
                 workspace.closePanel(QLatin1String(id));
                 workspace.openPanel(QLatin1String(id));
                 workspace.activate(QLatin1String(id));
@@ -730,6 +755,121 @@ int main(int argc, char** argv) {
             report(mcp->apply(true, port, mcp->token()) && mcp->running(), "MCP can restart after a port conflict");
             mcp->apply(false, port, mcp->token());
             std::fprintf(stderr, "%s\n", rc == 0 ? "native MCP check passed" : "NATIVE MCP CHECK FAILED");
+            return rc;
+        }
+
+        if (parser.isSet(subdocument_check_opt)) {
+            // The guarantee the sub-document workspaces exist to make: undo acts on the
+            // document that has focus and on nothing else. Checked here, against the real
+            // singletons the shell wires up, rather than only in the library -- the thing that
+            // can break is the routing in `Shortcuts`, not the stacks underneath it.
+            auto* document = engine.singletonInstance<munkicast::ui::Document*>(
+                "MunkiCast", "Document");
+            auto* edit = engine.singletonInstance<munkicast::ui::Edit*>("MunkiCast", "Edit");
+            auto* graphics = engine.singletonInstance<munkicast::ui::Graphics*>(
+                "MunkiCast", "Graphics");
+            auto* shortcuts = engine.singletonInstance<munkicast::ui::Shortcuts*>(
+                "MunkiCast", "Shortcuts");
+            // Workspace selects by index; the check wants to name the tab it means.
+            const auto select_workspace = [&workspace](const QString& name) {
+                auto* rows = workspace.workspacesModel();
+                for (int i = 0; i < rows->rowCount(); ++i) {
+                    const auto row = rows->index(i, 0);
+                    if (rows->data(row, Qt::DisplayRole).toString() == name ||
+                        rows->data(row, Qt::UserRole + 1).toString() == name) {
+                        workspace.selectWorkspace(i);
+                        return workspace.activeWorkspaceName() == name;
+                    }
+                }
+                return false;
+            };
+
+            report(document && edit && graphics && shortcuts, "the workspaces are reachable");
+            // A refused edit says why, so a failure below reads as a reason rather than as a
+            // bare FAIL on the line after it.
+            QObject::connect(edit, &munkicast::ui::Edit::notice, &app,
+                             [](const QString& text) {
+                                 std::fprintf(stderr, "  .. edit: %s\n", qPrintable(text));
+                             });
+            QObject::connect(graphics, &munkicast::ui::Graphics::notice, &app,
+                             [](const QString& text) {
+                                 std::fprintf(stderr, "  .. graphics: %s\n", qPrintable(text));
+                             });
+            if (!document || !edit || !graphics || !shortcuts) {
+                std::fprintf(stderr, "SUB-DOCUMENT CHECK FAILED\n");
+                return 1;
+            }
+
+            // A project on disk, because a timeline is a file in one.
+            report(document->createCollection(QStringLiteral("Subdoc Check")),
+                   "a project can be created for the check");
+
+            const QString timeline = edit->createTimeline(QStringLiteral("Check Edit"));
+            report(!timeline.isEmpty() && edit->hasTimeline(), "a timeline can be made");
+
+            // One change to the show, one to the timeline, one to the show again.
+            document->renameCollection(QStringLiteral("Renamed Show"));
+            edit->addTrack(QStringLiteral("video"));
+            const int tracks_after = edit->timeline()
+                                         .value(QStringLiteral("tracks"))
+                                         .toList()
+                                         .size();
+            document->renameCollection(QStringLiteral("Renamed Twice"));
+
+            // Undo with the Live tab in front: the show goes back one step and the timeline
+            // does not move, even though the timeline edit is the more recent one.
+            report(select_workspace(QStringLiteral("Live")), "the Live tab can be selected");
+            shortcuts->perform(QStringLiteral("edit.undo"));
+            report(document->projectName() == QLatin1String("Renamed Show"),
+                   "undo on Live reverses the show's last change");
+            report(edit->timeline().value(QStringLiteral("tracks")).toList().size() ==
+                       tracks_after,
+                   "undo on Live leaves the timeline alone");
+
+            // Now with the Edit tab in front: the timeline goes back and the show does not.
+            report(select_workspace(QStringLiteral("Edit")), "the Edit tab can be selected");
+            shortcuts->perform(QStringLiteral("edit.undo"));
+            report(edit->timeline().value(QStringLiteral("tracks")).toList().size() ==
+                       tracks_after - 1,
+                   "undo on Edit reverses the timeline's last change");
+            report(document->projectName() == QLatin1String("Renamed Show"),
+                   "undo on Edit leaves the show alone");
+
+            // And a graphic keeps a third stack of its own.
+            const QString graphic = graphics->createGraphic(QStringLiteral("Check Graphic"));
+            report(!graphic.isEmpty() && graphics->hasGraphic(), "a graphic can be made");
+            graphics->addLayer(QStringLiteral("rect"));
+            report(graphics->graphic().value(QStringLiteral("layers")).toList().size() == 1,
+                   "a layer can be added");
+            report(select_workspace(QStringLiteral("Graphics")),
+                   "the Graphics tab can be selected");
+            shortcuts->perform(QStringLiteral("edit.undo"));
+            report(graphics->graphic().value(QStringLiteral("layers")).toList().isEmpty(),
+                   "undo on Graphics reverses the graphic's last change");
+            report(document->projectName() == QLatin1String("Renamed Show"),
+                   "undo on Graphics leaves the show alone");
+
+            // The exported overlay is the point of the Graphics tab, so it is checked rather
+            // than assumed: a page that was not written is a tab that does not work.
+            graphics->addLayer(QStringLiteral("text"));
+            const QString page = graphics->exportHtml();
+            report(!page.isEmpty() && QFileInfo::exists(page), "the HTML overlay is written");
+            if (!page.isEmpty()) {
+                QFile file(page);
+                if (file.open(QIODevice::ReadOnly)) {
+                    const QString html = QString::fromUtf8(file.readAll());
+                    report(html.contains(QLatin1String("munkicast.graphic")),
+                           "the overlay carries the document it plays");
+                    report(html.contains(QLatin1String("window.setFields")),
+                           "the overlay takes the show's data");
+                }
+            }
+
+            // The collection the check made is left where `createCollection` put it, as every
+            // other check leaves its own: removing it would mean deciding which directory the
+            // session is holding a lock on, and a temporary collection costs nothing.
+            std::fprintf(stderr, "%s\n",
+                         rc == 0 ? "sub-document check passed" : "SUB-DOCUMENT CHECK FAILED");
             return rc;
         }
 

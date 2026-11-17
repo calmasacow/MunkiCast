@@ -12,7 +12,7 @@
 # desktop portal's OpenFile, and this machine's portal config sends that to Omanta. Qt's own
 # dialog is not used. Widgets is here for QColorDialog, which the colour field opens. That
 # dialog already has the picker and the custom-colour slots, so they are not rebuilt here.
-find_package(Qt6 6.5 REQUIRED COMPONENTS Core DBus Gui Network Qml Quick QuickControls2 QuickShapes Widgets WebEngineQuick)
+find_package(Qt6 6.5 REQUIRED COMPONENTS Core DBus Gui Multimedia Network Qml Quick QuickControls2 QuickShapes Widgets WebEngineQuick)
 
 qt_standard_project_setup(REQUIRES 6.5)
 
@@ -27,6 +27,12 @@ qt_add_executable(munkicast-ui
     connectors.hpp
     assetcache.cpp
     assetcache.hpp
+    media.cpp
+    media.hpp
+    edit.cpp
+    edit.hpp
+    graphics.cpp
+    graphics.hpp
     countdowns.cpp
     colourdialog.cpp
     colourdialog.hpp
@@ -109,6 +115,21 @@ qt_add_qml_module(munkicast-ui
         qml/FavouritesPanel.qml
         qml/InfoPanel.qml
         qml/LogPanel.qml
+        qml/MediaTreePanel.qml
+        qml/MediaPlayerPanel.qml
+        qml/MediaTablePanel.qml
+        qml/MediaDetailsPanel.qml
+        qml/ExportQueuePanel.qml
+        qml/EditBinsPanel.qml
+        qml/EditMonitorPanel.qml
+        qml/EditPropertiesPanel.qml
+        qml/EditTimelinePanel.qml
+        qml/GraphicsToolsPanel.qml
+        qml/GraphicsStagePanel.qml
+        qml/GraphicsPropertiesPanel.qml
+        qml/GraphicsDataPanel.qml
+        qml/GraphicsLibraryPanel.qml
+        qml/GraphicsTimelinePanel.qml
         qml/Main.qml
         qml/MainMenu.qml
         qml/McpSettingsDialog.qml
@@ -154,6 +175,10 @@ target_link_libraries(munkicast-ui PRIVATE
     munkicast::ltheme
     Qt6::Network
     Qt6::DBus
+    # Review playback on the Media and Edit tabs. Not the program path: a file being looked
+    # at has none of a live feed's frame deadlines, and routing it through the renderer would
+    # make a preview depend on a pipeline that may not be attached.
+    Qt6::Multimedia
     Qt6::Gui
     Qt6::Quick
     Qt6::QuickShapes
@@ -189,6 +214,12 @@ if(MUNKICAST_BUILD_TESTS)
     # being tested. Deleting it by hand was the standing workaround; this is the fix.
     add_test(NAME scene_reorder_self_check COMMAND $<TARGET_FILE:munkicast-ui> --check --check-scene-reorder)
     set_tests_properties(scene_reorder_self_check PROPERTIES TIMEOUT 30 LABELS "needs-qt-threads"
+        ENVIRONMENT "QT_IM_MODULE=none;MUNKICAST_RENDER_BACKEND=cpu")
+    # Undo isolation between the show and the sub-documents, driven through the real
+    # singletons and the real shortcut routing rather than the library alone.
+    add_test(NAME subdocument_self_check
+        COMMAND $<TARGET_FILE:munkicast-ui> --check --check-subdocuments)
+    set_tests_properties(subdocument_self_check PROPERTIES TIMEOUT 60 LABELS "needs-qt-threads"
         ENVIRONMENT "QT_IM_MODULE=none;MUNKICAST_RENDER_BACKEND=cpu")
     add_test(NAME studio_self_check COMMAND $<TARGET_FILE:munkicast-ui> --check --check-studio)
     set_tests_properties(studio_self_check PROPERTIES TIMEOUT 30 LABELS "needs-qt-threads"

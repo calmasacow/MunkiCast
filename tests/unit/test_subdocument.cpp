@@ -8,6 +8,7 @@
 #include "ldoc/history.hpp"
 #include "ldoc/subcommand.hpp"
 #include "ldoc/subdocument.hpp"
+#include "ldoc/json.hpp"
 #include "ldoc/workbench.hpp"
 
 #include "ltest.hpp"
@@ -39,7 +40,7 @@ struct Fixture {
 
         Clip a;
         a.id = Id::generate();
-        a.asset = Id::generate();
+        a.source = "/media/a.mov";
         a.name = "A";
         a.start = 0;
         a.duration = 100;
@@ -47,7 +48,7 @@ struct Fixture {
 
         Clip b;
         b.id = Id::generate();
-        b.asset = Id::generate();
+        b.source = "/media/b.mov";
         b.name = "B";
         b.start = 200;
         b.duration = 100;
@@ -64,7 +65,7 @@ struct Fixture {
 Clip make_clip(const char* name, Frame start, Frame duration) {
     Clip c;
     c.id = Id::generate();
-    c.asset = Id::generate();
+    c.source = "/media/c.mov";
     c.name = name;
     c.start = start;
     c.duration = duration;
@@ -453,6 +454,62 @@ LTEST_CASE(the_workbench_reports_which_documents_have_unsaved_work) {
 
     timeline.note_saved();
     CHECK(bench.dirty_documents().empty());
+}
+
+// ---- files --------------------------------------------------------------------------------
+
+LTEST_CASE(a_timeline_round_trips_through_its_own_file) {
+    Fixture f;
+    f.timeline.markers.push_back(Marker{Id::generate(), 120, "Chorus", 0x00AAFF});
+    f.timeline.in_point = 10;
+    f.timeline.out_point = 250;
+    f.timeline.playhead = 42;
+
+    const std::string text = timeline_to_json(f.timeline, 7);
+    const auto read = timeline_from_json(text);
+    REQUIRE_MSG(read.has_value(), "{}", read.error());
+    CHECK_EQ(read->generation, std::uint64_t{7});
+    CHECK(read->document == f.timeline);
+}
+
+LTEST_CASE(a_graphic_round_trips_through_its_own_file) {
+    Graphic g;
+    g.id = Id::generate();
+    g.name = "Lower Third";
+    g.fps = Fps{25, 1};
+    g.duration = 200;
+
+    Layer l;
+    l.id = Id::generate();
+    l.kind = LayerKind::Text;
+    l.name = "Name";
+    l.text = "Jane Doe";
+    l.data_field = "name";
+    l.font_size = 64.0;
+    l.color = 0x102030;
+    // One animated channel and one constant, so both shapes are exercised.
+    l.x.keys = {Keyframe{0, -400.0, true}, Keyframe{12, 60.0, false}};
+    l.opacity.constant = 0.5;
+    g.layers.push_back(std::move(l));
+
+    const std::string text = graphic_to_json(g, 3);
+    const auto read = graphic_from_json(text);
+    REQUIRE_MSG(read.has_value(), "{}", read.error());
+    CHECK_EQ(read->generation, std::uint64_t{3});
+    CHECK(read->document == g);
+}
+
+LTEST_CASE(a_corrupt_timeline_file_is_refused_rather_than_half_read) {
+    // Clips that overlap parse as JSON but are not a timeline any edit operation can work on,
+    // so the reader refuses the file instead of handing back a document that breaks later.
+    Fixture f;
+    f.timeline.tracks[0].clips[1].start = 50; // on top of clip A
+    const std::string text = timeline_to_json(f.timeline, 1);
+    CHECK(!timeline_from_json(text).has_value());
+
+    CHECK(!timeline_from_json("{").has_value());
+    CHECK(!timeline_from_json("[]").has_value());
+    CHECK(!timeline_from_json("{\"name\": \"no version\"}").has_value());
 }
 
 LTEST_MAIN("subdocument")

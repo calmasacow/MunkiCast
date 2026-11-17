@@ -204,7 +204,7 @@ std::optional<std::string> Graphic::validate() const {
     for (const Layer& l : layers) {
         if (!ids.insert(l.id).second)
             return std::format("graphic '{}' has two layers with the same id", name);
-        if (l.kind == LayerKind::Image && !l.asset)
+        if (l.kind == LayerKind::Image && l.source.empty())
             return std::format("image layer '{}' names no picture", l.name);
 
         const std::pair<const Channel*, const char*> channels[] = {

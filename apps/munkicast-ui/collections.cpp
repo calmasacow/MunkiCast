@@ -188,6 +188,10 @@ void Document::installSession(std::unique_ptr<lsession::Session> session) {
     session_->subscribe([this](const lsession::Change&) { rebuild(); });
     rebuild();
     emit canvasChanged();
+    // After rebuild(), so anything that reacts by reading the project sees the new one.
+    emit projectOpened(session_->path().empty()
+                           ? QString{}
+                           : QString::fromStdString(session_->path().string()));
     rememberCollection();
 }
 

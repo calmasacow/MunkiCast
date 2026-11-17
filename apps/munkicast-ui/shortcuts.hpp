@@ -130,7 +130,13 @@ private:
     lsession::Bindings bindings_;
     BindingModel bindings_model_;
     Document* document_ = nullptr;
+    /// Route an undo or redo to the focused sub-document. True when it was handled there.
+    bool sub_document_workspace(bool redo = false);
+
     Workspace* workspace_ = nullptr;
+    /// The sub-document workspaces, so Undo can be routed to whichever one has focus.
+    class Edit* edit_ = nullptr;
+    class Graphics* graphics_ = nullptr;
     std::filesystem::path file_;
     std::vector<QString> known_actions_;
 };

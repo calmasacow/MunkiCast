@@ -763,6 +763,12 @@ public:
     // holds a mutable Project.
 
     [[nodiscard]] const ldoc::Project& projectForBindings() const;
+    /// The open project's directory, or empty for one never saved.
+    ///
+    /// Distinct from `projectPath`, which is for display and says "(unsaved)". This is the
+    /// path the sub-document workspaces write their files into, so it has to be a real path
+    /// or nothing at all.
+    [[nodiscard]] QString projectDirectory() const;
     void runCommand(const ldoc::Command& command);
     std::expected<std::string, std::string> remoteCommand(const ldoc::Command& command);
     /// Rebuilds the row models without the project having changed. For `AssetCache`: a prepared
@@ -781,6 +787,12 @@ signals:
   /// Something to say in the status bar: a refused command, a failed save, a recovered journal.
   void notice(const QString& text);
   void outputKeySaveFinished(const QString& outputId, bool saved);
+  /// A different project is now open, with its directory, or empty for one never saved.
+  ///
+  /// A signal rather than a call into the workspaces that need it: the Media, Edit and
+  /// Graphics singletons each keep their own state against a project, and `Document` has no
+  /// business knowing they exist.
+  void projectOpened(const QString& directory);
   /// The sources list should start renaming this node.
   void renameRequested(const QString& nodeId);
 

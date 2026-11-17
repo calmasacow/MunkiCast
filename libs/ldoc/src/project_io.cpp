@@ -35,6 +35,8 @@ constexpr std::string_view kJournalFile = "journal.jsonl";
 constexpr std::string_view kSavingJournalFile = "journal.saving.jsonl";
 constexpr std::string_view kTimelinesDir = "timelines";
 constexpr std::string_view kGraphicsDir = "graphics";
+constexpr std::string_view kTimelineExt = ".mtime";
+constexpr std::string_view kGraphicExt = ".manim";
 
 std::string why(std::string_view what, const fs::path& p) {
     return std::format("{} {}: {}", what, p.string(), std::strerror(errno));
@@ -516,6 +518,12 @@ std::expected<void, std::string> save_project(Project& project, const fs::path& 
     staged.generation = gen;
     clear_on_air(staged);
 
+    // Sub-documents are deliberately not staged here. A timeline and a graphic are each one
+    // file, saved by `save_timeline`/`save_graphic` when that document is edited; the staged
+    // multi-file protocol exists because `project.json`, the scene files and the asset manifest
+    // have to agree with each other, and a single file needs only an atomic replace. Keeping
+    // them out means editing a timeline does not rewrite the show, and saving the show does not
+    // touch an edit someone has open.
     for (const Scene& s : staged.scenes) {
         const auto r = write_sync(scene_file(staging / kScenesDir, s.id),
                                   scene_to_json(s, gen));
@@ -581,6 +589,73 @@ void start_on_emergency(Project& project) {
                 break;
             }
     }
+}
+
+fs::path timeline_file(const fs::path& dir, const Id& id) {
+    return timelines_dir(dir) / std::format("{}{}", id.to_string(), kTimelineExt);
+}
+
+fs::path graphic_file(const fs::path& dir, const Id& id) {
+    return graphics_dir(dir) / std::format("{}{}", id.to_string(), kGraphicExt);
+}
+
+namespace {
+
+/// One sub-document, written whole or not at all.
+///
+/// `lc::write_atomic` is the same replace-by-rename the rest of the project relies on: write a
+/// temporary beside the target, fsync it, rename over, fsync the directory. A crash at any point
+/// leaves either the complete old file or the complete new one.
+std::expected<void, std::string> save_subdoc(const fs::path& folder, const fs::path& path,
+                                             std::string_view text) {
+    std::error_code ec;
+    fs::create_directories(folder, ec);
+    if (ec)
+        return std::unexpected(std::format("create {}: {}", folder.string(), ec.message()));
+    if (const auto r = write_sync(path, text); !r)
+        return std::unexpected(r.error());
+    sync_dir(folder);
+    return {};
+}
+
+} // namespace
+
+std::expected<void, std::string> save_timeline(const fs::path& dir, const Timeline& timeline,
+                                               std::uint64_t generation) {
+    // Checked before it reaches the disk. A timeline whose clips overlap would be refused on
+    // the way back in, which would turn a save into a document that cannot be reopened.
+    if (const auto bad = timeline.validate())
+        return std::unexpected(*bad);
+    return save_subdoc(timelines_dir(dir), timeline_file(dir, timeline.id),
+                       timeline_to_json(timeline, generation));
+}
+
+std::expected<void, std::string> save_graphic(const fs::path& dir, const Graphic& graphic,
+                                              std::uint64_t generation) {
+    if (const auto bad = graphic.validate())
+        return std::unexpected(*bad);
+    return save_subdoc(graphics_dir(dir), graphic_file(dir, graphic.id),
+                       graphic_to_json(graphic, generation));
+}
+
+std::expected<Timeline, std::string> load_timeline(const fs::path& dir, const Id& id) {
+    const auto text = lc::read_file(timeline_file(dir, id));
+    if (!text)
+        return std::unexpected(text.error());
+    auto file = timeline_from_json(*text);
+    if (!file)
+        return std::unexpected(file.error());
+    return std::move(file->document);
+}
+
+std::expected<Graphic, std::string> load_graphic(const fs::path& dir, const Id& id) {
+    const auto text = lc::read_file(graphic_file(dir, id));
+    if (!text)
+        return std::unexpected(text.error());
+    auto file = graphic_from_json(*text);
+    if (!file)
+        return std::unexpected(file.error());
+    return std::move(file->document);
 }
 
 const std::vector<std::string>& working_folders() {

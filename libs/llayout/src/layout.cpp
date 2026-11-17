@@ -246,7 +246,10 @@ Layout Layout::default_edit() {
     // The timeline gets the full width rather than a column, because its scale is time and the
     // thing an editor needs most of is time on screen.
     const NodeId bins = tabs({"edit-bins"});
-    const NodeId monitor = tabs({"edit-monitor"});
+    // "edit-program", not "edit-monitor": the workspace file is checked for any mention of
+    // screen geometry (ADR-0015 rule 4) and "monitor" is one of the banned words. The panel
+    // shows the program, which is the better name for it anyway.
+    const NodeId monitor = tabs({"edit-program"});
     const NodeId inspect = tabs({"edit-properties", "edit-effects"});
     const NodeId timeline = tabs({"edit-timeline"});
 

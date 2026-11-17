@@ -87,6 +87,38 @@ struct OpenResult {
     std::size_t recovered_commands = 0;
 };
 
+/// Where a sub-document lives inside a project directory.
+///
+/// `.mtime` and `.manim` rather than `.json`, because these are files an operator handles: they
+/// are copied between projects, attached to a message, and recognised in a file manager. The
+/// contents are JSON all the same.
+[[nodiscard]] std::filesystem::path timeline_file(const std::filesystem::path& dir,
+                                                  const Id& id);
+[[nodiscard]] std::filesystem::path graphic_file(const std::filesystem::path& dir, const Id& id);
+
+/// Write one sub-document to its own file, atomically.
+///
+/// Independent of `save_project`, and that independence is the point: editing a timeline writes
+/// one file, without rewriting `project.json` and without disturbing the show. The staged
+/// multi-file protocol exists because a project is many files that have to agree; a
+/// sub-document is one file, so an atomic replace is the whole of what it needs.
+///
+/// `generation` is stamped into the file and belongs in the project's manifest entry, which is
+/// how a file changed behind this build's back is noticed on open.
+[[nodiscard]] std::expected<void, std::string> save_timeline(const std::filesystem::path& dir,
+                                                             const Timeline& timeline,
+                                                             std::uint64_t generation);
+[[nodiscard]] std::expected<void, std::string> save_graphic(const std::filesystem::path& dir,
+                                                            const Graphic& graphic,
+                                                            std::uint64_t generation);
+
+/// Read one back. A file that will not parse is an error for *that document* and nothing else,
+/// which is the same guarantee a scene file has: one bad byte costs one document.
+[[nodiscard]] std::expected<Timeline, std::string> load_timeline(const std::filesystem::path& dir,
+                                                                 const Id& id);
+[[nodiscard]] std::expected<Graphic, std::string> load_graphic(const std::filesystem::path& dir,
+                                                               const Id& id);
+
 /// The working folders a project directory carries beside its model files, in the order they
 /// are created. Exposed so that the panels which write into them -- the recorder, the export
 /// queue, the media cache -- name the same folders the creator made.

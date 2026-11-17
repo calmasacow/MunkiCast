@@ -48,9 +48,13 @@ enum class TrackKind : std::uint8_t {
 /// a ripple trim expressible as arithmetic rather than as a special case.
 struct Clip {
     Id id;
-    /// The media this shows, by asset id. An asset the project no longer has leaves the clip in
-    /// place and offline, rather than deleting the operator's edit for them.
-    Id asset;
+    /// The media this shows, as a path.
+    ///
+    /// By path rather than by asset id, which is what every editor's project file does: an edit
+    /// outlives the project it was cut in, and a timeline copied to another machine has to name
+    /// its media in terms that machine can resolve. A file that is not there leaves the clip in
+    /// place and offline, rather than deleting the operator's work for them.
+    std::string source;
     /// Where this clip starts on the timeline.
     Frame start = 0;
     /// How long it runs. Always > 0 for a clip that exists; a zero-length clip is a removal.
@@ -210,8 +214,9 @@ struct Layer {
     /// template a template rather than a one-off.
     std::string data_field;
     double font_size = 48.0;
-    /// The still this layer draws, for `LayerKind::Image`.
-    std::optional<Id> asset;
+    /// The still this layer draws, for `LayerKind::Image`. A path, for the same reason a
+    /// clip's source is one: a graphic is copied between projects.
+    std::string source;
 
     friend bool operator==(const Layer&, const Layer&) = default;
 };

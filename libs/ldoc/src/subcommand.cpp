@@ -411,7 +411,7 @@ std::expected<AppliedTo<GraphicCommand>, std::string> apply(Graphic& graphic,
             } else if constexpr (std::is_same_v<T, AddLayer>) {
                 if (graphic.layer(c.layer.id))
                     return std::unexpected("that layer is already here");
-                if (c.layer.kind == LayerKind::Image && !c.layer.asset)
+                if (c.layer.kind == LayerKind::Image && c.layer.source.empty())
                     return std::unexpected("an image layer needs a picture");
                 const std::size_t at = std::min(c.index, graphic.layers.size());
                 graphic.layers.insert(graphic.layers.begin() + static_cast<std::ptrdiff_t>(at),

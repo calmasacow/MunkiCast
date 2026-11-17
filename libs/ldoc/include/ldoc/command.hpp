@@ -431,6 +431,49 @@ struct SetCanvasEmergencyScene {
 /// the variant would need Batch to be complete while Batch needed the variant to be. A
 /// `shared_ptr` to an incomplete type is fine, and the batch is immutable once built, so sharing
 /// it costs nothing.
+// ---- sub-documents --------------------------------------------------------------------------
+
+/// Add a timeline or a graphic to the project's manifest.
+///
+/// The document itself is written to its own file; this names it. Splitting the two is what
+/// lets a sub-document be edited and saved without touching `project.json`, and what keeps its
+/// undo stack out of the show's (see `ldoc::Workbench`).
+struct AddTimelineRef {
+    SubdocRef ref;
+    std::size_t index = 0;
+    friend bool operator==(const AddTimelineRef&, const AddTimelineRef&) = default;
+};
+
+/// Remove it from the manifest. The file is left on disk: deleting an operator's edit as a
+/// side effect of an undoable command is not something undo could put back.
+struct RemoveTimelineRef {
+    Id timeline;
+    friend bool operator==(const RemoveTimelineRef&, const RemoveTimelineRef&) = default;
+};
+
+struct RenameTimelineRef {
+    Id timeline;
+    std::string name;
+    friend bool operator==(const RenameTimelineRef&, const RenameTimelineRef&) = default;
+};
+
+struct AddGraphicRef {
+    SubdocRef ref;
+    std::size_t index = 0;
+    friend bool operator==(const AddGraphicRef&, const AddGraphicRef&) = default;
+};
+
+struct RemoveGraphicRef {
+    Id graphic;
+    friend bool operator==(const RemoveGraphicRef&, const RemoveGraphicRef&) = default;
+};
+
+struct RenameGraphicRef {
+    Id graphic;
+    std::string name;
+    friend bool operator==(const RenameGraphicRef&, const RenameGraphicRef&) = default;
+};
+
 struct BatchBody;
 
 struct Batch {
@@ -451,7 +494,8 @@ using Command = std::variant<
     RemoveSceneLink, SetCanvasEmergencyScene, SetNodeSource, AddSource, RemoveSource, SetSource,
     AddCanvas, RemoveCanvas, SetCanvas, AddBus, RemoveBus, SetBus, AddOutput, RemoveOutput,
     SetOutput, AddEncode, RemoveEncode, SetEncode, AddAudioEncode, RemoveAudioEncode,
-    SetAudioEncode, SetProjectSettings, Batch>;
+    SetAudioEncode, SetProjectSettings, AddTimelineRef, RemoveTimelineRef, RenameTimelineRef,
+    AddGraphicRef, RemoveGraphicRef, RenameGraphicRef, Batch>;
 
 struct BatchBody {
     std::vector<Command> commands;

@@ -3,6 +3,7 @@
 #pragma once
 
 #include "ldoc/node.hpp"
+#include "ldoc/subdocument.hpp"
 #include "ldoc/types.hpp"
 
 #include <optional>
@@ -14,7 +15,7 @@ namespace ldoc {
 /// Bumped only by a change that older builds cannot read. Migrations are forward-only, with
 /// golden fixtures; a project newer than this opens read-only rather than silently dropping the
 /// fields this build does not know about.
-inline constexpr int kSchemaVersion = 7;
+inline constexpr int kSchemaVersion = 8;
 
 /// An output surface with its own size, rate and colour space.
 ///
@@ -352,6 +353,17 @@ struct Project {
     std::vector<AudioEncode> audio_encodes;
     std::vector<Output> outputs;
     Settings settings;
+
+    /// The sub-documents this project owns: timelines and motion graphics, by reference.
+    ///
+    /// A *manifest*, not the documents themselves. Each one lives in its own file and is owned,
+    /// once opened, by `ldoc::Workbench` -- which is also where its undo stack lives. Holding
+    /// the documents here as well would make two owners of the same work, and the copy that was
+    /// edited and the copy that was saved would eventually be different ones.
+    ///
+    /// Ordered as the operator arranged them, which is what the Edit and Graphics lists show.
+    std::vector<SubdocRef> timelines;
+    std::vector<SubdocRef> graphics;
 
     [[nodiscard]] const Canvas* canvas(const Id& wanted) const;
     [[nodiscard]] const Scene* scene(const Id& wanted) const;

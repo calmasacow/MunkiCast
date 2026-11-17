@@ -50,8 +50,11 @@ Item {
 
                 required property int index
 
-                readonly property string panelId: strip.tabs[index]
-                readonly property string label: strip.titles[index]
+                // Defaulted, because the count and the two lists are three separate reads of a
+                // model that is rebuilt mid-layout: for one frame the count can be ahead of the
+                // arrays, and an undefined assigned to a string is a warning per tab per rebuild.
+                readonly property string panelId: strip.tabs[index] ?? ""
+                readonly property string label: strip.titles[index] ?? ""
                 readonly property bool isActive: index === strip.activeTab
 
                 width: labelText.implicitWidth + (isActive ? 36 : 18)

@@ -230,7 +230,13 @@ std::string_view command_name(const Command& command) {
             else if constexpr (std::is_same_v<T, AddOutput>) return "output.add";
             else if constexpr (std::is_same_v<T, RemoveOutput>) return "output.remove";
             else if constexpr (std::is_same_v<T, SetOutput>) return "output.set";
-            else return "project.set-settings";
+            else if constexpr (std::is_same_v<T, SetProjectSettings>) return "project.set-settings";
+            else if constexpr (std::is_same_v<T, AddTimelineRef>) return "timeline.add";
+            else if constexpr (std::is_same_v<T, RemoveTimelineRef>) return "timeline.remove";
+            else if constexpr (std::is_same_v<T, RenameTimelineRef>) return "timeline.rename";
+            else if constexpr (std::is_same_v<T, AddGraphicRef>) return "graphic.add";
+            else if constexpr (std::is_same_v<T, RemoveGraphicRef>) return "graphic.remove";
+            else return "graphic.rename";
         },
         command);
 }
@@ -337,6 +343,18 @@ std::string describe(const Command& command) {
                 return "Remove output";
             else if constexpr (std::is_same_v<T, SetOutput>)
                 return std::format("Change output {}", quoted(c.value.name));
+            else if constexpr (std::is_same_v<T, AddTimelineRef>)
+                return std::format("Add timeline {}", quoted(c.ref.name));
+            else if constexpr (std::is_same_v<T, RemoveTimelineRef>)
+                return "Remove timeline";
+            else if constexpr (std::is_same_v<T, RenameTimelineRef>)
+                return std::format("Rename timeline to {}", quoted(c.name));
+            else if constexpr (std::is_same_v<T, AddGraphicRef>)
+                return std::format("Add graphic {}", quoted(c.ref.name));
+            else if constexpr (std::is_same_v<T, RemoveGraphicRef>)
+                return "Remove graphic";
+            else if constexpr (std::is_same_v<T, RenameGraphicRef>)
+                return std::format("Rename graphic to {}", quoted(c.name));
             else
                 return "Change project settings";
         },
@@ -1256,6 +1274,84 @@ struct Apply {
             return std::unexpected("the render queue needs at least one frame");
         Applied out{SetProjectSettings{p.settings}, describe(c)};
         p.settings = c.value;
+        return out;
+    }
+
+    // ---- sub-document manifests ----------------------------------------------------------
+    //
+    // These commands manage the *list*, never the document. A timeline's own edits go through
+    // `ldoc::Workbench` on a stack of their own, which is what keeps undo on the Live tab from
+    // reaching into an edit someone made on the Edit tab.
+
+    std::expected<Applied, std::string> operator()(const AddTimelineRef& c) const {
+        if (c.index > p.timelines.size())
+            return std::unexpected("that position is past the end of the timeline list");
+        if (c.ref.id.is_nil())
+            return std::unexpected("a timeline needs an id");
+        if (c.ref.name.empty())
+            return std::unexpected("a timeline needs a name");
+        if (all_ids(p).contains(c.ref.id))
+            return std::unexpected(
+                std::format("id {} is already in the project", c.ref.id.to_string()));
+        Applied out{RemoveTimelineRef{c.ref.id}, describe(c)};
+        p.timelines.insert(p.timelines.begin() + static_cast<std::ptrdiff_t>(c.index), c.ref);
+        return out;
+    }
+
+    std::expected<Applied, std::string> operator()(const RemoveTimelineRef& c) const {
+        const auto it = std::ranges::find(p.timelines, c.timeline, &SubdocRef::id);
+        if (it == p.timelines.end())
+            return std::unexpected("there is no such timeline");
+        Applied out{AddTimelineRef{*it, static_cast<std::size_t>(it - p.timelines.begin())},
+                    describe(c)};
+        p.timelines.erase(it);
+        return out;
+    }
+
+    std::expected<Applied, std::string> operator()(const RenameTimelineRef& c) const {
+        const auto it = std::ranges::find(p.timelines, c.timeline, &SubdocRef::id);
+        if (it == p.timelines.end())
+            return std::unexpected("there is no such timeline");
+        if (c.name.empty())
+            return std::unexpected("a timeline needs a name");
+        Applied out{RenameTimelineRef{c.timeline, it->name}, describe(c)};
+        it->name = c.name;
+        return out;
+    }
+
+    std::expected<Applied, std::string> operator()(const AddGraphicRef& c) const {
+        if (c.index > p.graphics.size())
+            return std::unexpected("that position is past the end of the graphics list");
+        if (c.ref.id.is_nil())
+            return std::unexpected("a graphic needs an id");
+        if (c.ref.name.empty())
+            return std::unexpected("a graphic needs a name");
+        if (all_ids(p).contains(c.ref.id))
+            return std::unexpected(
+                std::format("id {} is already in the project", c.ref.id.to_string()));
+        Applied out{RemoveGraphicRef{c.ref.id}, describe(c)};
+        p.graphics.insert(p.graphics.begin() + static_cast<std::ptrdiff_t>(c.index), c.ref);
+        return out;
+    }
+
+    std::expected<Applied, std::string> operator()(const RemoveGraphicRef& c) const {
+        const auto it = std::ranges::find(p.graphics, c.graphic, &SubdocRef::id);
+        if (it == p.graphics.end())
+            return std::unexpected("there is no such graphic");
+        Applied out{AddGraphicRef{*it, static_cast<std::size_t>(it - p.graphics.begin())},
+                    describe(c)};
+        p.graphics.erase(it);
+        return out;
+    }
+
+    std::expected<Applied, std::string> operator()(const RenameGraphicRef& c) const {
+        const auto it = std::ranges::find(p.graphics, c.graphic, &SubdocRef::id);
+        if (it == p.graphics.end())
+            return std::unexpected("there is no such graphic");
+        if (c.name.empty())
+            return std::unexpected("a graphic needs a name");
+        Applied out{RenameGraphicRef{c.graphic, it->name}, describe(c)};
+        it->name = c.name;
         return out;
     }
 

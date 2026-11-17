@@ -3,6 +3,7 @@
 #pragma once
 
 #include "ldoc/document.hpp"
+#include "ldoc/subdocument.hpp"
 
 #include <expected>
 #include <string>
@@ -83,5 +84,28 @@ struct SceneFile {
 };
 
 [[nodiscard]] std::expected<SceneFile, std::string> scene_from_json(std::string_view text);
+
+// ---- sub-documents ---------------------------------------------------------------------------
+
+/// A timeline as a `.mtime` file, and a graphic as a `.manim` file.
+///
+/// Each is a whole document in one file, with its own envelope and schema version, so that it
+/// can be copied into another project or handed to someone else and still mean something. The
+/// project file keeps only a manifest entry naming it.
+[[nodiscard]] std::string timeline_to_json(const Timeline& timeline,
+                                           std::uint64_t generation = 0);
+[[nodiscard]] std::string graphic_to_json(const Graphic& graphic, std::uint64_t generation = 0);
+
+template <typename Doc>
+struct SubdocFile {
+    Doc document;
+    std::uint64_t generation = 0;
+    int schema_version = kSchemaVersion;
+};
+
+[[nodiscard]] std::expected<SubdocFile<Timeline>, std::string> timeline_from_json(
+    std::string_view text);
+[[nodiscard]] std::expected<SubdocFile<Graphic>, std::string> graphic_from_json(
+    std::string_view text);
 
 } // namespace ldoc

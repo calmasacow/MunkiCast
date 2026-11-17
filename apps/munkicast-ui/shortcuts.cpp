@@ -4,6 +4,8 @@
 #include "shortcuts.hpp"
 
 #include "document.hpp"
+#include "edit.hpp"
+#include "graphics.hpp"
 #include "preview.hpp"
 #include "workspace.hpp"
 
@@ -72,6 +74,28 @@ void Shortcuts::configure(std::filesystem::path bindings_file) {
     g_bindings_file = std::move(bindings_file);
 }
 
+/// Send an undo or redo to the focused sub-document, if there is one.
+///
+/// Returns true when it was handled there, which is what stops it reaching the show.
+bool Shortcuts::sub_document_workspace(bool redo) {
+    if (!workspace_)
+        return false;
+    const QString active = workspace_->activeWorkspaceName();
+
+    if (active == QLatin1String("Edit") && edit_ && edit_->hasTimeline()) {
+        redo ? edit_->redo() : edit_->undo();
+        return true;
+    }
+    if (active == QLatin1String("Graphics") && graphics_ && graphics_->hasGraphic()) {
+        redo ? graphics_->redo() : graphics_->undo();
+        return true;
+    }
+    // On one of those tabs with nothing open, undo does nothing rather than falling through to
+    // the show: an operator looking at an empty Edit tab does not expect Ctrl+Z to change a
+    // scene they cannot see.
+    return active == QLatin1String("Edit") || active == QLatin1String("Graphics");
+}
+
 Shortcuts* Shortcuts::create(QQmlEngine* engine, QJSEngine*) {
     auto* s = new Shortcuts;
     if (engine) {
@@ -79,6 +103,8 @@ Shortcuts* Shortcuts::create(QQmlEngine* engine, QJSEngine*) {
         // singletons are first touched in does not matter.
         s->document_ = engine->singletonInstance<Document*>("MunkiCast", "Document");
         s->workspace_ = engine->singletonInstance<Workspace*>("MunkiCast", "Workspace");
+        s->edit_ = engine->singletonInstance<Edit*>("MunkiCast", "Edit");
+        s->graphics_ = engine->singletonInstance<Graphics*>("MunkiCast", "Graphics");
         if (s->document_)
             connect(s->document_, &Document::changed, s, &Shortcuts::refresh_if_actions_changed);
     }
@@ -326,9 +352,21 @@ void Shortcuts::perform(const QString& ref) {
     const auto resolved = lsession::resolve(*parsed, document_->projectForBindings());
     switch (resolved.outcome) {
     case lsession::Outcome::Undo:
+        // Undo acts on the document that has focus, and on nothing else. With the Edit tab in
+        // front, Ctrl+Z reverses the last change to *that timeline*, however many changes were
+        // made to the show in between; on the Live and Build tabs it reverses the last change
+        // to the show. Each keeps its own position, so switching tabs moves neither stack.
+        //
+        // The workspace decides, rather than Qt focus: a panel on the Edit tab that happens to
+        // hold the keyboard focus is still part of the timeline's workspace, and an operator
+        // who pressed Ctrl+Z there means the timeline.
+        if (sub_document_workspace())
+            return;
         document_->undo();
         return;
     case lsession::Outcome::Redo:
+        if (sub_document_workspace(true))
+            return;
         document_->redo();
         return;
     case lsession::Outcome::Save:

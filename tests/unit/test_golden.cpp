@@ -56,7 +56,7 @@ Id fixed_id(std::uint8_t tag) {
 /// The current format, written by this build and committed. The byte-for-byte fixture.
 fs::path fixture_dir() {
     // Beside the test source, not in the build tree: it is an artefact of the repository.
-    return fs::path(MUNKICAST_TEST_FIXTURES) / "golden-project-v7";
+    return fs::path(MUNKICAST_TEST_FIXTURES) / "golden-project-v8";
 }
 
 /// The previous format, frozen. **Never regenerated**: its whole value is that it was written by
@@ -69,7 +69,9 @@ fs::path fixture_dir() {
 /// frozen at version 5, where a text node still carries its size as a scale on the node rather
 /// than as the font size it is drawn at. `golden-project-v6` is frozen at version 6, before a
 /// clone could name a scene, so it still holds the `source.obs-unsupported` placeholders an
-/// older OBS import left behind. All of them are never regenerated, and for the same reason.
+/// older OBS import left behind. `golden-project-v7` is frozen at version 7, before a project
+/// carried the timeline and graphic manifests. All of them are never regenerated, and for the
+/// same reason.
 fs::path fixture_v1_dir() {
     return fs::path(MUNKICAST_TEST_FIXTURES) / "golden-project-v1";
 }
@@ -718,6 +720,28 @@ LTEST_CASE(a_migrated_project_saves_as_the_current_version) {
         CHECK_MSG(scene_text->find("\"layer\"") == std::string::npos,
                   "scene '{}' was written with the version 1 word for a source node", sc.name);
     }
+}
+
+LTEST_CASE(a_version_7_project_opens_and_gains_empty_subdocument_manifests) {
+    // Version 8 added the timeline and graphic manifests. There is nothing to convert, but
+    // "nothing to convert" is a claim worth checking: a version 7 project has to open, come up
+    // with no timelines and no graphics, and write itself back as version 8 -- rather than
+    // failing to parse because the reader expects keys that are not there.
+    ScratchDir sd;
+    const fs::path dir = sd.copy_of(fs::path(MUNKICAST_TEST_FIXTURES) / "golden-project-v7");
+
+    auto opened = open_project(dir);
+    REQUIRE_MSG(opened.has_value(), "{}", opened.error());
+    CHECK(opened->project.timelines.empty());
+    CHECK(opened->project.graphics.empty());
+    CHECK_EQ(opened->project.schema_version, kSchemaVersion);
+
+    // And the scenes survived the bump, which is the thing a migration can quietly ruin.
+    CHECK(!opened->project.scenes.empty());
+
+    const std::string written = project_to_json(opened->project);
+    CHECK(written.find("\"timelines\"") != std::string::npos);
+    CHECK(written.find("\"graphics\"") != std::string::npos);
 }
 
 LTEST_CASE(this_build_still_writes_the_committed_bytes) {

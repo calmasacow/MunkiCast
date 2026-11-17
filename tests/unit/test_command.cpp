@@ -41,6 +41,8 @@ struct Fixture {
     Id existing_audio_encode;
     Id unused_audio_encode;
     Id existing_output;
+    Id existing_timeline;
+    Id existing_graphic;
     Id spare_scene;
     Id vertical_scene;
     Id existing_link;
@@ -142,6 +144,20 @@ struct Fixture {
         existing_output = out.id;
         project.outputs.push_back(std::move(out));
 
+        // One of each sub-document, by reference. The documents themselves live in their own
+        // files and are owned by a Workbench; the project holds only this manifest.
+        SubdocRef timeline;
+        timeline.id = Id::generate();
+        timeline.name = "Main Edit";
+        existing_timeline = timeline.id;
+        project.timelines.push_back(std::move(timeline));
+
+        SubdocRef graphic;
+        graphic.id = Id::generate();
+        graphic.name = "Lower Third";
+        existing_graphic = graphic.id;
+        project.graphics.push_back(std::move(graphic));
+
         // A canvas nothing renders to, so the removal case has something it is allowed to take.
         Canvas spare;
         spare.id = Id::generate();
@@ -201,6 +217,13 @@ void check_reversible(const char* what,
 }
 
 std::vector<Command> every_command_shape(const Fixture& f) {
+    SubdocRef added_timeline;
+    added_timeline.id = Id::generate();
+    added_timeline.name = "Second Edit";
+    SubdocRef added_graphic;
+    added_graphic.id = Id::generate();
+    added_graphic.name = "Full Frame";
+
     Deck addedDeck;
     addedDeck.id = Id::generate();
     addedDeck.canvas = f.spare_canvas;
@@ -346,6 +369,12 @@ std::vector<Command> every_command_shape(const Fixture& f) {
         RemoveAudioEncode{f.unused_audio_encode},
         SetAudioEncode{rebitrated_audio},
         SetProjectSettings{tuned},
+        AddTimelineRef{added_timeline, f.project.timelines.size()},
+        RemoveTimelineRef{f.existing_timeline},
+        RenameTimelineRef{f.existing_timeline, "Rough Cut"},
+        AddGraphicRef{added_graphic, f.project.graphics.size()},
+        RemoveGraphicRef{f.existing_graphic},
+        RenameGraphicRef{f.existing_graphic, "Bug"},
     };
 }
 

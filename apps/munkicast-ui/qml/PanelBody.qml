@@ -44,7 +44,10 @@ Item {
         objectName: "panelContentLoader"
 
         anchors.fill: parent
-        active: sourceComponent !== null
+        // No `active` binding. A Loader with a null sourceComponent loads nothing on its own,
+        // so stating it again in terms of the property being assigned is both redundant and a
+        // binding loop -- one that was only ever invisible because QML warnings were not
+        // being printed.
         sourceComponent: {
             switch (body.panelKind) {
             case "scenes":
@@ -73,6 +76,43 @@ Item {
                 return canvasComponent;
             case "favourites":
                 return favouritesComponent;
+
+            // Media.
+            case "media-tree":
+                return mediaTreeComponent;
+            case "media-player":
+                return mediaPlayerComponent;
+            case "media-table":
+                return mediaTableComponent;
+            case "media-details":
+                return mediaDetailsComponent;
+            case "export-queue":
+                return exportQueueComponent;
+
+            // Edit.
+            case "edit-bins":
+                return editBinsComponent;
+            case "edit-program":
+                return editMonitorComponent;
+            case "edit-properties":
+                return editPropertiesComponent;
+            case "edit-timeline":
+                return editTimelineComponent;
+
+            // Graphics.
+            case "graphics-tools":
+                return graphicsToolsComponent;
+            case "graphics-stage":
+                return graphicsStageComponent;
+            case "graphics-properties":
+                return graphicsPropertiesComponent;
+            case "graphics-data":
+                return graphicsDataComponent;
+            case "graphics-library":
+                return graphicsLibraryComponent;
+            case "graphics-timeline":
+                return graphicsTimelineComponent;
+
             default:
                 return null;
             }
@@ -158,6 +198,96 @@ Item {
         id: favouritesComponent
 
         FavouritesPanel {}
+    }
+
+    Component {
+        id: mediaTreeComponent
+
+        MediaTreePanel {}
+    }
+
+    Component {
+        id: mediaPlayerComponent
+
+        MediaPlayerPanel {}
+    }
+
+    Component {
+        id: mediaTableComponent
+
+        MediaTablePanel {}
+    }
+
+    Component {
+        id: mediaDetailsComponent
+
+        MediaDetailsPanel {}
+    }
+
+    Component {
+        id: exportQueueComponent
+
+        ExportQueuePanel {}
+    }
+
+    Component {
+        id: editBinsComponent
+
+        EditBinsPanel {}
+    }
+
+    Component {
+        id: editMonitorComponent
+
+        EditMonitorPanel {}
+    }
+
+    Component {
+        id: editPropertiesComponent
+
+        EditPropertiesPanel {}
+    }
+
+    Component {
+        id: editTimelineComponent
+
+        EditTimelinePanel {}
+    }
+
+    Component {
+        id: graphicsToolsComponent
+
+        GraphicsToolsPanel {}
+    }
+
+    Component {
+        id: graphicsStageComponent
+
+        GraphicsStagePanel {}
+    }
+
+    Component {
+        id: graphicsPropertiesComponent
+
+        GraphicsPropertiesPanel {}
+    }
+
+    Component {
+        id: graphicsDataComponent
+
+        GraphicsDataPanel {}
+    }
+
+    Component {
+        id: graphicsLibraryComponent
+
+        GraphicsLibraryPanel {}
+    }
+
+    Component {
+        id: graphicsTimelineComponent
+
+        GraphicsTimelinePanel {}
     }
 
     // The program canvas. ADR-0015 rule 2: it is a region of this surface, never a separate OS
