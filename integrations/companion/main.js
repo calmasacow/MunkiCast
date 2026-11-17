@@ -3,6 +3,14 @@
 import { InstanceBase, InstanceStatus, runEntrypoint, combineRgb } from '@companion-module/base'
 import OBSWebSocket from 'obs-websocket-js/json'
 
+/// The same four conditions the toolbar's Clip button uses, so a lit button is a clip that will
+/// be taken and a dark one is a clip the studio would have refused. A free function rather than a
+/// method: both callers already hold the state, and it is the whole of the rule in one place.
+export function clipReady(state) {
+  const s = state || {}
+  return Boolean(s.replayActive) && !s.replaySaving && !s.outputPending && (s.replayDurationMs || 0) > 0
+}
+
 export class MunkiCastInstance extends InstanceBase {
   async init(config, _isFirstInit, secrets = {}) {
     this.config = config
@@ -20,6 +28,8 @@ export class MunkiCastInstance extends InstanceBase {
       { variableId: 'record_timecode', name: 'Record elapsed time (HH:MM:SS)' },
       { variableId: 'replay', name: 'Replay active' },
       { variableId: 'last_replay', name: 'Last replay file' },
+      { variableId: 'clip_ready', name: 'Clip can be saved now' },
+      { variableId: 'clip_seconds', name: 'Seconds buffered for a clip' },
       { variableId: 'revision', name: 'Document revision' },
     ])
     this.defineControls([])
@@ -125,6 +135,7 @@ export class MunkiCastInstance extends InstanceBase {
         stream_timecode: stream.outputActive ? stream.outputTimecode.split('.')[0] : '00:00:00',
         record_timecode: record.outputActive ? record.outputTimecode.split('.')[0] : '00:00:00',
         last_replay: state.lastReplayPath || '', revision: state.revision,
+        clip_ready: String(clipReady(state)), clip_seconds: Math.floor((state.replayDurationMs || 0) / 1000),
       })
       this.checkFeedbacks()
     } catch (error) { this.log('warn', `State: ${error.message}`) }
@@ -161,6 +172,15 @@ export class MunkiCastInstance extends InstanceBase {
       command: { name: 'Native: Document command (undoable)', options: [jsonField('command', 'Serialized document command', '{"cmd":"project.set-name","name":"My show"}')], callback: safe(async o => this.call('MunkiCastExecuteCommand', { command: JSON.parse(await this.parseVariablesInString(o.command)) })) },
       invoke: { name: 'Native: Invoke document method', options: [jsonField('method', 'Exact signature (MunkiCastGetMethods)', 'undo()'), jsonField('args', 'Arguments (JSON array)', '[]')], callback: safe(async o => this.call('MunkiCastInvoke', { method: await this.parseVariablesInString(o.method), arguments: JSON.parse(await this.parseVariablesInString(o.args)) })) },
     }
+    // Clip is its own action, not a dropdown entry. It is the one replay control an operator
+    // reaches for mid-show, under pressure, on a hardware button -- the same thing the toolbar's
+    // Clip does, with the same conditions, so a button that is dark is a clip that would have
+    // been refused anyway.
+    actions.clip = {
+      name: 'Replay: Clip (save the buffered seconds)',
+      options: [],
+      callback: safe(() => this.call('SaveReplayBuffer')),
+    }
     for (const [key, family] of [['stream', 'Stream'], ['record', 'Record'], ['replay', 'ReplayBuffer']]) {
       actions[key] = { name: `${key}: Control`, options: [dropdown('operation', 'Operation', ['Toggle', 'Start', 'Stop', ...(key === 'replay' ? ['Save'] : [])].map(r => ({ id: r, label: r })))], callback: safe(o => this.call(o.operation + family)) }
     }
@@ -169,6 +189,13 @@ export class MunkiCastInstance extends InstanceBase {
     const feedbacks = {}
     for (const [key, field] of [['stream', 'streaming'], ['record', 'recording'], ['replay', 'replayActive']]) {
       feedbacks[key] = { type: 'boolean', name: `${key}: Active`, defaultStyle: style, options: [], callback: () => Boolean(this.state[field]) }
+    }
+    feedbacks.clip = {
+      type: 'boolean',
+      name: 'Clip: ready to save',
+      defaultStyle: { color: combineRgb(255, 255, 255), bgcolor: combineRgb(30, 120, 60) },
+      options: [],
+      callback: () => clipReady(this.state),
     }
     feedbacks.studio = { type: 'boolean', name: 'Studio mode: Enabled', defaultStyle: style, options: [], callback: () => Boolean(this.state.mainDeck?.studio) }
     feedbacks.scene = { type: 'boolean', name: 'Scene on program / preview', defaultStyle: style, options: [dropdown('scene', 'Scene', scenes), dropdown('bus', 'Bus', [{ id: 'program', label: 'Program' }, { id: 'preview', label: 'Preview' }])], callback: event => this.state.mainDeck?.[event.options.bus] === event.options.scene }
@@ -181,6 +208,10 @@ export class MunkiCastInstance extends InstanceBase {
     for (const key of ['stream', 'record', 'replay']) presets[key] = { type: 'button', category: 'Outputs', name: key,
       style: { text: key.toUpperCase(), size: 'auto', color: combineRgb(255, 255, 255), bgcolor: combineRgb(20, 20, 20) },
       steps: [{ down: [{ actionId: key, options: { operation: 'Toggle' } }], up: [] }], feedbacks: [{ feedbackId: key, options: {}, style }] }
+    presets.clip = { type: 'button', category: 'Outputs', name: 'Clip',
+      style: { text: 'CLIP\n$(this:clip_seconds)s', size: 'auto', color: combineRgb(255, 255, 255), bgcolor: combineRgb(20, 20, 20) },
+      steps: [{ down: [{ actionId: 'clip', options: {} }], up: [] }],
+      feedbacks: [{ feedbackId: 'clip', options: {}, style: { color: combineRgb(255, 255, 255), bgcolor: combineRgb(30, 120, 60) } }] }
     presets.studio = { type: 'button', category: 'Studio', name: 'Studio mode toggle',
       style: { text: 'STUDIO\nMODE', size: 'auto', color: combineRgb(255, 255, 255), bgcolor: combineRgb(20, 20, 20) },
       steps: [{ down: [{ actionId: 'studio', options: { enabled: 'toggle' } }], up: [] }],

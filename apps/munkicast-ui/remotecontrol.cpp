@@ -262,6 +262,9 @@ QJsonObject RemoteControl::state() {
             {"replayActive", preview_.replayActive()},
             {"outputPending", preview_.outputPending()},
             {"replaySaving", preview_.replaySaving()},
+            // How much is in the buffer, so a remote can grey out Clip for exactly the reason
+            // the toolbar button does rather than offering a save that will be refused.
+            {"replayDurationMs", static_cast<double>(preview_.replayDurationMs())},
             {"lastReplayPath", preview_.lastReplayPath()},
             {"recordingPath", preview_.recordingPath()},
             {"renderStats", QJsonObject::fromVariantMap(preview_.renderStats({}))},

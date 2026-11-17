@@ -2,7 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { MunkiCastInstance } from './main.js'
+import { MunkiCastInstance, clipReady } from './main.js'
 test('Companion actions, feedbacks and presets route native identities correctly', async () => {
   assert.equal(MunkiCastInstance.prototype.getConfigFields.call({}).find(field => field.id === 'password').type, 'secret-text')
   const calls = []
@@ -18,6 +18,20 @@ test('Companion actions, feedbacks and presets route native identities correctly
   assert.deepEqual(calls.pop(), ['SetCurrentProgramScene', { sceneUuid: 'scene-1' }])
   await mock.actions.replay.callback({ options: { operation: 'Save' } })
   assert.deepEqual(calls.pop(), ['SaveReplayBuffer'])
+  // Clip is the toolbar button on a surface: its own action, not an operation buried in a
+  // dropdown, and lit only under the four conditions the button itself checks.
+  await mock.actions.clip.callback({ options: {} })
+  assert.deepEqual(calls.pop(), ['SaveReplayBuffer'])
+  assert.equal(clipReady({}), false)
+  const ready = { replayActive: true, replaySaving: false, outputPending: false, replayDurationMs: 8000 }
+  assert.equal(clipReady(ready), true)
+  for (const [field, value] of [['replayActive', false], ['replaySaving', true], ['outputPending', true], ['replayDurationMs', 0]])
+    assert.equal(clipReady({ ...ready, [field]: value }), false)
+  mock.state = ready
+  assert(mock.feedbacks.clip.callback())
+  assert.deepEqual(mock.presets.clip.steps[0].down, [{ actionId: 'clip', options: {} }])
+  assert.equal(mock.presets.clip.feedbacks[0].feedbackId, 'clip')
+  mock.state = { streaming: true, mainDeck: { program: 'scene-1', studio: true } }
   await mock.actions.request.callback({ options: { request: 'GetSceneList', data: '{}' } })
   assert.deepEqual(calls.pop(), ['GetSceneList', {}])
   assert(mock.feedbacks.stream.callback())
