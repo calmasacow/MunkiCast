@@ -714,6 +714,18 @@ bool unfiltered_natural_size(const ldoc::Project& project, const ldoc::Canvas& c
         const ldoc::Source* src = project.source(*source->source);
         if (!src)
             return false;
+        // A clone of a scene has the scene's canvas for its natural size, the same answer the
+        // precomp it draws as would give. Asked before `resolve_source`, which reports nothing
+        // for this case because a scene is not a source.
+        if (const auto cloned = ldoc::clone_scene(project, *src)) {
+            const auto* inner = project.scene(cloned->scene);
+            const auto* on = inner ? project.canvas(inner->canvas) : nullptr;
+            if (!on)
+                return false;
+            width = on->width;
+            height = on->height;
+            return width > 0 && height > 0;
+        }
         const auto resolved = ldoc::resolve_source(project, *src);
         if (!resolved)
             return false;
@@ -2030,6 +2042,11 @@ std::optional<ldoc::Rgba> hex_to_rgba(const QString& text) {
 }
 
 QString swatch_of(const ldoc::Source& src) {
+    // Only a colour source, where the colour *is* the picture. A text source also carries a
+    // `color` -- the colour of its glyphs -- and reading that as a swatch painted the whole tile
+    // in the font colour, which said nothing about the text and hid the real thumbnail behind it.
+    if (src.type != "source.color")
+        return {};
     const auto it = src.settings.find("color");
     if (it == src.settings.end())
         return {};
@@ -2632,6 +2649,19 @@ QVariantMap Document::source_tile(const ldoc::Source& src) const {
     m["icon"] = icon;
     m["typeTitle"] = type_title;
 
+    // An image is a file on disk, so its tile can draw it with no renderer at all -- which is
+    // just as well, because the preview path deliberately skips images and would never produce
+    // a still for one. Empty for every other type, which goes through the renderer.
+    QString file;
+    if (src.type == "source.image") {
+        const auto it = src.settings.find("file");
+        const auto* path =
+            it == src.settings.end() ? nullptr : std::get_if<std::string>(&it->second);
+        if (path != nullptr && !path->empty() && path->front() == '/')
+            file = QString::fromStdString(*path);
+    }
+    m["file"] = file;
+
     int uses = 0;
     for (const ldoc::Scene& sc : p.scenes) {
         ldoc::visit(sc.roots, [&](const ldoc::Node& n) {
@@ -2777,6 +2807,14 @@ QVariantList Document::sourceSettingsSchema(const QString& type) const {
             for (const auto& source : session_->project().sources) {
                 options.append(id_str(source.id));
                 labels[id_str(source.id)] = qstr(source.name);
+            }
+            // Scenes too, because nesting a scene inside a scene is the whole point of a clone
+            // and OBS lists both in one place. A clone naming a scene draws as the precomp it
+            // describes (`ldoc::clone_scene`). Suffixed so two things of the same name in the
+            // one dropdown can be told apart.
+            for (const auto& scene : session_->project().scenes) {
+                options.append(id_str(scene.id));
+                labels[id_str(scene.id)] = qstr(scene.name) + QStringLiteral(" (scene)");
             }
             m["choiceLabels"] = labels;
         }
@@ -2951,8 +2989,9 @@ void Document::applySourceSettings(const QString& id, const QString& name,
                 source = copy;
         const auto it = copy.settings.find("target");
         const auto* target = it == copy.settings.end() ? nullptr : std::get_if<std::string>(&it->second);
-        if (target && !target->empty() && !ldoc::resolve_source(candidate, copy)) {
-            emit notice(QStringLiteral("Choose an existing source without a clone cycle."));
+        if (target && !target->empty() && !ldoc::resolve_source(candidate, copy) &&
+            !ldoc::clone_scene(candidate, copy)) {
+            emit notice(QStringLiteral("Choose an existing source or scene without a clone cycle."));
             return;
         }
     }
@@ -3020,6 +3059,53 @@ QStringList Document::scenesUsing(const QString& sourceId) const {
             out << qstr(s.name);
     }
     return out;
+}
+
+QVariantList Document::scenesUsingDetail(const QString& sourceId) const {
+    const auto parsed = parse_id(sourceId);
+    if (!parsed)
+        return {};
+    QVariantList out;
+    const ldoc::Project& p = session_->project();
+    for (const ldoc::Scene& s : p.scenes) {
+        int placements = 0;
+        ldoc::visit(s.roots, [&](const ldoc::Node& n) {
+            const auto* placed = std::get_if<ldoc::SourceData>(&n.data);
+            if (placed && placed->source && *placed->source == *parsed)
+                ++placements;
+        });
+        if (placements == 0)
+            continue;
+        QVariantMap entry;
+        entry["id"] = id_str(s.id);
+        entry["name"] = qstr(s.name);
+        entry["placements"] = placements;
+        // Which canvas, because two canvases can hold scenes of the same name and selecting one
+        // means selecting its canvas first.
+        if (const ldoc::Canvas* on = p.canvas(s.canvas)) {
+            entry["canvasId"] = id_str(on->id);
+            entry["canvasName"] = qstr(on->name);
+        } else {
+            entry["canvasId"] = QString{};
+            entry["canvasName"] = QString{};
+        }
+        out.append(entry);
+    }
+    return out;
+}
+
+void Document::showSceneInBackground(const QString& sceneId) {
+    const auto parsed = parse_id(sceneId);
+    const ldoc::Scene* scene = parsed ? session_->project().scene(*parsed) : nullptr;
+    if (!scene) {
+        emit notice(QStringLiteral("That scene is no longer in the project."));
+        return;
+    }
+    // The canvas first: selecting a scene is relative to the canvas being worked on, so a scene
+    // on another canvas would otherwise select nothing. Neither is an edit -- this moves what is
+    // being looked at, not what the document says, so there is no undo step for it.
+    selectCanvas(id_str(scene->canvas));
+    selectScene(id_str(scene->id));
 }
 
 void Document::removeSourceAndUses(const QString& id) {

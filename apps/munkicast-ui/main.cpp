@@ -3630,6 +3630,45 @@ int main(int argc, char** argv) {
                        "opening a capture source's settings asks for a live preview");
                 report(control("sourceSettingsLive") != nullptr,
                        "and the card has somewhere to draw it");
+                {
+                    // Choosing a device is one decision with one answer, and seeing it is why
+                    // the operator chose it -- so the preview follows the pending edit rather
+                    // than waiting for OK. The typed fields deliberately do not, because each
+                    // keystroke would reconfigure the worker and blank the picture.
+                    const auto before = dialog->property("previewKey").toString();
+                    QMetaObject::invokeMethod(dialog, "setValue",
+                                              Q_ARG(QVariant, QStringLiteral("device")),
+                                              Q_ARG(QVariant, QStringLiteral("/dev/video9")));
+                    settle();
+                    QVariant pending;
+                    const bool asked = QMetaObject::invokeMethod(dialog, "previewEdits",
+                                                                 Q_RETURN_ARG(QVariant, pending));
+                    report(asked && pending.toMap().value(QStringLiteral("device")).toString() ==
+                                        QStringLiteral("/dev/video9"),
+                           "picking a device previews the choice before OK is pressed");
+                    QMetaObject::invokeMethod(dialog, "setValue",
+                                              Q_ARG(QVariant, QStringLiteral("timeoutFrames")),
+                                              Q_ARG(QVariant, 9));
+                    settle();
+                    QVariant typed;
+                    QMetaObject::invokeMethod(dialog, "previewEdits",
+                                              Q_RETURN_ARG(QVariant, typed));
+                    report(!typed.toMap().contains(QStringLiteral("timeoutFrames")),
+                           "but a typed field does not, so the picture does not blank per keystroke");
+                    report(!before.isEmpty(), "and the preview key survived the edit");
+                    // Asking for a target is only half of it: the renderer also has to be told
+                    // how big a picture to composite. Without this the hidden canvas was drawn
+                    // at whatever edge the rest of the shell wanted, or at one pixel when
+                    // nothing else wanted a picture at all, and the card never filled in.
+                    const auto cards =
+                        collect(window->contentItem(), QStringLiteral("sourceSettingsPreview"));
+                    QQuickItem* card = nullptr;
+                    for (QQuickItem* item : cards)
+                        if (item->isVisible())
+                            card = item;
+                    report(card != nullptr && card->property("previewEdge").toInt() > 1,
+                           "and the settings card asks for a picture bigger than one pixel");
+                }
                 for (const char* key : {"settingInput_deactivateWhenHidden", "settingInput_buffering",
                                         "settingInput_autoReset"}) {
                     auto* checkbox = control(key);
@@ -4740,6 +4779,82 @@ int main(int argc, char** argv) {
                         tile = t;
                 }
                 report(tile != nullptr, "the new source has a tile to right-click");
+                {
+                    // Every tile that is not a colour carries somewhere to draw a still, and
+                    // the dialog walks them one at a time rather than asking the renderer for
+                    // a live composite per tile. Headless there is no renderer to produce a
+                    // picture, so what is checked is that the asking happens and is bounded.
+                    int holders = 0;
+                    for (QQuickItem* t :
+                         collect(window->contentItem(), QStringLiteral("existingSourceTile"))) {
+                        if (!t->isVisible() ||
+                            !t->property("modelData").toMap().value("swatch").toString().isEmpty())
+                            continue;
+                        if (!collect(t, QStringLiteral("existingSourceThumb")).isEmpty())
+                            ++holders;
+                    }
+                    report(holders > 0, "every non-colour tile carries somewhere to draw a still");
+                    const auto first = preview.keepStill(clicked);
+                    report(!first.isEmpty() && first != preview.canvasKey(QString{}),
+                           "warming a tile draws it into its own canvas, not the programme's");
+                    report(preview.keepStill(QString{}).isEmpty(),
+                           "and the dialog releases that slot when it has nothing left to warm");
+                    report(!preview.hasStill(QStringLiteral("not-a-source")),
+                           "a source that never drew reports no still rather than a blank one");
+                    // A text source carries a `color` for its glyphs. Reading that as a swatch
+                    // painted the whole tile in the font colour, which said nothing about the
+                    // text and stopped it ever being given a turn at a real thumbnail.
+                    bool text_swatch = false, colour_swatch = false, image_file = false;
+                    for (const QVariant& entry : document.sourcesOfType(QStringLiteral("source.text")))
+                        text_swatch = text_swatch || !entry.toMap().value("swatch").toString().isEmpty();
+                    for (const QVariant& entry : document.sourcesOfType(QStringLiteral("source.color")))
+                        colour_swatch = colour_swatch || !entry.toMap().value("swatch").toString().isEmpty();
+                    // An image added here has the type's defaults, and the default file is
+                    // empty, so one has to be given a path before the tile can carry it.
+                    for (const QVariant& entry : document.sourcesOfType(QStringLiteral("source.image"))) {
+                        const auto id = entry.toMap().value("id").toString();
+                        auto settings =
+                            document.sourceDetails(id).value(QStringLiteral("settings")).toMap();
+                        settings[QStringLiteral("file")] = QStringLiteral("/tmp/not-read.png");
+                        document.applySourceSettings(id, QString{}, settings);
+                        break;
+                    }
+                    settle();
+                    for (const QVariant& entry : document.sourcesOfType(QStringLiteral("source.image")))
+                        image_file = image_file || !entry.toMap().value("file").toString().isEmpty();
+                    report(!text_swatch, "a text source's font colour is not read as a tile swatch");
+                    report(colour_swatch, "but a colour source still paints its own swatch");
+                    report(image_file, "and an image tile carries its file, so it draws without the renderer");
+                    // "Used by 3" says how many, not which. The menu answers which, and acts.
+                    const auto used = document.scenesUsingDetail(clicked);
+                    const auto names = document.scenesUsing(clicked);
+                    report(used.size() == names.size(),
+                           "the Used by list names the same scenes the delete warning does");
+                    if (!used.isEmpty()) {
+                        const auto first = used.front().toMap();
+                        report(!first.value("id").toString().isEmpty() &&
+                                   first.value("placements").toInt() > 0,
+                               "and carries a scene id and a placement count, not just a name");
+                        document.showSceneInBackground(first.value("id").toString());
+                        settle();
+                        report(document.selectedScene() == first.value("id").toString(),
+                               "and picking one selects that scene behind the dialog");
+                        report(document.currentCanvas() == first.value("canvasId").toString(),
+                               "together with the canvas it belongs to");
+                    }
+                    report(document.scenesUsingDetail(QStringLiteral("not-an-id")).isEmpty(),
+                           "and a source that is not there is used by nothing");
+                    // Selecting a scene rebuilds the grid, so the delegate `tile` pointed at is
+                    // gone. Not null -- destroyed -- so it has to be found again rather than
+                    // guarded against.
+                    tile = nullptr;
+                    for (QQuickItem* t :
+                         collect(window->contentItem(), QStringLiteral("existingSourceTile"))) {
+                        const QVariant data = t->property("modelData");
+                        if (data.toMap().value("id").toString() == clicked)
+                            tile = t;
+                    }
+                }
                 report(tile && tile->property("modelData").toMap().value("name").toString() ==
                                    QStringLiteral("Named input"),
                        "source rename updates the open category without switching it");

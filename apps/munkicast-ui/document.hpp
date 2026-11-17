@@ -435,6 +435,13 @@ public:
     /// The scenes holding a node bound to this source, by name, each listed once however many
     /// times it appears there. What the delete confirmation shows before it is agreed to.
     Q_INVOKABLE [[nodiscard]] QStringList scenesUsing(const QString& sourceId) const;
+    /// The same question, answered with enough to act on: each scene's id, name, canvas and how
+    /// many nodes in it are bound to this source. For the "Used by" menu, which selects one.
+    Q_INVOKABLE [[nodiscard]] QVariantList scenesUsingDetail(const QString& sourceId) const;
+    /// Select a scene, and its canvas with it, without closing whatever is on top. Selection is
+    /// not an edit, so this makes no undo step: it moves what is being looked at behind the
+    /// dialog, ready for when the operator closes it.
+    Q_INVOKABLE void showSceneInBackground(const QString& sceneId);
     /// Delete the source *and* every node bound to it, as one undoable step (ADR-0033). The
     /// bare `removeSource` leaves those nodes bound to nothing on purpose; the manager does
     /// not, because "remove it from those scenes" is what the operator was shown and agreed to.
