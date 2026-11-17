@@ -9,15 +9,26 @@
 
 namespace llayout {
 
+Layout Workspaces::default_layout_for(std::string_view name) {
+    if (name == kLive)
+        return Layout::default_live();
+    if (name == kMedia)
+        return Layout::default_media();
+    if (name == kEdit)
+        return Layout::default_edit();
+    if (name == kGraphics)
+        return Layout::default_graphics();
+    // Build, and anything not built in. Encode too: nothing ever draws its layout -- the shell
+    // swaps in a fixed node-graph view for it -- but a Workspace has to hold one that
+    // validate() accepts. If the node graph ever grows dockable panels, it gets its own tree
+    // here like the rest.
+    return Layout::default_build();
+}
+
 Workspaces Workspaces::defaults() {
     Workspaces w;
-    w.items_.push_back(Workspace{std::string{kBuild}, true, Layout::default_build()});
-    w.items_.push_back(Workspace{std::string{kLive}, true, Layout::default_live()});
-    // ponytail: Encode carries Build's layout because a Workspace has to hold one that
-    // validate() accepts, and nothing ever draws this one -- the shell swaps in a fixed view
-    // for it. If the node graph ever grows dockable panels, this is where its own default
-    // tree goes.
-    w.items_.push_back(Workspace{std::string{kEncode}, true, Layout::default_build()});
+    for (const std::string_view name : {kBuild, kLive, kEncode, kMedia, kEdit, kGraphics})
+        w.items_.push_back(Workspace{std::string{name}, true, default_layout_for(name)});
     w.active_ = 0;
     return w;
 }
@@ -92,10 +103,8 @@ std::expected<void, std::string> Workspaces::reset(std::size_t index) {
     if (index >= items_.size())
         return std::unexpected(std::format("there is no workspace {}", index));
     // A built-in goes back to the arrangement it shipped with, which is the point of it being
-    // built in. Anything else goes back to the building arrangement, there being no other
-    // sensible origin for it.
-    items_[index].layout = (items_[index].name == kLive) ? Layout::default_live()
-                                                         : Layout::default_build();
+    // built in. Anything else goes back to the building arrangement.
+    items_[index].layout = default_layout_for(items_[index].name);
     return {};
 }
 
@@ -120,9 +129,6 @@ std::optional<std::string> Workspaces::validate() const {
         return std::format("the active workspace is {} of {}", active_, items_.size());
 
     std::set<std::string> seen;
-    bool has_build = false;
-    bool has_live = false;
-    bool has_encode = false;
     for (const Workspace& w : items_) {
         if (w.name.empty())
             return "a workspace has no name";
@@ -130,17 +136,16 @@ std::optional<std::string> Workspaces::validate() const {
             return std::format("two workspaces are both called '{}'", w.name);
         if (const auto bad = w.layout.validate())
             return std::format("'{}': {}", w.name, *bad);
-        has_build = has_build || (w.builtin && w.name == kBuild);
-        has_live = has_live || (w.builtin && w.name == kLive);
-        has_encode = has_encode || (w.builtin && w.name == kEncode);
     }
-    // Losing one of these to a hand-edited file would leave no known arrangement to get back to.
-    if (!has_build)
-        return std::format("the built-in '{}' workspace is missing", kBuild);
-    if (!has_live)
-        return std::format("the built-in '{}' workspace is missing", kLive);
-    if (!has_encode)
-        return std::format("the built-in '{}' workspace is missing", kEncode);
+    // Losing one of these to a hand-edited file would leave no known arrangement to get back
+    // to, so each is required to be present *and* marked built in.
+    for (const std::string_view name : {kBuild, kLive, kEncode, kMedia, kEdit, kGraphics}) {
+        const bool present = std::ranges::any_of(items_, [name](const Workspace& w) {
+            return w.builtin && w.name == name;
+        });
+        if (!present)
+            return std::format("the built-in '{}' workspace is missing", name);
+    }
     return std::nullopt;
 }
 

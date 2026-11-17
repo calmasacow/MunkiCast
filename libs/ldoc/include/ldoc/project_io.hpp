@@ -17,11 +17,25 @@
 ///   project.json          canvases, buses, decks, sources, outputs, settings, scene manifest
 ///   assets.json           the asset manifest
 ///   scenes/<ulid>.json    one file per scene
+///   timelines/<ulid>.mtime    one file per edit timeline
+///   graphics/<ulid>.manim     one file per motion graphic
+///   CacheMedia/           decoded proxies and thumbnails; disposable, never saved
+///   Recordings/           what the recorder writes
+///   SourceMedia/          footage brought into the project
+///   Exports/              what the export queue writes
 ///   .munkicast/
 ///     lock                an OS-held lock, not a pidfile
 ///     staging-<gen>/      the next generation, until it is committed
 ///     quarantine/         scene files that would not parse
 /// ```
+///
+/// The working folders are made when the project is created and remade on open if they have
+/// gone, so every panel that writes a file has somewhere to put it without asking first. They
+/// are the operator's to fill: nothing here deletes or rewrites what is inside them, and a
+/// project whose media lives elsewhere on disk still works -- media is referenced by path.
+///
+/// `CacheMedia` is the exception worth knowing: it holds only things that can be rebuilt from
+/// the media, so it is the one folder that is safe to delete to reclaim space.
 ///
 /// A directory rather than one file, for two reasons. It diffs, so a project can live in git and
 /// a change can be reviewed. And **a corrupt scene costs one scene** -- losing a whole collection
@@ -72,6 +86,16 @@ struct OpenResult {
     /// crash that followed it.
     std::size_t recovered_commands = 0;
 };
+
+/// The working folders a project directory carries beside its model files, in the order they
+/// are created. Exposed so that the panels which write into them -- the recorder, the export
+/// queue, the media cache -- name the same folders the creator made.
+[[nodiscard]] const std::vector<std::string>& working_folders();
+
+/// Create any working folder that is missing. Called on create and on open; it never touches a
+/// folder that is already there, and a folder it cannot make is a `Problem`, not a failure to
+/// open -- a read-only project directory is still worth reading.
+[[nodiscard]] std::vector<Problem> ensure_working_folders(const std::filesystem::path& dir);
 
 /// Where the command journal for a project lives.
 [[nodiscard]] std::filesystem::path journal_path(const std::filesystem::path& dir);

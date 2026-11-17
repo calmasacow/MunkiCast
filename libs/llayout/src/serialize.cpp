@@ -290,18 +290,14 @@ namespace {
 /// Reached by every file written by an older build, which is the common case rather than the
 /// exceptional one: a build that adds a built-in has to be able to open yesterday's file.
 std::expected<void, std::string> backfill_builtins(Workspaces& w) {
-    const std::pair<std::string_view, Layout (*)()> wanted[] = {
-        {Workspaces::kBuild, &Layout::default_build},
-        {Workspaces::kLive, &Layout::default_live},
-        // Nothing draws Encode's layout; it holds one only because a Workspace must.
-        {Workspaces::kEncode, &Layout::default_build},
-    };
-    for (const auto& [name, make] : wanted) {
+    for (const std::string_view name :
+         {Workspaces::kBuild, Workspaces::kLive, Workspaces::kEncode, Workspaces::kMedia,
+          Workspaces::kEdit, Workspaces::kGraphics}) {
         const bool present = std::ranges::any_of(
-            w.items(), [name = name](const Workspace& item) { return item.name == name; });
+            w.items(), [name](const Workspace& item) { return item.name == name; });
         if (present)
             continue;
-        const auto added = w.add(std::string{name}, make());
+        const auto added = w.add(std::string{name}, Workspaces::default_layout_for(name));
         if (!added)
             return std::unexpected(added.error());
         w.make_builtin(*added);

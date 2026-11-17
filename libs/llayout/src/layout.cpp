@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cmath>
 #include <format>
+#include <functional>
 #include <unordered_set>
 
 namespace llayout {
@@ -159,6 +160,128 @@ Layout Layout::default_live() {
                                {0.16, 0.64, 0.20});
     const NodeId lower = split(Axis::Horizontal, {mixer, stats}, {0.58, 0.42});
     const NodeId root = split(Axis::Vertical, {upper, lower}, {0.74, 0.26});
+
+    l.erase_subtree(l.root_);
+    l.root_ = root;
+    l.normalize();
+    return l;
+}
+
+namespace {
+
+/// The nodes a default layout is written with. Free functions taking the `Layout` rather than
+/// members of it, so the three builders below read as the trees they describe.
+///
+/// `Layout::alloc` is private, so these take the allocator the caller binds to it instead.
+using Alloc = std::function<NodeId(Node)>;
+
+NodeId tabs_node(const Alloc& alloc, std::initializer_list<const char*> names,
+                 std::size_t active = 0) {
+    Node n;
+    n.kind = NodeKind::Tabs;
+    for (const char* s : names)
+        n.tabs.emplace_back(s);
+    n.active = active < n.tabs.size() ? active : 0;
+    return alloc(std::move(n));
+}
+
+NodeId split_node(const Alloc& alloc, Axis axis, std::vector<NodeId> kids,
+                  std::vector<double> fr) {
+    Node n;
+    n.kind = NodeKind::Split;
+    n.axis = axis;
+    n.children = std::move(kids);
+    n.fractions = std::move(fr);
+    return alloc(std::move(n));
+}
+
+} // namespace
+
+Layout Layout::default_media() {
+    Layout l;
+    const Alloc alloc = [&l](Node n) { return l.alloc(std::move(n)); };
+    auto tabs = [&alloc](std::initializer_list<const char*> names, std::size_t active = 0) {
+        return tabs_node(alloc, names, active);
+    };
+    auto split = [&alloc](Axis axis, std::vector<NodeId> kids, std::vector<double> fr) {
+        return split_node(alloc, axis, std::move(kids), std::move(fr));
+    };
+
+    // The shape of a media browser, which the reference screenshots all agree on: the folder
+    // tree on the left, a player top right, the list of files under it. The project's own
+    // folders -- Recordings, SourceMedia, Exports -- are what the tree starts on, so the common
+    // case of "play back what I just recorded" is two clicks from opening the tab.
+    //
+    // The export queue shares the inspector's column rather than taking a strip across the
+    // bottom. A queue is read occasionally and ignored the rest of the time; a permanent strip
+    // would spend the tab's scarcest space on its least-watched panel.
+    const NodeId tree = tabs({"media-tree"});
+    const NodeId player = tabs({"media-player"});
+    const NodeId table = tabs({"media-table"});
+    const NodeId inspect = tabs({"media-details", "export-queue"});
+
+    const NodeId centre = split(Axis::Vertical, {player, table}, {0.52, 0.48});
+    const NodeId root = split(Axis::Horizontal, {tree, centre, inspect}, {0.16, 0.64, 0.20});
+
+    l.erase_subtree(l.root_);
+    l.root_ = root;
+    l.normalize();
+    return l;
+}
+
+Layout Layout::default_edit() {
+    Layout l;
+    const Alloc alloc = [&l](Node n) { return l.alloc(std::move(n)); };
+    auto tabs = [&alloc](std::initializer_list<const char*> names, std::size_t active = 0) {
+        return tabs_node(alloc, names, active);
+    };
+    auto split = [&alloc](Axis axis, std::vector<NodeId> kids, std::vector<double> fr) {
+        return split_node(alloc, axis, std::move(kids), std::move(fr));
+    };
+
+    // Bins, monitor, inspector across the top; timeline across the whole bottom. Every cut page
+    // in the reference screenshots converges on this, and the convergence is the argument: an
+    // editor who has used one of them can work here without being taught.
+    //
+    // The timeline gets the full width rather than a column, because its scale is time and the
+    // thing an editor needs most of is time on screen.
+    const NodeId bins = tabs({"edit-bins"});
+    const NodeId monitor = tabs({"edit-monitor"});
+    const NodeId inspect = tabs({"edit-properties", "edit-effects"});
+    const NodeId timeline = tabs({"edit-timeline"});
+
+    const NodeId upper = split(Axis::Horizontal, {bins, monitor, inspect}, {0.20, 0.60, 0.20});
+    const NodeId root = split(Axis::Vertical, {upper, timeline}, {0.58, 0.42});
+
+    l.erase_subtree(l.root_);
+    l.root_ = root;
+    l.normalize();
+    return l;
+}
+
+Layout Layout::default_graphics() {
+    Layout l;
+    const Alloc alloc = [&l](Node n) { return l.alloc(std::move(n)); };
+    auto tabs = [&alloc](std::initializer_list<const char*> names, std::size_t active = 0) {
+        return tabs_node(alloc, names, active);
+    };
+    auto split = [&alloc](Axis axis, std::vector<NodeId> kids, std::vector<double> fr) {
+        return split_node(alloc, axis, std::move(kids), std::move(fr));
+    };
+
+    // Stage centre, tools and properties flanking it, layer timeline along the bottom: the
+    // arrangement of every keyframe animator, and of the Anicraft screenshot in particular.
+    //
+    // Data bindings sit beside the properties rather than inside them. A broadcast template's
+    // fields are what an operator edits during a show, while its properties are what a designer
+    // edits before one, and the two jobs want the panel at different times.
+    const NodeId tools = tabs({"graphics-tools"});
+    const NodeId stage = tabs({"graphics-stage"});
+    const NodeId inspect = tabs({"graphics-properties", "graphics-data", "graphics-library"});
+    const NodeId timeline = tabs({"graphics-timeline"});
+
+    const NodeId upper = split(Axis::Horizontal, {tools, stage, inspect}, {0.06, 0.74, 0.20});
+    const NodeId root = split(Axis::Vertical, {upper, timeline}, {0.70, 0.30});
 
     l.erase_subtree(l.root_);
     l.root_ = root;

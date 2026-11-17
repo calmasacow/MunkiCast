@@ -18,7 +18,10 @@ add_library(ldoc STATIC
     src/migrate.cpp
     src/project_io.cpp
     src/node.cpp
+    src/subcommand.cpp
+    src/subdocument.cpp
     src/types.cpp
+    src/workbench.cpp
 )
 add_library(munkicast::ldoc ALIAS ldoc)
 

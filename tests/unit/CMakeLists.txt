@@ -38,6 +38,7 @@ munkicast_unit_test(test_composite        munkicast::lcomp)
 target_compile_definitions(test_composite PRIVATE
     MUNKICAST_IMAGE_FIXTURES="${CMAKE_CURRENT_SOURCE_DIR}/fixtures/images")
 munkicast_unit_test(test_document         munkicast::ldoc)
+munkicast_unit_test(test_subdocument      munkicast::ldoc)
 munkicast_unit_test(test_dropzone        munkicast::llayout)
 munkicast_unit_test(test_journal          munkicast::ldoc munkicast::lcore)
 munkicast_unit_test(test_fuzz             munkicast::ldoc munkicast::llayout munkicast::lsession)

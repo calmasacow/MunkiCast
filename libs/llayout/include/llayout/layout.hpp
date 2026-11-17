@@ -155,6 +155,18 @@ public:
     /// *change* the show is gone, because a mis-click during a show is expensive.
     [[nodiscard]] static Layout default_live();
 
+    /// The arrangement for the Media workspace: the project's folder tree, a player over the
+    /// media table, and the file's details beside the export queue.
+    [[nodiscard]] static Layout default_media();
+
+    /// The arrangement for the Edit workspace: bins, the program monitor and the clip's
+    /// properties across the top, the timeline across the bottom.
+    [[nodiscard]] static Layout default_edit();
+
+    /// The arrangement for the Graphics workspace: the stage with the properties and library
+    /// beside it, the layer timeline across the bottom.
+    [[nodiscard]] static Layout default_graphics();
+
     /// The one a fresh install starts on.
     [[nodiscard]] static Layout default_studio() { return default_build(); }
 

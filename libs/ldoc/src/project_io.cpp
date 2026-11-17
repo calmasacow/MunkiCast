@@ -33,6 +33,8 @@ constexpr std::string_view kQuarantineDir = "quarantine";
 constexpr std::string_view kStagingPrefix = "staging-";
 constexpr std::string_view kJournalFile = "journal.jsonl";
 constexpr std::string_view kSavingJournalFile = "journal.saving.jsonl";
+constexpr std::string_view kTimelinesDir = "timelines";
+constexpr std::string_view kGraphicsDir = "graphics";
 
 std::string why(std::string_view what, const fs::path& p) {
     return std::format("{} {}: {}", what, p.string(), std::strerror(errno));
@@ -40,6 +42,8 @@ std::string why(std::string_view what, const fs::path& p) {
 
 fs::path private_dir(const fs::path& dir) { return dir / kPrivateDir; }
 fs::path scenes_dir(const fs::path& dir) { return dir / kScenesDir; }
+fs::path timelines_dir(const fs::path& dir) { return dir / kTimelinesDir; }
+fs::path graphics_dir(const fs::path& dir) { return dir / kGraphicsDir; }
 fs::path staging_dir(const fs::path& dir, std::uint64_t gen) {
     return private_dir(dir) / std::format("{}{}", kStagingPrefix, gen);
 }
@@ -332,6 +336,13 @@ std::expected<OpenResult, std::string> open_project(const fs::path& dir) {
         }
     }
 
+    // Remade here as well as on create, so a project made by an older build -- or one whose
+    // folders were moved or deleted between sessions -- gains them by being opened. Done before
+    // the project is parsed: it does not depend on the contents, and a read-only or newer-schema
+    // project still gets a usable tree.
+    for (Problem& p : ensure_working_folders(dir))
+        result.problems.push_back(std::move(p));
+
     const auto project_text = lc::read_file(dir / kProjectFile);
     if (!project_text)
         return std::unexpected(project_text.error());
@@ -572,12 +583,50 @@ void start_on_emergency(Project& project) {
     }
 }
 
+const std::vector<std::string>& working_folders() {
+    // Named as the operator sees them, because these are folders they will open in a file
+    // manager. The model directories (scenes, timelines, graphics) are lower case and are not
+    // in this list: those belong to the writer, and nothing outside it should be putting files
+    // in them.
+    static const std::vector<std::string> folders{
+        "CacheMedia", "Recordings", "SourceMedia", "Exports",
+    };
+    return folders;
+}
+
+std::vector<Problem> ensure_working_folders(const fs::path& dir) {
+    std::vector<Problem> problems;
+    for (const std::string& name : working_folders()) {
+        std::error_code ec;
+        const fs::path path = dir / name;
+        if (fs::is_directory(path, ec))
+            continue;
+        fs::create_directories(path, ec);
+        if (ec) {
+            // A warning, not an error: the project opens and everything that does not write
+            // into this folder still works. The panels that do write there say so when asked.
+            problems.push_back(Problem{Severity::Warning,
+                                       std::format("the project folder '{}' could not be "
+                                                   "created ({}), so nothing can be written "
+                                                   "into it",
+                                                   name, ec.message()),
+                                       Id{}});
+        }
+    }
+    return problems;
+}
+
 std::expected<void, std::string> create_project(const Project& project, const fs::path& dir) {
     std::error_code ec;
     fs::create_directories(scenes_dir(dir), ec);
     if (ec)
         return std::unexpected(std::format("create {}: {}", dir.string(), ec.message()));
     fs::create_directories(private_dir(dir), ec);
+    fs::create_directories(timelines_dir(dir), ec);
+    fs::create_directories(graphics_dir(dir), ec);
+    // Problems are dropped here rather than reported: a directory this call just created is
+    // writable or the save below fails anyway, with a better message than this would give.
+    (void)ensure_working_folders(dir);
 
     Project copy = project;
     copy.generation = 0;

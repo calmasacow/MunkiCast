@@ -21,7 +21,8 @@ namespace llayout {
 /// people leave the wrong one up.
 struct Workspace {
     std::string name;
-    /// "Build" and "Live". They can be rearranged and have panels hidden like any other, and
+    /// The shipped workspaces, named by `Workspaces::is_builtin_name`. They can be rearranged
+    /// and have panels hidden like any other, and
     /// they can be reset to how they shipped -- but they cannot be renamed or removed, so there
     /// is always a known arrangement to get back to.
     bool builtin = false;
@@ -65,7 +66,7 @@ public:
     /// duplicate or empty name, or a layout that does not validate.
     [[nodiscard]] std::optional<std::string> validate() const;
 
-    /// The three that must always exist.
+    /// The six that must always exist.
     static constexpr std::string_view kBuild = "Build";
     static constexpr std::string_view kLive = "Live";
     /// The node graph. Not a dock arrangement at all: the shell draws a fixed view for this
@@ -73,10 +74,29 @@ public:
     /// others, with one switching rule rather than two.
     static constexpr std::string_view kEncode = "Encode";
 
-    /// Whether a name is one of the three. The loader decides `builtin` from the name rather
+    /// Browsing, playing and re-encoding files: recordings, source media, and the export queue
+    /// every other workspace sends finished work to.
+    static constexpr std::string_view kMedia = "Media";
+
+    /// Cutting recordings together. Its documents are the project's timelines, each with its
+    /// own undo stack (see `ldoc::Workbench`).
+    static constexpr std::string_view kEdit = "Edit";
+
+    /// Authoring the animated HTML5 overlays a show plays back. Its documents are the
+    /// project's graphics, each with its own undo stack.
+    static constexpr std::string_view kGraphics = "Graphics";
+
+    /// The layout a built-in ships with. Written down once: `defaults()`, `reset()` and the
+    /// loader's backfill all ask here, so a built-in cannot ship one arrangement and reset to
+    /// another. A name that is not built in gets the building arrangement, there being no other
+    /// sensible origin for it.
+    [[nodiscard]] static Layout default_layout_for(std::string_view name);
+
+    /// Whether a name is one of the six. The loader decides `builtin` from the name rather
     /// than from the file, so this is the single place that list is written down.
     [[nodiscard]] static bool is_builtin_name(std::string_view name) {
-        return name == kBuild || name == kLive || name == kEncode;
+        return name == kBuild || name == kLive || name == kEncode || name == kMedia ||
+               name == kEdit || name == kGraphics;
     }
 
     friend bool operator==(const Workspaces&, const Workspaces&) = default;
