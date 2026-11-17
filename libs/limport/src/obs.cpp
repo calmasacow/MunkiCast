@@ -422,8 +422,12 @@ struct Converter {
             p["target"] = std::string{};
             const auto name = str(s, "clone");
             const auto found = names.find(name);
+            // A scene is a legitimate target, not a rejected one: nesting a scene inside a scene
+            // is what a precomp does, and a clone naming a scene resolves to exactly that
+            // (`ldoc::clone_scene`). Refusing it here is what left six `.SC` sources from a real
+            // collection as `source.obs-unsupported` placeholders that could never draw.
             if (integer(s, "clone_type", 0, 0, 2) == 0 && found != names.end() &&
-                found->second.size() == 1 && !entries[found->second.front()].scene)
+                found->second.size() == 1)
                 p["target"] = entries[found->second.front()].id.to_string();
             else
                 warn(e, "clone target unavailable: " + name + "; select a native source input");
@@ -880,6 +884,21 @@ struct Converter {
         for (auto& entry : entries) {
             if (entry.type != "source-clone") continue;
             const auto* source = result.project.source(entry.id);
+            // A clone of a scene takes the scene's canvas size, the way the precomp it becomes
+            // does. The source branch below reads the input's own width/height, which a scene
+            // has none of.
+            if (source) {
+                if (const auto cloned = ldoc::clone_scene(result.project, *source)) {
+                    const auto* inner = result.project.scene(cloned->scene);
+                    const auto* canvas = inner ? result.project.canvas(inner->canvas) : nullptr;
+                    if (canvas)
+                        if (const auto size =
+                                lcomp::filter_size(cloned->effects, static_cast<double>(canvas->width),
+                                                   static_cast<double>(canvas->height)))
+                            entry.size = *size;
+                    continue;
+                }
+            }
             const auto input = source ? ldoc::resolve_source(result.project, *source) : std::nullopt;
             if (!input) continue;
             const auto width = input->settings.find("width");

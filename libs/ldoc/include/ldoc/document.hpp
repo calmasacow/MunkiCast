@@ -14,7 +14,7 @@ namespace ldoc {
 /// Bumped only by a change that older builds cannot read. Migrations are forward-only, with
 /// golden fixtures; a project newer than this opens read-only rather than silently dropping the
 /// fields this build does not know about.
-inline constexpr int kSchemaVersion = 6;
+inline constexpr int kSchemaVersion = 7;
 
 /// An output surface with its own size, rate and colour space.
 ///
@@ -370,8 +370,27 @@ struct Project {
 /// Resolve a source clone to its shared input, preserving the input ID/settings and composing
 /// source filters. Missing targets and cycles return no value; no capture is duplicated.
 /// Audio taps also require Audio enabled at every clone; video bypass never skips audio filters.
+///
+/// A clone whose target is a *scene* resolves to no source -- a scene is not one. Ask
+/// `clone_scene` for that case; the two together cover every clone that resolves at all.
 [[nodiscard]] std::optional<Source> resolve_source(const Project& project, const Source& source,
                                                    bool audio = false);
+
+/// The scene a clone ultimately points at, and the filters the chain adds to it.
+///
+/// Nesting a scene inside a scene is what a precomp does, and OBS's own source clone offers
+/// scenes alongside sources -- the thing being cloned is "whatever is in the list", and in OBS
+/// that list holds both. So a clone of a scene resolves here instead of to a `Source`, and the
+/// caller draws it as the precomp it is, carrying the chain's filters the way a cloned source
+/// carries them.
+///
+/// Empty when the chain ends at a source, is broken, or cycles.
+struct ClonedScene {
+    Id scene;
+    /// The clones' own filters, outermost last, exactly as `resolve_source` composes them.
+    std::vector<Effect> effects;
+};
+[[nodiscard]] std::optional<ClonedScene> clone_scene(const Project& project, const Source& source);
 
 /// A new project with one 1080p60 canvas, a program bus and a VOD track, one empty scene and a
 /// deck pointed at it. Enough to open and look at; nothing that pretends to be configured.

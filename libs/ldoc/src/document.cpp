@@ -232,6 +232,52 @@ std::optional<Source> resolve_source(const Project& project, const Source& sourc
     return resolved;
 }
 
+std::optional<ClonedScene> clone_scene(const Project& project, const Source& source) {
+    if (source.type != "source.clone")
+        return std::nullopt;
+    const Source* input = &source;
+    std::vector<const Source*> clones;
+    std::optional<Id> scene;
+    while (input->type == "source.clone") {
+        // The same bounds as `resolve_source`: a chain cannot outlive the source list, revisit
+        // a clone it has already walked, or run deeper than 64.
+        if (clones.size() >= 64 || clones.size() >= project.sources.size() ||
+            std::ranges::find(clones, input) != clones.end())
+            return std::nullopt;
+        clones.push_back(input);
+        const auto it = input->settings.find("target");
+        const auto* text =
+            it == input->settings.end() ? nullptr : std::get_if<std::string>(&it->second);
+        const auto id = text ? Id::parse(*text) : std::nullopt;
+        if (!id)
+            return std::nullopt;
+        if (const auto* next = project.source(*id)) {
+            input = next;
+            continue;
+        }
+        // Not a source. A scene is the only other thing a target may name, and anything else
+        // is a dangling id, which is `resolve_source`'s answer too: nothing.
+        if (project.scene(*id) == nullptr)
+            return std::nullopt;
+        scene = *id;
+        break;
+    }
+    if (!scene)
+        return std::nullopt; // The chain ended at a source; that is `resolve_source`'s business.
+    ClonedScene out;
+    out.scene = *scene;
+    // Outermost last, so the filter order matches a cloned source's exactly: the innermost
+    // clone's filters apply first, and each clone out from there adds its own on top.
+    for (auto it = clones.rbegin(); it != clones.rend(); ++it) {
+        const auto setting = (*it)->settings.find("noFilters");
+        if (setting != (*it)->settings.end())
+            if (const auto* bypass = std::get_if<bool>(&setting->second); bypass && *bypass)
+                out.effects.clear();
+        out.effects.insert(out.effects.end(), (*it)->effects.begin(), (*it)->effects.end());
+    }
+    return out;
+}
+
 std::vector<Problem> check_emergency_scene(const Project& project, const Id& scene_id) {
     std::vector<Problem> out;
     const Scene* scene = project.scene(scene_id);
@@ -534,7 +580,7 @@ private:
                     err(effect.id, "source filter has no type");
             if (s.type.empty())
                 err(s.id, std::format("source '{}' has no type", s.name));
-            if (s.type == "source.clone" && !resolve_source(p_, s))
+            if (s.type == "source.clone" && !resolve_source(p_, s) && !clone_scene(p_, s))
                 warn(s.id, std::format("source clone '{}' has a missing input or a clone cycle", s.name));
             if (s.asset && !exists_as(*s.asset, "asset"))
                 warn(s.id, std::format("source '{}' refers to asset {}, which is not in the "

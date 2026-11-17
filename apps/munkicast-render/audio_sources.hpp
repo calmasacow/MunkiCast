@@ -511,6 +511,24 @@ class AudioSources {
                     }
                 } else if (const auto* data = std::get_if<ldoc::SourceData>(&node.data)) {
                     const auto* source = data->source ? project.source(*data->source) : nullptr;
+                    // A clone of a scene is a precomp by another name, so its audio is the
+                    // scene's: walk into it exactly as the precomp branch above does, rather
+                    // than asking `resolve_source` for a source that is not there.
+                    if (source) {
+                        if (const auto cloned = ldoc::clone_scene(project, *source)) {
+                            if (const auto* scene = project.scene(cloned->scene)) {
+                                const auto* previous = owner; owner = scene;
+                                add_filters(scene->id, scene->effects);
+                                walk(scene->roots);
+                                owner = previous;
+                            }
+                            walking.erase(node.id);
+                            inherited.resize(previous_depth);
+                            transition_gain = previous_gain;
+                            transition_weighted = previous_weighted;
+                            continue;
+                        }
+                    }
                     const auto source_id = source ? source->id : ldoc::Id::nil();
                     const bool audio_enabled = source && ldoc::has_audio(*source);
                     const auto resolved = source ? ldoc::resolve_source(project, *source, true) : std::nullopt;

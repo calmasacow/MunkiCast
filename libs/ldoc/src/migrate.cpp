@@ -430,6 +430,89 @@ void geometry_to_fractions(Project& project, std::vector<Problem>& problems) {
     to_fractions(project, problems);
 }
 
+/// Rescue clones of scenes that an older import left as dead placeholders.
+///
+/// OBS's source-clone can name a scene, which is ordinary nesting. The importer used to refuse
+/// that case -- it required the target to be a non-scene -- so a clone of a scene landed as
+/// `source.obs-unsupported`: a record of what OBS had, with no type that draws anything. A real
+/// collection carried six of them.
+///
+/// The original OBS object is kept verbatim in `obs.original`, so the conversion the importer
+/// would do today can be done now from what is already in the file. Only clones are touched, and
+/// only when their target can be found by name: anything else keeps its placeholder, because a
+/// placeholder is at least honest about having nothing to draw.
+void clones_of_scenes(Project& p, std::vector<Problem>& out) {
+    std::size_t rescued = 0;
+    for (Source& src : p.sources) {
+        if (src.type != "source.obs-unsupported")
+            continue;
+        const auto it = src.settings.find("obs.original");
+        const auto* text = it == src.settings.end() ? nullptr : std::get_if<std::string>(&it->second);
+        if (!text)
+            continue;
+        // Read only the two strings this needs, rather than reviving the whole OBS reader here:
+        // the type, and the name of the thing being cloned.
+        const auto field = [&](std::string_view key) -> std::string {
+            const auto quoted = std::string{"\""} + std::string{key} + "\"";
+            auto at = text->find(quoted);
+            if (at == std::string::npos)
+                return {};
+            at = text->find(':', at + quoted.size());
+            if (at == std::string::npos)
+                return {};
+            at = text->find('"', at);
+            if (at == std::string::npos)
+                return {};
+            const auto end = text->find('"', at + 1);
+            return end == std::string::npos ? std::string{} : text->substr(at + 1, end - at - 1);
+        };
+        if (field("id") != "source-clone")
+            continue;
+        const auto wanted = field("clone");
+        if (wanted.empty())
+            continue;
+        // By name, which is what OBS stores, and only when exactly one thing answers to it.
+        const Scene* scene = nullptr;
+        std::size_t matches = 0;
+        for (const Scene& candidate : p.scenes)
+            if (candidate.name == wanted) {
+                scene = &candidate;
+                ++matches;
+            }
+        const Source* input = nullptr;
+        for (const Source& candidate : p.sources)
+            if (candidate.name == wanted && candidate.id != src.id) {
+                input = &candidate;
+                ++matches;
+            }
+        if (matches != 1) {
+            out.push_back(Problem{Severity::Warning,
+                                  std::format("source clone '{}' names '{}', which is {}; it "
+                                              "stays a placeholder until a target is chosen",
+                                              src.name, wanted,
+                                              matches == 0 ? "not in this project" : "ambiguous"),
+                                  src.id});
+            continue;
+        }
+        src.type = "source.clone";
+        src.settings["target"] = scene ? scene->id.to_string() : input->id.to_string();
+        // The settings a clone needs and a placeholder never had. Conservative defaults: the
+        // operator's own OBS values for these are in `obs.original` if they ever matter, and
+        // guessing wrong here would change what a restored source sounds like.
+        if (!src.settings.contains("audio"))
+            src.settings["audio"] = false;
+        if (!src.settings.contains("noFilters"))
+            src.settings["noFilters"] = false;
+        ++rescued;
+    }
+    if (rescued != 0)
+        out.push_back(Problem{Severity::Warning,
+                              std::format("{} source clone(s) left unsupported by an older import "
+                                          "now point at the scene or source they named",
+                                          rescued),
+                              Id::nil()});
+}
+
 Migration migrate(Project& project, const std::vector<LegacyOutputEncode>& legacy_outputs) {
     Migration m;
     m.from = project.schema_version;
@@ -444,6 +527,8 @@ Migration migrate(Project& project, const std::vector<LegacyOutputEncode>& legac
         to_fractions(project, m.problems);
     if (project.schema_version < 6)
         to_v6(project, m.problems);
+    if (project.schema_version < 7)
+        clones_of_scenes(project, m.problems);
 
     project.schema_version = kSchemaVersion;
     return m;

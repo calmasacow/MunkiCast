@@ -805,6 +805,55 @@ LTEST_CASE(source_clones_follow_shared_inputs_and_keep_independent_filters) {
     CHECK_EQ(image.gaps.front().reason, GapReason::NoSource);
 }
 
+LTEST_CASE(a_clone_of_a_scene_draws_that_scene_and_carries_its_own_filters) {
+    // Nesting a scene inside a scene is what a precomp does, and OBS offers scenes in the same
+    // list as sources, so a clone naming a scene has to draw rather than be refused. A real
+    // collection had six of these land as unsupported placeholders.
+    auto inner_colour = colour_source(0, 255, 0, 4, 4);
+    auto inner = scene_named("Inner");
+    inner.roots = {bound_to(inner_colour)};
+
+    auto clone = colour_source(0, 0, 0, 4, 4);
+    clone.type = "source.clone";
+    clone.settings["target"] = inner.id.to_string();
+
+    auto outer = scene_named("Outer");
+    outer.roots = {bound_to(clone)};
+
+    auto project = show(4, outer, {inner_colour, clone});
+    inner.canvas = project.canvases[0].id;
+    project.scenes.push_back(inner);
+
+    auto image = lcomp::composite_canvas(project, project.canvases[0].id);
+    REQUIRE(image.gaps.empty());
+    CHECK_EQ(pixel(image, 0, 0), std::tuple(0, 255, 0, 255));
+
+    // The clone's own filters apply on top of the scene, which is what makes "the same scene,
+    // cropped differently" a thing an operator can build.
+    ldoc::Effect correction;
+    correction.id = ldoc::Id::generate();
+    correction.type = "filter.color-correction";
+    correction.params["brightness"] = -0.5;
+    project.sources[1].effects = {correction};
+    image = lcomp::composite_canvas(project, project.canvases[0].id);
+    REQUIRE(image.gaps.empty());
+    CHECK(std::get<1>(pixel(image, 0, 0)) < 255);
+
+    // A clone pointed at the scene it is drawn inside is a cycle, and is refused rather than
+    // recursed. `clone_scene` bounds the walk; the precomp path bounds the draw.
+    project.sources[1].effects.clear();
+    project.sources[1].settings["target"] = outer.id.to_string();
+    image = lcomp::composite_canvas(project, project.canvases[0].id);
+    REQUIRE(!image.gaps.empty());
+    CHECK_EQ(image.gaps.front().reason, GapReason::Cycle);
+
+    // A target that is neither a source nor a scene resolves to nothing at all.
+    project.sources[1].settings["target"] = ldoc::Id::generate().to_string();
+    image = lcomp::composite_canvas(project, project.canvases[0].id);
+    REQUIRE(!image.gaps.empty());
+    CHECK_EQ(image.gaps.front().reason, GapReason::NoSource);
+}
+
 LTEST_CASE(source_clones_share_capture_identity_and_reject_cycles) {
     auto input = screen_source("DP-1");
     auto clone = input;

@@ -56,7 +56,7 @@ Id fixed_id(std::uint8_t tag) {
 /// The current format, written by this build and committed. The byte-for-byte fixture.
 fs::path fixture_dir() {
     // Beside the test source, not in the build tree: it is an artefact of the repository.
-    return fs::path(MUNKICAST_TEST_FIXTURES) / "golden-project-v6";
+    return fs::path(MUNKICAST_TEST_FIXTURES) / "golden-project-v7";
 }
 
 /// The previous format, frozen. **Never regenerated**: its whole value is that it was written by
@@ -67,8 +67,9 @@ fs::path fixture_dir() {
 /// `golden-project-v4-pixels` beside it is the same arrangement, frozen at version 4, where
 /// position and box are still canvas pixels (ADR-0070). `golden-project-v5` is the same again,
 /// frozen at version 5, where a text node still carries its size as a scale on the node rather
-/// than as the font size it is drawn at. All of them are never regenerated, and for the same
-/// reason.
+/// than as the font size it is drawn at. `golden-project-v6` is frozen at version 6, before a
+/// clone could name a scene, so it still holds the `source.obs-unsupported` placeholders an
+/// older OBS import left behind. All of them are never regenerated, and for the same reason.
 fs::path fixture_v1_dir() {
     return fs::path(MUNKICAST_TEST_FIXTURES) / "golden-project-v1";
 }

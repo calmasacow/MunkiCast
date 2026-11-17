@@ -954,6 +954,23 @@ void paint_node(const ldoc::Project& project, const ldoc::Node& node, double par
             refuse(target.picture, node, GapReason::NoSource);
             return;
         }
+        // A clone of a *scene* is a precomp wearing a clone's name. Nesting a scene inside a
+        // scene is what a precomp already does, and OBS offers scenes in the same list as
+        // sources, so the two meet here rather than in a second compositor path: the node is
+        // rewritten as the precomp it describes, carrying the chain's filters on top of its own.
+        if (src->type == "source.clone") {
+            if (const auto cloned = ldoc::clone_scene(project, *src)) {
+                ldoc::Node as_precomp = node;
+                ldoc::PrecompData data;
+                data.scene = cloned->scene;
+                // The node's own box, not the scene's: a clone is placed where it was put.
+                as_precomp.data = data;
+                as_precomp.effects.insert(as_precomp.effects.begin(), cloned->effects.begin(),
+                                          cloned->effects.end());
+                paint_node(project, as_precomp, opacity, target);
+                return;
+            }
+        }
         const auto resolved = src->type == "source.clone"
                                   ? ldoc::resolve_source(project, *src)
                                   : std::optional<ldoc::Source>{};
