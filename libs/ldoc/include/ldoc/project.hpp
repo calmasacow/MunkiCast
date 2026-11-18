@@ -29,6 +29,7 @@ namespace ldoc {
 ///       Timelines/                <- .mtime files
 ///       Graphics/                 <- .manim files
 ///       Recordings/               <- what the recorder wrote
+///       Clips/                    <- shorter pieces cut out of them
 ///       SourceMedia/              <- footage brought in
 ///       CacheMedia/               <- prepared copies, rebuildable
 ///       Exports/                  <- what the export queue wrote

@@ -89,9 +89,11 @@ Item {
         x: (parent.width - width) / 2
         y: (parent.height - height) / 2
         objectName: "projectFrame"
-        DialogGeometry { minimumWidth: 460; minimumHeight: 300 }
+        DialogGeometry { minimumWidth: 460; minimumHeight: 230 }
         width: Math.min(parent.width - 48, 640)
-        height: Math.min(parent.height - 48, 340)
+        // Two fields, a line of explanation and the path: sized to that rather than to a
+        // round number, which left a hand's depth of empty panel above the buttons.
+        height: Math.min(parent.height - 48, 250)
         color: Theme.c.panelBackground
         border.color: Theme.c.accent
         radius: 3

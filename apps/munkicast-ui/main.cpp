@@ -8537,6 +8537,18 @@ int main(int argc, char** argv) {
                 report(target == where.path() + QStringLiteral("/Dialog Check"),
                        "the project goes in a folder of its own, named after itself");
 
+                // A picture of it, filled in and ready to accept. The two bugs this dialog
+                // replaced -- no name field, and a tree built into the folder that was
+                // picked -- were both things a screenshot would have shown at once.
+                if (parser.isSet(shot_opt)) {
+                    const QStringList media = parser.value(shot_opt).split(QLatin1Char(','));
+                    QDir().mkpath(media.front());
+                    window->grabWindow().save(media.front() +
+                                              QStringLiteral("/new-project.png"));
+                    std::fprintf(stderr, "  .. wrote %s/new-project.png\n",
+                                 qPrintable(media.front()));
+                }
+
                 const auto buttons = collect(dialog, QStringLiteral("projectAccept"));
                 report(!buttons.isEmpty(), "the dialog has a Create button");
                 if (!buttons.isEmpty()) {

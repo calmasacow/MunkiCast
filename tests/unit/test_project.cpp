@@ -56,6 +56,11 @@ LTEST_CASE(a_new_project_gets_the_whole_tree_and_a_manifest) {
     // The manifest is named after the project, not a fixed project.munki: opening the folder
     // should show "MyShow.munki" rather than the same filename every project has.
     CHECK(fs::is_regular_file(dir / "MyShow.munki"));
+    // Named explicitly as well as walked above, so dropping one from the list is a failure
+    // rather than a smaller loop that still passes.
+    CHECK(fs::is_directory(dir / "Clips"));
+    CHECK(fs::is_directory(dir / "Recordings"));
+    CHECK(fs::is_directory(dir / "Collections"));
     CHECK(!fs::exists(dir / "project.munki"));
 }
 

@@ -30,8 +30,8 @@ constexpr int kProjectSchemaVersion = 1;
 
 const std::vector<std::string>& project_folders() {
     static const std::vector<std::string> folders{
-        "Collections", "Timelines", "Graphics", "Recordings",
-        "SourceMedia", "CacheMedia", "Exports", "Saves",
+        "Collections", "Timelines", "Graphics",   "Recordings", "Clips",
+        "SourceMedia", "CacheMedia", "Exports",   "Saves",
     };
     return folders;
 }

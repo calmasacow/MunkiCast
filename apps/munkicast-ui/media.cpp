@@ -268,9 +268,9 @@ QVariantList Media::projectFolders() const {
     // The same names `ldoc::working_folders()` creates, in the same order. Written here as the
     // operator sees them rather than read back from the library, because this list is also what
     // the tree labels and one of them (Exports) is where this panel writes.
-    for (const QString& name : {QStringLiteral("Recordings"), QStringLiteral("SourceMedia"),
-                                QStringLiteral("Graphics"), QStringLiteral("Exports"),
-                                QStringLiteral("CacheMedia")}) {
+    for (const QString& name : {QStringLiteral("Recordings"), QStringLiteral("Clips"),
+                                QStringLiteral("SourceMedia"), QStringLiteral("Graphics"),
+                                QStringLiteral("Exports"), QStringLiteral("CacheMedia")}) {
         const QString path = QDir(projectDir_).filePath(name);
         // How many files are in it, for the tile to say so. A count, not a listing: the tile
         // shows a number and opening the folder is what produces the rows.
