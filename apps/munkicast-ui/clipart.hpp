@@ -10,6 +10,7 @@
 #include <QSet>
 #include <QString>
 #include <QThread>
+#include <QVector>
 
 namespace munkicast::ui {
 
@@ -51,13 +52,22 @@ public:
     /// What the provider hands back. Null until built.
     [[nodiscard]] QImage image(const QString& key) const;
 
+    /// The loudest sample in a window of a file, as a fraction of full scale.
+    ///
+    /// The peak envelope the waveform is drawn from, read back as a number instead of as
+    /// pixels. It is the real audio -- the same decode -- so a meter driven from this is
+    /// metering the file rather than repeating what the document's gain field says. Returns
+    /// nothing when the file has not been looked at yet.
+    Q_INVOKABLE [[nodiscard]] double peakAt(const QString& path, double seconds) const;
+
 signals:
     void ready();
 
 private:
     explicit ClipArt(QObject* parent = nullptr);
 
-    void store(const QString& key, const QImage& image, const QString& path, double seconds);
+    void store(const QString& key, const QImage& image, const QString& path, double seconds,
+               const QVector<float>& envelope);
 
     class Worker;
     QThread thread_;
@@ -65,6 +75,9 @@ private:
     QHash<QString, QImage> cache_;
     /// Media length in seconds, by path, learned while building artwork.
     QHash<QString, double> durations_;
+    /// The peak envelope per path: one value per column of the waveform, 0..1. Kept rather
+    /// than thrown away with the image, because a meter wants the numbers.
+    QHash<QString, QVector<float>> envelopes_;
     /// Asked for and not yet answered, so a repaint does not queue the same file sixty times.
     QSet<QString> pending_;
 };

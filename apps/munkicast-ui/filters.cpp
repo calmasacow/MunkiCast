@@ -349,4 +349,41 @@ void Document::removeFilter(const QString& owner, const QString& effect) {
     if (next.size() != stack->size())
         run(ldoc::SetEffects{*id, std::move(next)});
 }
+/// The editable fields of one effect on a clip, in the same shape the Filters dialog uses.
+///
+/// Lives here rather than in edit.cpp because `fields()` is here: the schema a filter type
+/// presents is one thing, and an effect on a clip has to present the same one as an effect on
+/// a source or the two tabs would disagree about what a filter is.
+QVariantList Document::clipEffectFields(const QString& type, const QVariantMap& params) const {
+    const auto* info = lcomp::filter_info(type.toStdString());
+    if (!info)
+        return {};
+
+    // The values the clip is actually carrying, over the type's defaults.
+    ldoc::ParamMap current;
+    for (auto it = params.constBegin(); it != params.constEnd(); ++it) {
+        const std::string key = it.key().toStdString();
+        const QVariant& value = it.value();
+        switch (value.typeId()) {
+        case QMetaType::Bool:
+            current[key] = value.toBool();
+            break;
+        case QMetaType::Int:
+        case QMetaType::LongLong:
+        case QMetaType::UInt:
+        case QMetaType::ULongLong:
+            current[key] = static_cast<std::int64_t>(value.toLongLong());
+            break;
+        case QMetaType::Double:
+        case QMetaType::Float:
+            current[key] = value.toDouble();
+            break;
+        default:
+            current[key] = value.toString().toStdString();
+            break;
+        }
+    }
+    return fields(*info, current);
+}
+
 } // namespace munkicast::ui

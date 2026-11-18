@@ -67,12 +67,14 @@ public slots:
         // Probed here rather than on the UI thread: it is the same process the artwork needs
         // anyway, and the panel cannot place a filmstrip without it.
         const double seconds = probe_asset(path).duration;
-        QImage out = audio ? waveform(path) : filmstrip(path);
-        emit built(key_for(path, audio), out, path, seconds);
+        QVector<float> envelope;
+        QImage out = audio ? waveform(path, envelope) : filmstrip(path);
+        emit built(key_for(path, audio), out, path, seconds, envelope);
     }
 
 signals:
-    void built(const QString& key, const QImage& image, const QString& path, double seconds);
+    void built(const QString& key, const QImage& image, const QString& path, double seconds,
+               const QVector<float>& envelope);
 
 private:
     /// A row of frames taken across the file.
@@ -137,7 +139,7 @@ private:
     ///
     /// Decoded to raw mono 8-bit through ffmpeg rather than parsed here: the UI has no decoder,
     /// and a peak envelope is the one thing that has to be right for an editor to cut on sound.
-    static QImage waveform(const QString& path) {
+    static QImage waveform(const QString& path, QVector<float>& envelope) {
         QProcess ffmpeg;
         ffmpeg.start(QStringLiteral("ffmpeg"),
                      {QStringLiteral("-hide_banner"), QStringLiteral("-v"),
@@ -172,6 +174,10 @@ private:
             for (qsizetype i = from; i < to; ++i)
                 peak = std::max(peak, std::abs(static_cast<int>(static_cast<std::uint8_t>(
                                                    pcm[i])) - 128));
+            // Kept as a number as well as drawn: the mixer's meters want the envelope, and
+            // decoding the file a second time to get what this pass already computed would
+            // be a second ffmpeg run for data sitting in this loop.
+            envelope.push_back(static_cast<float>(peak) / 128.0F);
             const double height = (peak / 128.0) * mid;
             painter.drawLine(QPointF(x, mid - height), QPointF(x, mid + height));
         }
@@ -219,10 +225,12 @@ void ClipArt::request(const QString& path, bool audio) {
 }
 
 void ClipArt::store(const QString& key, const QImage& image, const QString& path,
-                    double seconds) {
+                    double seconds, const QVector<float>& envelope) {
     pending_.remove(key);
     if (seconds > 0.0)
         durations_.insert(path, seconds);
+    if (!envelope.isEmpty())
+        envelopes_.insert(path, envelope);
     // A file that could not be read is cached as a null image rather than retried: without
     // that, every repaint starts another ffmpeg against a file that will fail again.
     cache_.insert(key, image);
@@ -246,6 +254,19 @@ QString ClipArt::source(const QString& path, bool audio) const {
 
 double ClipArt::duration(const QString& path) const {
     return durations_.value(path, 0.0);
+}
+
+double ClipArt::peakAt(const QString& path, double seconds) const {
+    const auto it = envelopes_.constFind(path);
+    if (it == envelopes_.constEnd() || it->isEmpty())
+        return 0.0;
+    const double length = durations_.value(path, 0.0);
+    if (length <= 0.0)
+        return 0.0;
+    const auto at = static_cast<qsizetype>(seconds / length * it->size());
+    if (at < 0 || at >= it->size())
+        return 0.0;
+    return static_cast<double>(it->at(at));
 }
 
 QImage ClipArt::image(const QString& key) const {

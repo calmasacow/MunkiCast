@@ -12,15 +12,19 @@ import MunkiCast
 /// that works on a source works on a clip, and keeping one catalogue is what stops the two
 /// tabs offering different pictures of what this build can do.
 ///
-/// ponytail: an effect's parameters are not editable here. The clip carries the whole
-/// `Effect`, parameters and all, so the document is ready for it; what is missing is the
-/// per-type field UI, which the show's FiltersDialog already has and this should share.
+/// Selecting an effect opens its parameters, built from the same schema the show's Filters
+/// dialog uses, so a blur is the same blur with the same controls on either tab.
 Item {
     id: panel
 
     readonly property var clip: Edit.selectedClipDetails
     readonly property bool hasClip: !!panel.clip.id
     readonly property var applied: panel.clip.effects ?? []
+    /// Which applied effect's parameters are open. Cleared when the clip changes, because
+    /// an index into another clip's list means nothing.
+    property string openEffect: ""
+
+    onClipChanged: panel.openEffect = ""
 
     Rectangle {
         anchors.fill: parent
@@ -132,7 +136,74 @@ Item {
 
                     anchors.fill: parent
                     hoverEnabled: true
-                    acceptedButtons: Qt.NoButton
+                    onClicked: panel.openEffect =
+                        panel.openEffect === fx.modelData.id ? "" : fx.modelData.id
+                }
+
+                // The open one is marked, because its parameters are what the block below
+                // is showing and there is otherwise nothing saying which.
+                Rectangle {
+                    anchors.left: parent.left
+                    anchors.top: parent.top
+                    anchors.bottom: parent.bottom
+                    width: 2
+                    visible: panel.openEffect === fx.modelData.id
+                    color: Theme.c.accent
+                }
+            }
+        }
+
+        // ---- the open effect's parameters ----
+        Rectangle {
+            width: parent.width
+            height: 22
+            visible: panel.openEffect !== ""
+            color: Theme.c.panelHeader
+
+            Text {
+                anchors.left: parent.left
+                anchors.leftMargin: 10
+                anchors.verticalCenter: parent.verticalCenter
+                text: qsTr("Settings")
+                font.pixelSize: 10
+                color: Theme.c.textMuted
+            }
+        }
+
+        Flickable {
+            id: settings
+
+            width: parent.width
+            height: visible ? Math.min(contentHeight, panel.height * 0.35) : 0
+            visible: panel.openEffect !== "" && settingsColumn.children.length > 0
+            clip: true
+            contentHeight: settingsColumn.height
+            boundsBehavior: Flickable.StopAtBounds
+
+            NoDragScroll {}
+
+            Column {
+                id: settingsColumn
+
+                width: settings.width
+
+                Repeater {
+                    model: {
+                        for (const e of panel.applied) {
+                            if (e.id === panel.openEffect)
+                                return Document.clipEffectFields(e.type, e.params);
+                        }
+                        return [];
+                    }
+
+                    delegate: FilterSetting {
+                        required property var modelData
+
+                        width: settingsColumn.width
+                        field: modelData
+                        onCommitted: value => Edit.setClipEffectParam(panel.openEffect,
+                                                                      modelData.key, value)
+                    }
                 }
             }
         }
@@ -154,7 +225,8 @@ Item {
 
         ListView {
             width: parent.width
-            height: panel.height - 44 - appliedList.height
+            height: Math.max(44, panel.height - 44 - appliedList.height -
+                             (settings.visible ? settings.height + 22 : 0))
             clip: true
             model: Edit.effectCatalogue()
             boundsBehavior: Flickable.StopAtBounds

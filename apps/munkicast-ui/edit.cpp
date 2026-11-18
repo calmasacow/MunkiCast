@@ -31,13 +31,43 @@ ldoc::Id from_qt(const QString& text) {
     return parsed ? *parsed : ldoc::Id{};
 }
 
+/// One parameter as QML sees it.
+///
+/// The same conversion `filters.cpp` does for a source's effects, because a clip's effect is
+/// the same `ldoc::Effect` and has to arrive in QML looking the same. Shapes with no QML
+/// equivalent come back empty rather than stringified: a value that cannot make the round
+/// trip should not look as though it did.
+QVariant param_variant(const ldoc::ParamValue& v) {
+    return std::visit(
+        [](const auto& held) -> QVariant {
+            using T = std::decay_t<decltype(held)>;
+            if constexpr (std::is_same_v<T, std::string>)
+                return QString::fromStdString(held);
+            else if constexpr (std::is_same_v<T, std::int64_t>)
+                return QVariant::fromValue(static_cast<qlonglong>(held));
+            else if constexpr (std::is_same_v<T, double> || std::is_same_v<T, bool>)
+                return held;
+            else
+                return {};
+        },
+        v);
+}
+
+QVariantMap params_map(const ldoc::ParamMap& params) {
+    QVariantMap out;
+    for (const auto& [key, value] : params)
+        out.insert(QString::fromStdString(key), param_variant(value));
+    return out;
+}
+
 QVariantList effects_list(const std::vector<ldoc::Effect>& effects) {
     QVariantList out;
     for (const ldoc::Effect& e : effects) {
         out.append(QVariantMap{{QStringLiteral("id"), to_qt(e.id)},
                                {QStringLiteral("type"), QString::fromStdString(e.type)},
                                {QStringLiteral("name"), QString::fromStdString(e.name)},
-                               {QStringLiteral("enabled"), e.enabled}});
+                               {QStringLiteral("enabled"), e.enabled},
+                               {QStringLiteral("params"), params_map(e.params)}});
     }
     return out;
 }
@@ -543,6 +573,43 @@ QVariantMap Edit::clipUnderPlayheadMap() const {
         // Where in the *file* that frame is, which is what the monitor seeks to.
         out.insert(QStringLiteral("sourceSeconds"),
                    fps > 0.0 ? static_cast<double>(clip->source_at(t.playhead)) / fps : 0.0);
+
+        // Inside a transition, the shot being mixed *from* and how far through the mix the
+        // playhead is. There is no compositor here, so the monitor cannot blend the two --
+        // but it can show the right one and say how far along it is, which is the difference
+        // between a dissolve that looks like a hard cut and one an editor can time.
+        const ldoc::Clip* outgoing = nullptr;
+        double progress = -1.0;
+        if (clip->transition.real()) {
+            const ldoc::Frame from = clip->start - clip->transition.lead();
+            const ldoc::Frame to = from + clip->transition.duration;
+            if (t.playhead >= from && t.playhead < to) {
+                progress = static_cast<double>(t.playhead - from) /
+                           static_cast<double>(clip->transition.duration);
+                // The clip the cut is coming out of: the one that ends where this begins.
+                for (const ldoc::Clip& earlier : it->clips) {
+                    if (earlier.end() == clip->start)
+                        outgoing = &earlier;
+                }
+            }
+        }
+        // The file the next cut will need. The monitor opens it on a second player while
+        // this one is still running, so a cut is a swap rather than a load -- which is where
+        // the hitch at every edit came from.
+        const ldoc::Clip* next = nullptr;
+        for (const ldoc::Clip& later : it->clips) {
+            if (later.start >= clip->end() && (!next || later.start < next->start))
+                next = &later;
+        }
+        out.insert(QStringLiteral("nextSource"),
+                   next ? QString::fromStdString(next->source) : QString{});
+        out.insert(QStringLiteral("nextSourceSeconds"),
+                   next && fps > 0.0 ? static_cast<double>(next->source_in) / fps : 0.0);
+
+        out.insert(QStringLiteral("inTransition"), progress >= 0.0);
+        out.insert(QStringLiteral("transitionProgress"), progress < 0.0 ? 0.0 : progress);
+        out.insert(QStringLiteral("outgoingName"),
+                   outgoing ? QString::fromStdString(outgoing->name) : QString{});
         return out;
     }
     return {};
@@ -992,6 +1059,48 @@ void Edit::toggleClipEffect(const QString& id) {
                       std::move(effects)});
 }
 
+void Edit::setClipEffectParam(const QString& id, const QString& key,
+                               const QVariant& value) {
+    const ldoc::Clip* clip = selectedClip_();
+    if (!clip || key.isEmpty())
+        return;
+    const ldoc::Id wanted = from_qt(id);
+
+    std::vector<ldoc::Effect> effects = clip->effects;
+    bool hit = false;
+    for (ldoc::Effect& e : effects) {
+        if (e.id != wanted)
+            continue;
+        hit = true;
+        const std::string k = key.toStdString();
+        switch (value.typeId()) {
+        case QMetaType::Bool:
+            e.params[k] = value.toBool();
+            break;
+        case QMetaType::Int:
+        case QMetaType::UInt:
+        case QMetaType::LongLong:
+        case QMetaType::ULongLong:
+            e.params[k] = static_cast<std::int64_t>(value.toLongLong());
+            break;
+        case QMetaType::Double:
+        case QMetaType::Float:
+            e.params[k] = value.toDouble();
+            break;
+        default:
+            e.params[k] = value.toString().toStdString();
+            break;
+        }
+    }
+    if (!hit)
+        return;
+    // Coalesced per effect and key, so dragging a slider is one undo step rather than one
+    // per pixel -- the same rule every other continuous control here follows.
+    run(ldoc::SetClip{selected_track_, selected_clip_, clip->name, clip->gain_db,
+                      std::move(effects)},
+        QStringLiteral("clip.effect:%1:%2").arg(id, key));
+}
+
 const ldoc::Clip* Edit::selectedClip_() const {
     if (selected_clip_.is_nil())
         return nullptr;
@@ -1194,15 +1303,33 @@ QVariantList Edit::levels() const {
             continue;
         const bool heard = t.audible(track) && rate_ != 0.0;
         const ldoc::Clip* clip = track.clip_at(t.playhead);
-        // ponytail: the level is what the document says it is, not what the samples are.
-        // There is no audio engine on this tab yet; a meter driven from gain is honest about
-        // routing and mute, and becomes a real meter when playback goes through one.
-        const double db = heard && clip ? t.master_gain_db + track.gain_db + clip->gain_db
-                                        : -60.0;
+
+        // The file's own peak at this moment, from the envelope the waveform pass already
+        // measured, with the gain staging applied over it. Not an engine -- nothing is being
+        // mixed here -- but it is the audio rather than a restatement of the gain field, so
+        // a silent passage reads silent and a loud one moves.
+        double db = -60.0;
+        if (heard && clip) {
+            const double staging = t.master_gain_db + track.gain_db + clip->gain_db;
+            const double fps = t.fps.hz();
+            const double into = fps > 0.0
+                                    ? static_cast<double>(clip->source_at(t.playhead)) / fps
+                                    : 0.0;
+            const double peak =
+                art_ ? art_->peakAt(QString::fromStdString(clip->source), into) : 0.0;
+            if (peak > 0.0) {
+                db = 20.0 * std::log10(peak) + staging;
+            } else {
+                // Nothing measured yet -- the artwork may still be building. The gain
+                // staging is the honest answer until the envelope arrives.
+                db = staging;
+            }
+            db = std::max(-60.0, std::min(6.0, db));
+        }
         out.append(QVariantMap{
             {QStringLiteral("track"), to_qt(track.id)},
             {QStringLiteral("name"), QString::fromStdString(track.name)},
-            {QStringLiteral("db"), heard && clip ? db : -60.0},
+            {QStringLiteral("db"), db},
             {QStringLiteral("gain"), track.gain_db},
             {QStringLiteral("pan"), track.pan},
             {QStringLiteral("automation"),

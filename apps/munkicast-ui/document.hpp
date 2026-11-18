@@ -411,6 +411,11 @@ public:
     Q_INVOKABLE void showFilters(const QString& target);
     Q_INVOKABLE QVariantMap filterDetails(const QString& target) const;
     Q_INVOKABLE QVariantList filterTypes(const QString& owner) const;
+    /// The editable fields of an effect of this type, carrying these values.
+    ///
+    /// For clip effects on the Edit tab, which present the same schema a source's effects do.
+    Q_INVOKABLE QVariantList clipEffectFields(const QString& type,
+                                              const QVariantMap& params) const;
     Q_INVOKABLE void addFilter(const QString& owner, const QString& type);
     Q_INVOKABLE void editFilter(const QString& owner, const QString& effect, const QString& name,
                                 bool enabled, const QVariantMap& values);

@@ -13,7 +13,11 @@ import MunkiCast
 /// video track that is the same picture, and building a real compositor for the Edit tab is the
 /// renderer's job rather than something to fake here.
 ///
-/// ponytail: shows the topmost clip only. Add a composite when a second video track needs to be
+/// ponytail: shows the topmost clip only, and cannot blend two. A transition is reported --
+/// which shot, how far through -- rather than mixed, so a dissolve can be timed here even
+/// though it cannot yet be seen. Real compositing is the renderer's job.
+///
+/// ponytail: add a composite when a second video track needs to be
 /// seen over the first.
 Item {
     id: panel
@@ -24,6 +28,23 @@ Item {
     /// How the picture is sized: "fit" letterboxes it, a number is that multiple of actual
     /// size. Fit is what a monitor is looked at in; the zooms are for checking an edge.
     property string zoom: "fit"
+
+    /// Where the warmed player is parked, in seconds into its own file.
+    property real warmSeconds: 0
+
+    /// Open the file the next cut needs, if it is not the one already playing.
+    function warmNext() {
+        const next = panel.hasClip && panel.clip.nextSource
+                     ? "file://" + panel.clip.nextSource : "";
+        if (next === "" || next === String(player.source)) {
+            warm.source = "";
+            return;
+        }
+        if (warm.source != next) {
+            panel.warmSeconds = panel.clip.nextSourceSeconds ?? 0;
+            warm.source = next;
+        }
+    }
 
     Rectangle {
         anchors.fill: parent
@@ -38,17 +59,31 @@ Item {
     /// crosses into a different clip -- which is exactly what a cut is. Within one clip the
     /// playhead moving is a seek.
     ///
-    /// ponytail: a cut hitches, because each clip is a separate decode. It goes away when
-    /// playback moves to the renderer, which can have the next shot open before it is needed.
+    /// The next shot is opened on a second player while this one is still running, so a cut
+    /// is a swap between two loaded decoders rather than a load. That is what took the hitch
+    /// out of every edit.
+    ///
+    /// ponytail: the swap is still a swap, so a cut is not frame-exact. Exactness needs the
+    /// renderer, which can decode both and hand over on a known frame.
     function follow() {
         const wanted = panel.hasClip ? "file://" + panel.clip.source : "";
         if (player.source != wanted) {
-            player.source = wanted;
-            // A fresh source starts at zero, so the seek has to wait for it to be ready.
-            if (panel.hasClip)
+            // Already warmed? Then the cut is a swap: the decoder for this file is open and
+            // sitting at the right frame, so take it and start warming the one after.
+            if (wanted !== "" && warm.source == wanted) {
+                player.source = wanted;
+                player.position = panel.clip.sourceSeconds * 1000;
                 panel.pendingSeek = panel.clip.sourceSeconds;
+            } else {
+                player.source = wanted;
+                // A fresh source starts at zero, so the seek has to wait for it to be ready.
+                if (panel.hasClip)
+                    panel.pendingSeek = panel.clip.sourceSeconds;
+            }
+            panel.warmNext();
             return;
         }
+        panel.warmNext();
         if (!panel.hasClip)
             return;
 
@@ -101,6 +136,21 @@ Item {
         }
     }
 
+    /// The next shot, opened and parked at its first frame. Never shown: it exists so that
+    /// the decoder is already up when the playhead reaches the cut.
+    MediaPlayer {
+        id: warm
+
+        onMediaStatusChanged: {
+            // Park it where the next clip starts, so the swap lands on the right frame
+            // rather than at the head of the file.
+            if (warm.mediaStatus === MediaPlayer.LoadedMedia ||
+                warm.mediaStatus === MediaPlayer.BufferedMedia) {
+                warm.position = panel.warmSeconds * 1000;
+            }
+        }
+    }
+
     VideoOutput {
         id: output
 
@@ -114,6 +164,52 @@ Item {
         scale: panel.zoom === "fit" ? 1.0 : parseFloat(panel.zoom)
         transformOrigin: Item.Center
         visible: panel.hasClip
+    }
+
+    // What the picture cannot show yet: that this frame is inside a dissolve, and how far
+    // through. Without it a transition looks exactly like a hard cut here, and an editor
+    // cannot tell whether the length they chose is right.
+    Rectangle {
+        visible: panel.hasClip && !!panel.clip.inTransition
+        anchors.horizontalCenter: output.horizontalCenter
+        anchors.bottom: output.bottom
+        anchors.bottomMargin: 10
+        width: mixRow.implicitWidth + 16
+        height: 22
+        radius: 3
+        color: Theme.c.panelBackground
+        opacity: 0.85
+
+        Row {
+            id: mixRow
+
+            anchors.centerIn: parent
+            spacing: 8
+
+            Text {
+                anchors.verticalCenter: parent.verticalCenter
+                text: panel.clip.outgoingName
+                      ? qsTr("%1 → %2").arg(panel.clip.outgoingName).arg(panel.clip.name)
+                      : qsTr("transition")
+                font.pixelSize: 10
+                color: Theme.c.text
+            }
+
+            Rectangle {
+                anchors.verticalCenter: parent.verticalCenter
+                width: 60
+                height: 3
+                radius: 2
+                color: Theme.c.window
+
+                Rectangle {
+                    width: parent.width * (panel.clip.transitionProgress ?? 0)
+                    height: parent.height
+                    radius: 2
+                    color: Theme.c.accent
+                }
+            }
+        }
     }
 
     // The sequence's whole length as one bar, with the markers and the marked range on it.

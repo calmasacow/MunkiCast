@@ -874,6 +874,80 @@ int main(int argc, char** argv) {
                              qPrintable(media.front()));
             }
 
+            // Clip effects: a real list on the document, not a flag, with its parameters
+            // reachable. Driven here rather than only in the library test because the panel
+            // reads them through `Document::clipEffectFields`, and a schema the UI cannot
+            // build is a settings block that silently comes up empty.
+            {
+                const auto tracks = edit->timeline().value(QStringLiteral("tracks")).toList();
+                QString track_id;
+                QString clip_id;
+                for (const QVariant& row : tracks) {
+                    const auto map = row.toMap();
+                    const auto clips = map.value(QStringLiteral("clips")).toList();
+                    if (clips.isEmpty())
+                        continue;
+                    track_id = map.value(QStringLiteral("id")).toString();
+                    clip_id = clips.front().toMap().value(QStringLiteral("id")).toString();
+                    break;
+                }
+
+                if (clip_id.isEmpty()) {
+                    // No media was handed to the check, so there is nothing to put an effect
+                    // on. Say so rather than reporting a pass that tested nothing.
+                    std::fprintf(stderr, "  .. no clips; clip-effect checks skipped\n");
+                } else {
+                    edit->selectClip(track_id, clip_id);
+                    const auto catalogue = edit->effectCatalogue();
+                    report(!catalogue.isEmpty(), "the effect catalogue is not empty");
+
+                    const QString type =
+                        catalogue.front().toMap().value(QStringLiteral("type")).toString();
+                    edit->addClipEffect(type);
+                    auto applied =
+                        edit->selectedClipDetails().value(QStringLiteral("effects")).toList();
+                    report(applied.size() == 1, "an effect can be put on a clip");
+
+                    if (!applied.isEmpty()) {
+                        const auto fx = applied.front().toMap();
+                        report(fx.value(QStringLiteral("enabled")).toBool(),
+                               "a new effect starts enabled");
+                        // The panel builds its settings from this; empty here is an empty
+                        // block there.
+                        const auto fields = document->clipEffectFields(
+                            type, fx.value(QStringLiteral("params")).toMap());
+                        report(!fields.isEmpty(), "the effect's settings can be built");
+
+                        edit->toggleClipEffect(fx.value(QStringLiteral("id")).toString());
+                        applied = edit->selectedClipDetails()
+                                      .value(QStringLiteral("effects"))
+                                      .toList();
+                        report(!applied.isEmpty() &&
+                                   !applied.front().toMap()
+                                        .value(QStringLiteral("enabled")).toBool(),
+                               "an effect can be turned off without being removed");
+
+                        // Undo restores the effect itself, which the old boolean could not.
+                        shortcuts->perform(QStringLiteral("edit.undo"));
+                        applied = edit->selectedClipDetails()
+                                      .value(QStringLiteral("effects"))
+                                      .toList();
+                        report(applied.size() == 1 &&
+                                   applied.front().toMap()
+                                       .value(QStringLiteral("enabled")).toBool(),
+                               "undo brings the effect back as it was");
+
+                        edit->removeClipEffect(
+                            applied.front().toMap().value(QStringLiteral("id")).toString());
+                        report(edit->selectedClipDetails()
+                                   .value(QStringLiteral("effects"))
+                                   .toList()
+                                   .isEmpty(),
+                               "an effect can be taken off again");
+                    }
+                }
+            }
+
             // The exported overlay is the point of the Graphics tab, so it is checked rather
             // than assumed: a page that was not written is a tab that does not work.
             graphics->addLayer(QStringLiteral("text"));

@@ -150,6 +150,9 @@ public:
     Q_INVOKABLE void removeClipEffect(const QString& id);
     /// Turn one off without removing it, which is how an editor compares with and without.
     Q_INVOKABLE void toggleClipEffect(const QString& id);
+    /// Change one parameter of one effect on the selected clip.
+    Q_INVOKABLE void setClipEffectParam(const QString& id, const QString& key,
+                                        const QVariant& value);
     /// The renderer's filter catalogue: what could be put on a clip.
     Q_INVOKABLE [[nodiscard]] QVariantList effectCatalogue() const;
     // ---- the Source viewer ----------------------------------------------------------------
