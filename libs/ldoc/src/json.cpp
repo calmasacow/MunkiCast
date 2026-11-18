@@ -1249,8 +1249,8 @@ Jv enc_clip(const Clip& c) {
             t["align"] = std::string{to_string(c.transition.align)};
         o["transition"] = t;
     }
-    if (c.has_effects)
-        o["has_effects"] = true;
+    if (!c.effects.empty())
+        o["effects"] = enc_array(c.effects);
     return o;
 }
 
@@ -1414,7 +1414,17 @@ std::expected<SubdocFile<Timeline>, std::string> timeline_from_json(std::string_
                     clip.duration = rd.integer(cv, "duration", "clip", 0);
                     clip.source_in = rd.integer(cv, "source_in", "clip", 0);
                     clip.gain_db = rd.number(cv, "gain_db", "clip", 0.0);
-                    clip.has_effects = rd.boolean(cv, "has_effects", "clip", false);
+                    clip.effects = dec_effects(rd, cv, "effects", "clip");
+                    // A timeline written before clips carried real effects says only that
+                    // the clip had some. Keeping the flag's meaning costs one placeholder
+                    // and keeps the fx badge truthful on a file an older build wrote.
+                    if (clip.effects.empty() && rd.boolean(cv, "has_effects", "clip", false)) {
+                        Effect carried;
+                        carried.id = Id::generate();
+                        carried.type = "filter.unknown";
+                        carried.name = "Effect";
+                        clip.effects.push_back(std::move(carried));
+                    }
                     if (const Jv* tr = rd.object(cv, "transition", "clip")) {
                         clip.transition.kind =
                             rd.enumerated(*tr, "kind", "clip", transition_kind_from_string,

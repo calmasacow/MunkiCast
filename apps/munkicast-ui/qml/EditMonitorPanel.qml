@@ -21,6 +21,10 @@ Item {
     readonly property var clip: Edit.clipUnderPlayhead
     readonly property bool hasClip: !!panel.clip.source
 
+    /// How the picture is sized: "fit" letterboxes it, a number is that multiple of actual
+    /// size. Fit is what a monitor is looked at in; the zooms are for checking an edge.
+    property string zoom: "fit"
+
     Rectangle {
         anchors.fill: parent
         color: Theme.c.window
@@ -105,7 +109,10 @@ Item {
         anchors.top: parent.top
         anchors.bottom: scrub.top
         anchors.margins: 8
-        fillMode: VideoOutput.PreserveAspectFit
+        fillMode: panel.zoom === "fit" ? VideoOutput.PreserveAspectFit
+                                       : VideoOutput.PreserveAspectCrop
+        scale: panel.zoom === "fit" ? 1.0 : parseFloat(panel.zoom)
+        transformOrigin: Item.Center
         visible: panel.hasClip
     }
 
@@ -266,6 +273,20 @@ Item {
             anchors.rightMargin: 6
             anchors.verticalCenter: parent.verticalCenter
             spacing: 4
+
+            // How the picture is sized. Cycled rather than a menu: there are four, and the
+            // one in use is almost always Fit.
+            ToolButton {
+                readonly property var steps: ["fit", "0.5", "1", "2"]
+                label: panel.zoom === "fit" ? qsTr("Fit")
+                     : panel.zoom === "0.5" ? "½"
+                     : panel.zoom === "1" ? "1:1" : "2:1"
+                tip: qsTr("How the picture is sized — click to change")
+                onClicked: {
+                    const at = steps.indexOf(panel.zoom);
+                    panel.zoom = steps[(at + 1) % steps.length];
+                }
+            }
 
             ToolButton {
                 label: "{"

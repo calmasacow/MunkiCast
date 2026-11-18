@@ -144,12 +144,12 @@ public:
     /// An empty `align` keeps the clip's current alignment.
     Q_INVOKABLE void setTransition(const QString& kind, int frames,
                                    const QString& align = {});
-    /// Mark the selected clip as carrying effects, or clear them.
-    ///
-    /// ponytail: a flag, not a list. The clip model has `has_effects` and no parameters, so
-    /// this records that a clip is treated rather than how. It grows a real list when the Edit
-    /// tab renders through the compositor.
-    Q_INVOKABLE void setClipEffects(bool on);
+    /// Put an effect from the catalogue on the selected clip.
+    Q_INVOKABLE void addClipEffect(const QString& type);
+    /// Take one off again, by its id.
+    Q_INVOKABLE void removeClipEffect(const QString& id);
+    /// Turn one off without removing it, which is how an editor compares with and without.
+    Q_INVOKABLE void toggleClipEffect(const QString& id);
     /// The renderer's filter catalogue: what could be put on a clip.
     Q_INVOKABLE [[nodiscard]] QVariantList effectCatalogue() const;
     // ---- the Source viewer ----------------------------------------------------------------
@@ -235,6 +235,9 @@ private:
     ldoc::Frame source_out_ = 0;
 
     class Document* document_ = nullptr;
+    /// The selected clip, or nothing. Every effect command needs it.
+    [[nodiscard]] const ldoc::Clip* selectedClip_() const;
+
     class ClipArt* art_ = nullptr;
     ldoc::Workbench bench_;
     QTimer* transport_ = nullptr;

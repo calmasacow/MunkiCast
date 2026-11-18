@@ -58,6 +58,16 @@ Item {
         }
     }
 
+    /// Put the whole sequence on screen, with a little air after the last clip.
+    function zoomToFit() {
+        const total = panel.hasDocument ? (panel.doc.duration || 0) : 0;
+        const room = lanes.width - panel.headerWidth;
+        if (total <= 0 || room <= 0)
+            return;
+        panel.offset = 0;
+        panel.scale = Math.max(0.02, Math.min(40, room / (total * 1.03)));
+    }
+
     function snap(frame) {
         if (!panel.snapping)
             return frame;
@@ -827,6 +837,8 @@ Item {
         Text {
             anchors.left: parent.left
             anchors.leftMargin: 10
+            id: timecodeLabel
+
             anchors.verticalCenter: parent.verticalCenter
             font.pixelSize: 10
             font.family: "monospace"
@@ -835,6 +847,79 @@ Item {
                   ? Edit.timecode(panel.doc.playhead) + "  ·  " + panel.doc.name +
                     (Edit.dirty ? " •" : "")
                   : ""
+        }
+
+        // The zoom, as a bar rather than only a modifier-wheel gesture: a control you can see
+        // is one you can find, and "fit" is the thing an editor reaches for most.
+        Row {
+            anchors.left: timecodeLabel.right
+            anchors.leftMargin: 16
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: 4
+            visible: panel.hasDocument
+
+            ToolButton {
+                label: "−"
+                tip: qsTr("Zoom out")
+                onClicked: panel.scale = Math.max(0.02, panel.scale / 1.4)
+            }
+
+            Rectangle {
+                id: zoomWell
+
+                anchors.verticalCenter: parent.verticalCenter
+                width: 80
+                height: 4
+                radius: 2
+                color: Theme.c.panelBackground
+
+                // The bar is logarithmic because the zoom is: half the useful range sits
+                // under one pixel per frame, and a linear bar would hide all of it in the
+                // first two millimetres.
+                readonly property real fraction: {
+                    const low = Math.log(0.02);
+                    const high = Math.log(40);
+                    return (Math.log(panel.scale) - low) / (high - low);
+                }
+
+                Rectangle {
+                    x: Math.max(0, Math.min(zoomWell.width - 6, zoomWell.fraction * zoomWell.width))
+                    y: -3
+                    width: 6
+                    height: 10
+                    radius: 2
+                    color: Theme.c.accent
+                }
+
+                MouseArea {
+                    anchors.fill: parent
+                    anchors.margins: -6
+                    onPressed: mouse => zoomWell.setFrom(mouse.x)
+                    onPositionChanged: mouse => {
+                        if (pressed)
+                            zoomWell.setFrom(mouse.x);
+                    }
+                }
+
+                function setFrom(x) {
+                    const f = Math.max(0, Math.min(1, x / zoomWell.width));
+                    const low = Math.log(0.02);
+                    const high = Math.log(40);
+                    panel.scale = Math.exp(low + f * (high - low));
+                }
+            }
+
+            ToolButton {
+                label: "+"
+                tip: qsTr("Zoom in")
+                onClicked: panel.scale = Math.min(40, panel.scale * 1.4)
+            }
+
+            ToolButton {
+                label: qsTr("Fit")
+                tip: qsTr("Fit the whole sequence on screen")
+                onClicked: panel.zoomToFit()
+            }
         }
 
         Row {

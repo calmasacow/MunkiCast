@@ -104,6 +104,13 @@ std::expected<void, std::string> copyCollection(const ldoc::Project& project,
 }
 } // namespace
 
+void Document::useCollectionRoot(fs::path root) {
+    collectionRoot = std::move(root);
+    // The catalogue follows the root: a project's collections are listed from the project,
+    // not from a machine-wide pile that would mix two projects' shows together.
+    initCollections();
+}
+
 void Document::configureCollections(fs::path root, fs::path catalog) {
     collectionRoot = std::move(root);
     catalogPath = QString::fromStdString(catalog.string());
@@ -243,6 +250,9 @@ bool Document::openCollection(const QString& path) {
         return false;
     installSession(std::move(*opened));
     collection_report_.clear();
+    // The project remembers which of its collections was open, so reopening the project
+    // comes back to the show that was being worked on rather than to whichever sorts first.
+    noteOpenCollection();
     emit collectionsChanged();
     return true;
 }

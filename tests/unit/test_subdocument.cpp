@@ -621,6 +621,59 @@ LTEST_CASE(setting_one_track_field_leaves_the_others_alone) {
     CHECK(undone->armed);
 }
 
+LTEST_CASE(a_clip_carries_its_effects_and_an_undo_restores_them_whole) {
+    Fixture f;
+    TimelineHistory h{f.timeline};
+    const Track& v1 = h.document().tracks.front();
+    const Clip& first = v1.clips.front();
+
+    Effect blur;
+    blur.id = Id::generate();
+    blur.type = "filter.blur";
+    blur.name = "Blur";
+
+    REQUIRE(h.run(SetClip{v1.id, first.id, first.name, first.gain_db, {blur}}).has_value());
+    {
+        const Clip* now = h.document().tracks.front().clip(first.id);
+        REQUIRE(now != nullptr);
+        CHECK(now->has_effects());
+        REQUIRE(now->effects.size() == std::size_t{1});
+        CHECK_EQ(now->effects.front().name, std::string{"Blur"});
+    }
+
+    // Taking it off and putting it back must restore the effect itself, not merely the fact
+    // that there was one -- which is what the old boolean could do.
+    REQUIRE(h.run(SetClip{v1.id, first.id, first.name, first.gain_db, {}}).has_value());
+    CHECK(!h.document().tracks.front().clip(first.id)->has_effects());
+
+    REQUIRE(h.undo());
+    const Clip* back = h.document().tracks.front().clip(first.id);
+    REQUIRE(back != nullptr);
+    REQUIRE(back->effects.size() == std::size_t{1});
+    CHECK(back->effects.front().id == blur.id);
+    CHECK_EQ(back->effects.front().type, std::string{"filter.blur"});
+}
+
+LTEST_CASE(an_older_timeline_that_only_says_it_had_effects_keeps_its_badge) {
+    // Timelines written before clips carried real effects have `"has_effects": true` and no
+    // list. Dropping that would quietly clear the fx badge off every clip in an existing cut,
+    // so the flag becomes one placeholder effect.
+    Fixture f;
+    const std::string text = timeline_to_json(f.timeline, 1);
+    const std::string older = [&] {
+        std::string out = text;
+        const std::string anchor = R"("source_in")";
+        const auto at = out.find(anchor);
+        return at == std::string::npos
+                   ? out
+                   : out.insert(at, std::string{R"("has_effects" : true,)"} + "\n\t\t\t");
+    }();
+
+    const auto read = timeline_from_json(older);
+    REQUIRE_MSG(read.has_value(), "{}", read.error());
+    CHECK(read->document.tracks.front().clips.front().has_effects());
+}
+
 LTEST_CASE(a_timeline_round_trips_through_its_own_file) {
     Fixture f;
     f.timeline.markers.push_back(Marker{Id::generate(), 120, "Chorus", 0x00AAFF});

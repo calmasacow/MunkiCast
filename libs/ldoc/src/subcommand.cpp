@@ -276,12 +276,11 @@ std::expected<AppliedTo<TimelineCommand>, std::string> apply(Timeline& timeline,
                 Clip* clip = (*track)->clip(c.clip);
                 if (!clip)
                     return std::unexpected("there is no such clip on that track");
-                SetClip inverse{c.track, c.clip, clip->name, clip->gain_db,
-                                clip->has_effects};
+                SetClip inverse{c.track, c.clip, clip->name, clip->gain_db, clip->effects};
                 const std::string description = std::format("Change '{}'", c.name);
                 clip->name = c.name;
                 clip->gain_db = c.gain_db;
-                clip->has_effects = c.has_effects;
+                clip->effects = c.effects;
                 return AppliedTo<TimelineCommand>{std::move(inverse), description};
 
             } else if constexpr (std::is_same_v<T, SplitClip>) {

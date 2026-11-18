@@ -2,6 +2,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 
+#include "ldoc/node.hpp"
 #include "ldoc/types.hpp"
 
 #include <cstdint>
@@ -133,12 +134,14 @@ struct Clip {
     Transition transition;
     /// Whether this clip carries effects, for the badge the timeline draws.
     ///
-    /// A flag rather than a list, because this build has no clip effects to hold. It exists so
-    /// that the thing an editor reads off a timeline -- "this shot has been worked on" -- is in
-    /// the document rather than invented by the panel.
-    ///
-    /// ponytail: becomes `std::vector<Effect>` when the Edit tab grows an effects panel.
-    bool has_effects = false;
+    /// The same `Effect` a source carries on the show side, deliberately: an effect that works
+    /// on a live source works on a clip, and two catalogues would drift into offering
+    /// different pictures of what this build can do.
+    std::vector<Effect> effects;
+
+    /// Whether anything is on this clip. What an editor reads off a timeline at a glance --
+    /// "this shot has been worked on" -- without the panel having to count.
+    [[nodiscard]] bool has_effects() const { return !effects.empty(); }
 
     [[nodiscard]] Frame end() const { return start + duration; }
     /// The media frame shown at timeline frame `at`, which is only meaningful inside the clip.

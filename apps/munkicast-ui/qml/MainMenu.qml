@@ -108,38 +108,56 @@ Controls.MenuBar {
     Menu {
         id: fileMenu
         title: qsTr("&File")
+        // A project is a folder, so making one is choosing where it goes. It is not a scene
+        // collection: a project holds the collections along with the recordings, timelines,
+        // graphics and settings that go with them.
         Entry {
             objectName: "menuNewProject"
             text: qsTr("New Project...")
-            onTriggered: bar.collectionDialog.open("new")
+            onTriggered: {
+                const dir = FileDialog.directory(qsTr("New Project Folder"),
+                                                 Document.openProjectPath);
+                if (dir)
+                    Document.createProject(dir, dir.split("/").pop());
+            }
         }
         Entry {
             objectName: "menuOpenProject"
             text: qsTr("Open Project...")
-            onTriggered: bar.collectionDialog.open("import")
+            onTriggered: {
+                const dir = FileDialog.directory(qsTr("Open Project"),
+                                                 Document.openProjectPath);
+                if (dir)
+                    Document.openProject(dir);
+            }
         }
-        // Recent projects are the other collections on disk: the one that is open is already
-        // named in the title bar, so listing it again here would be a row that does nothing.
         Menu {
             id: recentMenu
             objectName: "menuRecentProjects"
             title: qsTr("Recent Projects")
+            enabled: Document.recentProjects.length > 0
             Instantiator {
-                model: Document.collections
+                model: Document.recentProjects
                 delegate: Entry {
                     required property var modelData
                     text: modelData.name
-                    visible: modelData.path !== Document.projectPath
+                    // The open one is already named in the status bar; a row that reopens
+                    // what is open does nothing an operator wanted.
+                    visible: modelData.path !== Document.openProjectPath
                     height: visible ? implicitHeight : 0
                     enabled: visible
-                    onTriggered: Document.openCollection(modelData.path)
+                    onTriggered: Document.openProject(modelData.path)
                 }
                 onObjectAdded: (index, object) => recentMenu.insertItem(recentMenu.count, object)
                 onObjectRemoved: (index, object) => recentMenu.removeItem(object)
             }
         }
         Divider {}
-        Entry { text: qsTr("Save Project"); enabled: Document.projectPath !== ""; onTriggered: Document.save() }
+        Entry {
+            text: qsTr("Save Project")
+            enabled: Document.projectPath !== ""
+            onTriggered: Document.save()
+        }
         Entry {
             objectName: "menuExportProject"
             text: qsTr("Export Project...")
@@ -155,8 +173,8 @@ Controls.MenuBar {
         Entry {
             objectName: "menuShowProjectFolder"
             text: qsTr("Show Project Folder")
-            enabled: Document.projectPath !== ""
-            onTriggered: Document.showProjectFolder()
+            enabled: Document.hasProject
+            onTriggered: Document.showOpenProjectFolder()
         }
         Divider {}
         Entry {

@@ -64,8 +64,20 @@ class Document : public QObject {
 
     Q_PROPERTY(QVariantList collections READ collections NOTIFY collectionsChanged)
     Q_PROPERTY(QString collectionReport READ collectionReport NOTIFY collectionsChanged)
+    /// The open *scene collection* -- one show's scenes, sources and outputs.
+    ///
+    /// Not the project. A project contains collections along with the recordings, timelines,
+    /// graphics and settings that go with them; these two name the collection inside it, and
+    /// are kept under these names because every binding in the shell already reads them.
     Q_PROPERTY(QString projectName READ projectName NOTIFY changed)
     Q_PROPERTY(QString projectPath READ projectPath NOTIFY changed)
+
+    /// The open project: the outer construct that holds the collections and everything else.
+    Q_PROPERTY(QString openProjectName READ openProjectName NOTIFY projectChanged)
+    Q_PROPERTY(QString openProjectPath READ openProjectPath NOTIFY projectChanged)
+    Q_PROPERTY(bool hasProject READ hasProject NOTIFY projectChanged)
+    /// The projects this machine has opened before, most recent first.
+    Q_PROPERTY(QVariantList recentProjects READ recentProjects NOTIFY projectChanged)
     Q_PROPERTY(bool dirty READ dirty NOTIFY changed)
     Q_PROPERTY(int revision READ revision NOTIFY changed)
 
@@ -759,6 +771,32 @@ public:
     /// operator works in by hand as well as through this shell, so it needs a way out to it.
     Q_INVOKABLE bool showProjectFolder();
 
+    // ---- projects ---------------------------------------------------------------------
+    //
+    // A project is not a scene collection. It is the directory the work lives in: the
+    // collections, the timelines cut in them, the graphics authored for them, the recordings
+    // made, the media cached and the settings in force. Creating one makes that tree;
+    // opening one points the collection catalogue, the media cache and the sub-document
+    // workbench at it.
+
+    /// Make a project directory at `path` and open it.
+    Q_INVOKABLE bool createProject(const QString& path, const QString& name);
+    /// Open an existing project directory.
+    Q_INVOKABLE bool openProject(const QString& path);
+    /// Open the project's own folder in the desktop's file manager.
+    Q_INVOKABLE bool showOpenProjectFolder();
+    /// Forget a project in the recent list. The directory is not touched.
+    Q_INVOKABLE void forgetProject(const QString& path);
+
+    [[nodiscard]] QString openProjectName() const;
+    [[nodiscard]] QString openProjectPath() const;
+    [[nodiscard]] bool hasProject() const;
+    [[nodiscard]] QVariantList recentProjects() const;
+    /// Point the collection catalogue at this project's Collections folder.
+    void useCollectionRoot(std::filesystem::path root);
+    /// Record which collection is open in the project's manifest.
+    void noteOpenCollection();
+
 
     // ---- for other C++ bridges, deliberately not Q_INVOKABLE -------------------------------
     //
@@ -784,6 +822,8 @@ public:
 signals:
   void filtersRequested(const QString& owner);
   void collectionsChanged();
+  /// A project was created, opened, or its recent list changed.
+  void projectChanged();
   void encoderPresetsChanged();
   void changed();
   void selectionChanged();
@@ -805,6 +845,11 @@ private:
     void rebuild();
     static ldoc::Project studioProject(std::string name);
     void initCollections();
+
+    /// The open project's directory and name. Empty when the shell was started on a
+    /// bare collection rather than inside a project, which older setups still are.
+    QString project_dir_;
+    QString project_name_;
     bool rememberCollection();
     bool saveCurrentCollection();
     void installSession(std::unique_ptr<lsession::Session> session);

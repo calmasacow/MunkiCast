@@ -16,6 +16,24 @@
 namespace llayout {
 namespace {
 
+/// Panels that have been renamed since a layout was last written.
+///
+/// A layout file names panels by id, so renaming one would otherwise leave an older file
+/// pointing at a panel this build has no body for -- the frame draws "nothing to draw here"
+/// and the operator has lost a panel for no reason they can see. Rewriting on load is cheaper
+/// than keeping a dead id alive forever, and the saved file is corrected the next time it is
+/// written.
+[[nodiscard]] std::string renamed_panel(std::string id) {
+    // "edit-monitor" was the Program viewer before the Edit tab had two of them. The Source
+    // viewer took that half of the screen, so an old layout's "edit-monitor" is the panel the
+    // operator would now expect to be Source.
+    if (id == "edit-monitor")
+        return "edit-source";
+    return id;
+}
+
+
+
 std::string quote(std::string_view s) {
     std::string out = "\"";
     for (const char c : s) {
@@ -205,7 +223,7 @@ std::expected<Layout, std::string> layout_from_table(const toml::table& tbl, int
                 if (p->empty())
                     return std::unexpected(
                         std::format("tab group {} panel #{} is empty", *id, j));
-                n.tabs.push_back(*p);
+                n.tabs.push_back(renamed_panel(*p));
             }
             const auto active = (*t)["active"].value<std::int64_t>();
             n.active = (active && *active >= 0) ? static_cast<std::size_t>(*active) : 0;

@@ -112,7 +112,9 @@ struct SetClip {
     Id clip;
     std::string name;
     double gain_db = 0.0;
-    bool has_effects = false;
+    /// The clip's whole effect list. Carried entire, like every other field here, so that an
+    /// inverse restores exactly what was there rather than a flag about it.
+    std::vector<Effect> effects;
     friend bool operator==(const SetClip&, const SetClip&) = default;
 };
 

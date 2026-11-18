@@ -31,6 +31,17 @@ ldoc::Id from_qt(const QString& text) {
     return parsed ? *parsed : ldoc::Id{};
 }
 
+QVariantList effects_list(const std::vector<ldoc::Effect>& effects) {
+    QVariantList out;
+    for (const ldoc::Effect& e : effects) {
+        out.append(QVariantMap{{QStringLiteral("id"), to_qt(e.id)},
+                               {QStringLiteral("type"), QString::fromStdString(e.type)},
+                               {QStringLiteral("name"), QString::fromStdString(e.name)},
+                               {QStringLiteral("enabled"), e.enabled}});
+    }
+    return out;
+}
+
 QVariantMap clip_map(const ldoc::Clip& clip) {
     return QVariantMap{
         {QStringLiteral("id"), to_qt(clip.id)},
@@ -40,7 +51,8 @@ QVariantMap clip_map(const ldoc::Clip& clip) {
         {QStringLiteral("duration"), static_cast<qlonglong>(clip.duration)},
         {QStringLiteral("sourceIn"), static_cast<qlonglong>(clip.source_in)},
         {QStringLiteral("gainDb"), clip.gain_db},
-        {QStringLiteral("hasEffects"), clip.has_effects},
+        {QStringLiteral("hasEffects"), clip.has_effects()},
+        {QStringLiteral("effects"), effects_list(clip.effects)},
         {QStringLiteral("transition"),
          QString::fromStdString(std::string{to_string(clip.transition.kind)})},
         {QStringLiteral("transitionFrames"),
@@ -509,7 +521,7 @@ void Edit::setClipGain(double db) {
     if (!clip)
         return;
     // SetClip carries the whole value, so the name has to come along or it would be cleared.
-    run(ldoc::SetClip{selected_track_, selected_clip_, clip->name, db, clip->has_effects});
+    run(ldoc::SetClip{selected_track_, selected_clip_, clip->name, db, clip->effects});
 }
 
 QVariantMap Edit::clipUnderPlayheadMap() const {
@@ -922,17 +934,72 @@ void Edit::insertSourceRange(bool overwrite) {
                     QFileInfo(source_path_).fileName().toStdString())));
 }
 
-void Edit::setClipEffects(bool on) {
-    if (selected_clip_.is_nil())
-        return;
-    const ldoc::TimelineHistory* h = history();
-    if (!h)
-        return;
-    const ldoc::Track* track = h->document().track(selected_track_);
-    const ldoc::Clip* clip = track ? track->clip(selected_clip_) : nullptr;
+void Edit::addClipEffect(const QString& type) {
+    const ldoc::Clip* clip = selectedClip_();
     if (!clip)
         return;
-    run(ldoc::SetClip{selected_track_, selected_clip_, clip->name, clip->gain_db, on});
+    const auto& catalog = lcomp::filter_catalog();
+    const auto found = std::find_if(catalog.begin(), catalog.end(), [&](const auto& info) {
+        return QString::fromStdString(info.type) == type;
+    });
+    if (found == catalog.end()) {
+        emit notice(tr("There is no effect called '%1'.").arg(type));
+        return;
+    }
+
+    std::vector<ldoc::Effect> effects = clip->effects;
+    ldoc::Effect added;
+    added.id = ldoc::Id::generate();
+    added.type = found->type;
+    added.name = found->name;
+    effects.push_back(std::move(added));
+    run(ldoc::SetClip{selected_track_, selected_clip_, clip->name, clip->gain_db,
+                      std::move(effects)});
+}
+
+void Edit::removeClipEffect(const QString& id) {
+    const ldoc::Clip* clip = selectedClip_();
+    if (!clip)
+        return;
+    const ldoc::Id wanted = from_qt(id);
+    std::vector<ldoc::Effect> effects;
+    for (const ldoc::Effect& e : clip->effects) {
+        if (e.id != wanted)
+            effects.push_back(e);
+    }
+    if (effects.size() == clip->effects.size())
+        return;
+    run(ldoc::SetClip{selected_track_, selected_clip_, clip->name, clip->gain_db,
+                      std::move(effects)});
+}
+
+void Edit::toggleClipEffect(const QString& id) {
+    const ldoc::Clip* clip = selectedClip_();
+    if (!clip)
+        return;
+    const ldoc::Id wanted = from_qt(id);
+    std::vector<ldoc::Effect> effects = clip->effects;
+    bool hit = false;
+    for (ldoc::Effect& e : effects) {
+        if (e.id == wanted) {
+            e.enabled = !e.enabled;
+            hit = true;
+        }
+    }
+    if (!hit)
+        return;
+    run(ldoc::SetClip{selected_track_, selected_clip_, clip->name, clip->gain_db,
+                      std::move(effects)});
+}
+
+const ldoc::Clip* Edit::selectedClip_() const {
+    if (selected_clip_.is_nil())
+        return nullptr;
+    const ldoc::TimelineHistory* h = history();
+    if (!h)
+        return nullptr;
+    const ldoc::Track* track = h->document().track(selected_track_);
+    return track ? track->clip(selected_clip_) : nullptr;
 }
 
 QVariantList Edit::effectCatalogue() const {

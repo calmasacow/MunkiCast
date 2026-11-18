@@ -44,6 +44,7 @@ qt_add_executable(munkicast-ui
     filters.cpp
     outputpresets.cpp
     collections.cpp
+    projects.cpp
     document.hpp
     documentmodels.cpp
     documentmodels.hpp

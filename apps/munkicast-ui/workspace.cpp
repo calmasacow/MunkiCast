@@ -81,7 +81,7 @@ constexpr std::array kKnownPanels = {
     KnownPanel{"edit-bins", "Media Browser", "Edit"},
     KnownPanel{"edit-source", "Source", "Edit"},
     KnownPanel{"edit-program", "Program", "Edit"},
-    KnownPanel{"edit-properties", "Clip", "Edit"},
+    KnownPanel{"edit-properties", "Properties", "Edit"},
     KnownPanel{"edit-effects", "Effects", "Edit"},
     KnownPanel{"edit-timeline", "Timeline", "Edit"},
     KnownPanel{"edit-audio", "Mix", "Edit"},

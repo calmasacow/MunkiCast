@@ -16,6 +16,7 @@ add_library(ldoc STATIC
     src/journal.cpp
     src/json.cpp
     src/migrate.cpp
+    src/project.cpp
     src/project_io.cpp
     src/node.cpp
     src/subcommand.cpp
