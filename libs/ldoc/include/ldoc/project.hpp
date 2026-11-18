@@ -37,12 +37,40 @@ namespace ldoc {
 ///
 /// The Maya shape, and for Maya's reason: a project is a folder you can copy to another
 /// machine, hand to someone else, or back up, and have the work arrive whole.
+/// A bin in the media pool: a place media is organised into.
+///
+/// Two kinds, and the difference is where the contents come from. A *system* bin is a window
+/// onto one of the project's own folders -- Clips, Recordings, Graphics -- so its contents are
+/// whatever is in that folder, and a file copied in there by any means at all appears without
+/// being imported. A bin the operator makes holds references to files wherever they are, which
+/// is what makes it an arrangement rather than a second copy of the disk.
+struct Bin {
+    Id id;
+    std::string name;
+    /// The project folder this bin shows, for a system bin. Empty for one the operator made.
+    std::string folder;
+    /// Files in this bin, for one the operator made. Absolute paths: a bin can reference media
+    /// that was never copied into the project.
+    std::vector<std::string> items;
+
+    [[nodiscard]] bool system() const { return !folder.empty(); }
+
+    friend bool operator==(const Bin&, const Bin&) = default;
+};
+
+/// The folders a new project's system bins show, in the order they appear.
+[[nodiscard]] const std::vector<std::string>& system_bin_folders();
+
 struct ProjectManifest {
     Id id;
     std::string name;
     /// The collection that was open, relative to `Collections/`. Empty for a project whose
     /// collections have all been removed, which is a project that can still be opened.
     std::string open_collection;
+    /// The bins the operator has made. The system bins are not here: they are the project's
+    /// own folders, so storing them would be storing a fact the tree already states, and one
+    /// that could then disagree with it.
+    std::vector<Bin> bins;
     /// Written by whichever build last saved, so a newer project can say so rather than being
     /// read with fields silently dropped.
     int schema_version = 1;
@@ -91,6 +119,9 @@ struct ProjectManifest {
 /// The collections in a project, as absolute paths, oldest first.
 [[nodiscard]] std::vector<std::filesystem::path> project_collections(
     const std::filesystem::path& dir);
+
+/// Every bin in a project: the system bins for its folders, then the operator's own.
+[[nodiscard]] std::vector<Bin> project_bins(const ProjectManifest& manifest);
 
 /// Create any project folder that is missing.
 ///

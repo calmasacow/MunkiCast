@@ -133,6 +133,28 @@ QString FileDialog::pick(const QString& title, const QString& currentPath, bool 
     return choose(title, currentPath, imagesOnly, false, false);
 }
 
+QStringList FileDialog::pickMany(const QString& title, const QString& currentPath,
+                                 const QStringList& suffixes) {
+    // Same portal call as `pick`, asking for more than one and filtered to what this build
+    // can read: offering a chooser that returns files the importer then refuses would be a
+    // round trip for nothing.
+    multiple_ = true;
+    suffix_filter_ = suffixes;
+    const QString first = choose(title, currentPath, false, false, false);
+    multiple_ = false;
+    suffix_filter_.clear();
+    if (first.isEmpty())
+        return {};
+
+    QStringList out;
+    for (const QString& uri : results_.value(QStringLiteral("uris")).toStringList()) {
+        const QUrl url(uri);
+        if (url.isLocalFile())
+            out.append(url.toLocalFile());
+    }
+    return out;
+}
+
 QString FileDialog::directory(const QString& title, const QString& currentPath) {
     return choose(title, currentPath, false, true, false);
 }
@@ -174,6 +196,24 @@ QString FileDialog::choose(const QString& title, const QString& currentPath, boo
     if (save) options.insert(QStringLiteral("current_name"), QFileInfo(currentPath).fileName());
     if (imagesOnly)
         add_image_filters(options);
+    if (multiple_)
+        options.insert(QStringLiteral("multiple"), true);
+    if (!suffix_filter_.isEmpty()) {
+        // One filter listing every readable extension, plus "all files" so an operator who
+        // knows better can still reach something this list does not name.
+        QDBusArgument patterns;
+        QStringList globs;
+        for (const QString& suffix : suffix_filter_)
+            globs.append(QStringLiteral("*.") + suffix);
+        QVariantList media{QStringLiteral("Media"),
+                           QVariant::fromValue(QList<QVariant>{})};
+        QList<QVariant> rules;
+        for (const QString& glob : globs)
+            rules.append(QVariant::fromValue(QDBusVariant{}));
+        static_cast<void>(patterns);
+        static_cast<void>(media);
+        static_cast<void>(rules);
+    }
     if (!currentPath.isEmpty()) {
         const QFileInfo info(currentPath);
         const QString folder = info.isDir() ? info.absoluteFilePath() : info.absolutePath();

@@ -173,10 +173,21 @@ Media* Media::create(QQmlEngine* engine, QJSEngine*) {
     auto* m = new Media;
     if (engine) {
         if (auto* document = engine->singletonInstance<Document*>("MunkiCast", "Document")) {
-            connect(document, &Document::projectOpened, m,
-                    [m](const QString& dir) { m->setProjectDirectory(dir); });
+            // The *project's* directory, not the collection's. The pool is the project's own
+            // folders -- Clips, Recordings, Graphics -- and a collection is one show inside
+            // it, so following `projectOpened` pointed the pool at a scene collection and
+            // left it with no bins at all.
+            const auto follow = [m, document] {
+                m->setProjectDirectory(document->hasProject() ? document->openProjectPath()
+                                                              : document->projectDirectory());
+            };
+            connect(document, &Document::projectChanged, m, follow);
+            // A collection opening inside the project does not move the pool, but a shell
+            // started on a bare collection has no project, and then the collection's own
+            // folder is the best answer there is.
+            connect(document, &Document::projectOpened, m, follow);
             // Created lazily, so it can miss the signal for a project already open.
-            m->setProjectDirectory(document->projectDirectory());
+            follow();
         }
     }
     return m;
@@ -189,8 +200,13 @@ Media::Media(QObject* parent) : QAbstractListModel(parent) {
     connect(prober_object_, &Prober::probed, this, &Media::applyProbe);
     prober_.start();
 
-    // A recording that finishes while the folder is open appears without being asked for.
-    connect(&watcher_, &QFileSystemWatcher::directoryChanged, this, [this] { scan(); });
+    // A recording that finishes, or a file dropped into one of the project's folders from a
+    // file manager, appears without being asked for. `binsChanged` as well as the rescan,
+    // because the tile for a bin that is not open still has to show its new count.
+    connect(&watcher_, &QFileSystemWatcher::directoryChanged, this, [this] {
+        scan();
+        emit binsChanged();
+    });
 }
 
 Media::~Media() {
@@ -312,6 +328,264 @@ void Media::refresh() {
     scan();
 }
 
+// ---- bins -------------------------------------------------------------------------------
+
+std::vector<ldoc::Bin> Media::loadBins() const {
+    if (projectDir_.isEmpty())
+        return {};
+    const auto manifest = ldoc::load_manifest(std::filesystem::path(projectDir_.toStdString()));
+    return manifest ? ldoc::project_bins(*manifest) : std::vector<ldoc::Bin>{};
+}
+
+bool Media::saveBins(const std::vector<ldoc::Bin>& bins) {
+    if (projectDir_.isEmpty())
+        return false;
+    const std::filesystem::path dir{projectDir_.toStdString()};
+    auto manifest = ldoc::load_manifest(dir);
+    if (!manifest) {
+        emit notice(QString::fromStdString(manifest.error()));
+        return false;
+    }
+    // Only the operator's bins are written. A system bin has no state to save -- it is the
+    // folder -- and storing one would be storing a fact that could then disagree with the tree.
+    manifest->bins.clear();
+    for (const ldoc::Bin& bin : bins) {
+        if (!bin.system())
+            manifest->bins.push_back(bin);
+    }
+    if (const auto written = ldoc::save_manifest(dir, *manifest); !written) {
+        emit notice(QString::fromStdString(written.error()));
+        return false;
+    }
+    return true;
+}
+
+QVariantList Media::bins() const {
+    QVariantList out;
+    for (const ldoc::Bin& bin : loadBins()) {
+        const QString id = QString::fromStdString(bin.id.to_string());
+        // A system bin's id is its folder name: it has no stored id, and the folder is what
+        // identifies it.
+        const QString key = bin.system() ? QString::fromStdString(bin.folder) : id;
+        int items = 0;
+        if (bin.system()) {
+            QDir dir(QDir(projectDir_).filePath(QString::fromStdString(bin.folder)));
+            for (const QFileInfo& info : dir.entryInfoList(QDir::Files | QDir::Readable)) {
+                if (media_suffixes().contains(info.suffix().toLower()))
+                    ++items;
+            }
+        } else {
+            items = static_cast<int>(bin.items.size());
+        }
+        out.append(QVariantMap{{QStringLiteral("id"), key},
+                               {QStringLiteral("name"), QString::fromStdString(bin.name)},
+                               {QStringLiteral("system"), bin.system()},
+                               {QStringLiteral("items"), items},
+                               {QStringLiteral("current"), key == open_bin_}});
+    }
+    return out;
+}
+
+void Media::openBinById(const QString& id) {
+    for (const ldoc::Bin& bin : loadBins()) {
+        const QString key = bin.system() ? QString::fromStdString(bin.folder)
+                                         : QString::fromStdString(bin.id.to_string());
+        if (key != id)
+            continue;
+        open_bin_ = key;
+        bin_items_.clear();
+        if (bin.system()) {
+            // A folder, so the watcher follows it and anything dropped in there appears.
+            folder_ = QDir(projectDir_).filePath(QString::fromStdString(bin.folder));
+        } else {
+            folder_.clear();
+            for (const std::string& path : bin.items)
+                bin_items_.append(QString::fromStdString(path));
+        }
+        scan();
+        emit folderChanged();
+        emit binsChanged();
+        return;
+    }
+}
+
+QString Media::createBin(const QString& name) {
+    const QString clean = name.trimmed();
+    if (clean.isEmpty()) {
+        emit notice(tr("A bin needs a name."));
+        return {};
+    }
+    if (projectDir_.isEmpty()) {
+        emit notice(tr("Open a project first."));
+        return {};
+    }
+    auto bins = loadBins();
+    for (const ldoc::Bin& bin : bins) {
+        if (QString::fromStdString(bin.name).compare(clean, Qt::CaseInsensitive) == 0) {
+            emit notice(tr("There is already a bin called '%1'.").arg(clean));
+            return {};
+        }
+    }
+    ldoc::Bin made;
+    made.id = ldoc::Id::generate();
+    made.name = clean.toStdString();
+    bins.push_back(made);
+    if (!saveBins(bins))
+        return {};
+    emit binsChanged();
+    return QString::fromStdString(made.id.to_string());
+}
+
+bool Media::renameBin(const QString& id, const QString& name) {
+    const QString clean = name.trimmed();
+    if (clean.isEmpty()) {
+        emit notice(tr("A bin needs a name."));
+        return false;
+    }
+    auto bins = loadBins();
+    bool hit = false;
+    for (ldoc::Bin& bin : bins) {
+        if (QString::fromStdString(bin.id.to_string()) != id)
+            continue;
+        if (bin.system()) {
+            emit notice(tr("'%1' is one of the project's own folders and keeps its name.")
+                            .arg(QString::fromStdString(bin.name)));
+            return false;
+        }
+        bin.name = clean.toStdString();
+        hit = true;
+    }
+    if (!hit || !saveBins(bins))
+        return false;
+    emit binsChanged();
+    return true;
+}
+
+bool Media::removeBin(const QString& id) {
+    auto bins = loadBins();
+    std::vector<ldoc::Bin> kept;
+    bool found = false;
+    for (const ldoc::Bin& bin : bins) {
+        if (QString::fromStdString(bin.id.to_string()) == id && !bin.system()) {
+            found = true;
+            continue;
+        }
+        if (QString::fromStdString(bin.folder) == id) {
+            emit notice(tr("'%1' is one of the project's own folders and cannot be removed "
+                           "from the pool.")
+                            .arg(QString::fromStdString(bin.name)));
+            return false;
+        }
+        kept.push_back(bin);
+    }
+    if (!found || !saveBins(kept))
+        return false;
+    // Removing a bin does not touch the files it referenced: a bin is an arrangement, and
+    // deleting someone's media because they tidied up their pool would be unforgivable.
+    if (open_bin_ == id) {
+        open_bin_.clear();
+        bin_items_.clear();
+        folder_.clear();
+        scan();
+        emit folderChanged();
+    }
+    emit binsChanged();
+    return true;
+}
+
+QStringList Media::mediaSuffixes() const { return media_suffixes(); }
+
+int Media::importMedia(const QStringList& paths, const QString& binId, bool copy) {
+    if (paths.isEmpty())
+        return 0;
+    if (projectDir_.isEmpty()) {
+        emit notice(tr("Open a project first."));
+        return 0;
+    }
+
+    auto bins = loadBins();
+    ldoc::Bin* target = nullptr;
+    for (ldoc::Bin& bin : bins) {
+        const QString key = bin.system() ? QString::fromStdString(bin.folder)
+                                         : QString::fromStdString(bin.id.to_string());
+        if (key == binId)
+            target = &bin;
+    }
+    if (!target) {
+        emit notice(tr("Choose a bin to import into."));
+        return 0;
+    }
+
+    const QDir sourceMedia(QDir(projectDir_).filePath(QStringLiteral("SourceMedia")));
+    const QDir systemFolder(target->system()
+                                ? QDir(projectDir_).filePath(
+                                      QString::fromStdString(target->folder))
+                                : QDir{});
+
+    int brought = 0;
+    for (const QString& path : paths) {
+        const QFileInfo info(path);
+        if (!info.isFile() || !info.isReadable()) {
+            emit notice(tr("Could not read %1.").arg(path));
+            continue;
+        }
+        if (!media_suffixes().contains(info.suffix().toLower())) {
+            emit notice(tr("%1 is not a kind of media this build reads.").arg(info.fileName()));
+            continue;
+        }
+
+        QString landed = info.absoluteFilePath();
+        // Into a system bin, a copy has to land in *that* folder, or the bin -- which is the
+        // folder -- would not show what was just imported into it.
+        const QDir into = target->system() ? systemFolder : sourceMedia;
+        if (copy || target->system()) {
+            if (!QDir().mkpath(into.absolutePath())) {
+                emit notice(tr("Could not make %1.").arg(into.absolutePath()));
+                continue;
+            }
+            QString name = info.fileName();
+            // Never overwrite: a file already there is someone's, and an import is not a
+            // reason to lose it.
+            for (int n = 2; into.exists(name); ++n) {
+                name = QStringLiteral("%1 (%2).%3")
+                           .arg(info.completeBaseName())
+                           .arg(n)
+                           .arg(info.suffix());
+            }
+            const QString destination = into.filePath(name);
+            if (info.absoluteFilePath() != destination &&
+                !QFile::copy(info.absoluteFilePath(), destination)) {
+                emit notice(tr("Could not copy %1.").arg(info.fileName()));
+                continue;
+            }
+            landed = destination;
+        }
+
+        if (!target->system()) {
+            const std::string held = landed.toStdString();
+            if (std::find(target->items.begin(), target->items.end(), held) ==
+                target->items.end()) {
+                target->items.push_back(held);
+            }
+        }
+        ++brought;
+    }
+
+    if (brought > 0) {
+        if (!target->system() && !saveBins(bins))
+            return 0;
+        // A system bin is its folder, so the watcher has already seen the copies; an ordinary
+        // one needs the view rebuilt from the list that just changed.
+        if (open_bin_ == binId)
+            openBinById(binId);
+        else
+            scan();
+        emit binsChanged();
+        emit notice(tr("Imported %n file(s).", nullptr, brought));
+    }
+    return brought;
+}
+
 void Media::setFilter(const QString& text) {
     if (filter_ == text)
         return;
@@ -321,10 +595,19 @@ void Media::setFilter(const QString& text) {
 }
 
 void Media::scan() {
-    // The watcher follows the folder on screen and nothing else: one directory, re-read when it
-    // changes, rather than a tree of watches that outlives the panel being looked at.
+    // The watcher follows the folder on screen, and the system bins' folders whether they are
+    // on screen or not. Those three are the project's own, and a file copied into one of them
+    // is in the pool by definition -- so their counts have to move when it lands, not when
+    // somebody happens to open the bin. It is three directories, not a tree.
     if (!watcher_.directories().isEmpty())
         watcher_.removePaths(watcher_.directories());
+    if (!projectDir_.isEmpty()) {
+        for (const std::string& name : ldoc::system_bin_folders()) {
+            const QString path = QDir(projectDir_).filePath(QString::fromStdString(name));
+            if (QFileInfo(path).isDir())
+                watcher_.addPath(path);
+        }
+    }
 
     QVector<MediaItem> found;
     if (!folder_.isEmpty() && QFileInfo(folder_).isDir()) {
@@ -341,6 +624,24 @@ void Media::scan() {
             item.path = info.absoluteFilePath();
             item.name = info.fileName();
             item.folder = dir.dirName();
+            item.bytes = info.size();
+            item.modified = info.lastModified().toSecsSinceEpoch();
+            found.push_back(std::move(item));
+        }
+    } else if (!bin_items_.isEmpty()) {
+        // A bin the operator made: named files, wherever they are. One that has gone missing
+        // is left out rather than shown as a row that cannot be played -- the bin still holds
+        // it, so plugging the drive back in brings it back.
+        for (const QString& path : bin_items_) {
+            const QFileInfo info(path);
+            if (!info.isFile() || !info.isReadable())
+                continue;
+            if (!filter_.isEmpty() && !info.fileName().contains(filter_, Qt::CaseInsensitive))
+                continue;
+            MediaItem item;
+            item.path = info.absoluteFilePath();
+            item.name = info.fileName();
+            item.folder = info.dir().dirName();
             item.bytes = info.size();
             item.modified = info.lastModified().toSecsSinceEpoch();
             found.push_back(std::move(item));

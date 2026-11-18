@@ -99,6 +99,69 @@ LTEST_CASE(a_project_lists_the_collections_inside_it) {
              std::string{"01BBBBBBBBBBBBBBBBBBBBBBBB.munkicast"});
 }
 
+LTEST_CASE(a_new_project_has_exactly_three_system_bins) {
+    TempDir tmp;
+    const fs::path dir = tmp.path / "Fresh";
+    const auto made = create_project_tree(dir, "Fresh");
+    REQUIRE(made.has_value());
+
+    const auto bins = project_bins(*made);
+    REQUIRE(bins.size() == std::size_t{3});
+    CHECK_EQ(bins[0].name, std::string{"Clips"});
+    CHECK_EQ(bins[1].name, std::string{"Recordings"});
+    CHECK_EQ(bins[2].name, std::string{"Graphics"});
+    for (const Bin& bin : bins) {
+        CHECK(bin.system());
+        // Each maps onto a real folder, which is what makes a file dropped in there appear
+        // in the pool without an import.
+        CHECK_MSG(fs::is_directory(dir / bin.folder), "no folder for {}", bin.name);
+    }
+}
+
+LTEST_CASE(a_system_bin_is_not_stored_in_the_manifest) {
+    // Storing them would store a fact the tree already states, and the two could then
+    // disagree -- a bin named Recordings pointing somewhere Recordings is not.
+    TempDir tmp;
+    const fs::path dir = tmp.path / "Derived";
+    const auto made = create_project_tree(dir, "Derived");
+    REQUIRE(made.has_value());
+    CHECK(made->bins.empty());
+
+    const auto read = load_manifest(dir);
+    REQUIRE(read.has_value());
+    CHECK(read->bins.empty());
+    CHECK(project_bins(*read).size() == std::size_t{3});
+}
+
+LTEST_CASE(a_bin_the_operator_made_round_trips_with_its_contents) {
+    TempDir tmp;
+    const fs::path dir = tmp.path / "With Bins";
+    auto made = create_project_tree(dir, "With Bins");
+    REQUIRE(made.has_value());
+
+    Bin interviews;
+    interviews.id = Id::generate();
+    interviews.name = "Interviews";
+    interviews.items = {"/media/one.mov", "/elsewhere/two.wav"};
+    made->bins.push_back(interviews);
+    REQUIRE(save_manifest(dir, *made).has_value());
+
+    const auto read = load_manifest(dir);
+    REQUIRE_MSG(read.has_value(), "{}", read.error());
+    REQUIRE(read->bins.size() == std::size_t{1});
+    CHECK_EQ(read->bins.front().name, std::string{"Interviews"});
+    CHECK(read->bins.front().id == interviews.id);
+    REQUIRE(read->bins.front().items.size() == std::size_t{2});
+    // A bin can reference media that was never copied into the project.
+    CHECK_EQ(read->bins.front().items[1], std::string{"/elsewhere/two.wav"});
+    CHECK(!read->bins.front().system());
+
+    // And it comes after the system bins rather than among them.
+    const auto all = project_bins(*read);
+    REQUIRE(all.size() == std::size_t{4});
+    CHECK_EQ(all.back().name, std::string{"Interviews"});
+}
+
 LTEST_CASE(a_manifest_round_trips) {
     TempDir tmp;
     const fs::path dir = tmp.path / "Round Trip";

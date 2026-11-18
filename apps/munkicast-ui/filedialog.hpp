@@ -29,6 +29,9 @@ class FileDialog : public QObject {
     /// `imagesOnly` asks the chooser to start on PNG, JPEG, and WebP. It is a hint. The path is
     /// not applied anywhere; the caller keeps it until the operator accepts the settings.
     Q_INVOKABLE QString pick(const QString& title, const QString& currentPath, bool imagesOnly);
+    /// Choose several files at once, for importing media. Empty when cancelled.
+    Q_INVOKABLE QStringList pickMany(const QString& title, const QString& currentPath,
+                                     const QStringList& suffixes);
 
     Q_INVOKABLE QString directory(const QString& title, const QString& currentPath);
     Q_INVOKABLE QString saveFile(const QString& title, const QString& currentPath);
@@ -42,6 +45,9 @@ class FileDialog : public QObject {
     Q_SLOT void portalResponse(uint response, const QVariantMap& results);
 
     QString last_error_;
+    /// Set for the duration of one `pickMany`.
+    bool multiple_ = false;
+    QStringList suffix_filter_;
     bool got_ = false;
     quint32 response_ = 2;
     QVariantMap results_;

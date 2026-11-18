@@ -4,13 +4,16 @@
 pragma ComponentBehavior: Bound
 
 import QtQuick
+import QtQuick.Window
 import MunkiCast
 
-/// The Media Browser: the project's own folders, the files in them, and its timelines.
+/// The media pool: the bins a project's media is organised into, and what is in them.
 ///
-/// The folders are the Maya-style tree the project was created with, so this panel is a view
-/// of the disk rather than a second catalogue to keep in step with it. Going into a folder
-/// replaces the tiles with its files; the up arrow comes back.
+/// Two kinds of bin, and the difference is worth knowing. Clips, Recordings and Graphics are
+/// *system* bins -- each is a window onto the project folder of that name, so a file copied
+/// in there by any means at all is simply in the pool, with no import step. A bin the
+/// operator makes holds references to files wherever they are, which is what makes it an
+/// arrangement rather than a second copy of the disk.
 Item {
     id: panel
 
@@ -18,6 +21,31 @@ Item {
     property bool inFolder: false
     /// Tiles or rows. A grid reads faster for pictures, a list for names and lengths.
     property bool grid: true
+
+    /// Open the pool's menu. `bin` is the one under the pointer, or null for empty space.
+    function showMenu(from, ev, bin) {
+        const at = from.mapToItem(poolMenu, ev.x, ev.y);
+        const rows = [
+            {text: qsTr("New Bin…"), action: function() { newBin.open(); }},
+            {text: qsTr("Import Media…"),
+             enabled: Media.hasProject,
+             action: function() { importer.open(bin ? bin.id : Media.openBin); }}
+        ];
+        if (bin && !bin.system) {
+            rows.push({separator: true});
+            rows.push({text: qsTr("Rename “%1”…").arg(bin.name),
+                       action: function() { renameBin.open(bin.id, bin.name); }});
+            rows.push({text: qsTr("Remove “%1”").arg(bin.name),
+                       action: function() { Media.removeBin(bin.id); }});
+        } else if (bin && bin.system) {
+            rows.push({separator: true});
+            // Said rather than silently left out: an operator who right-clicks Recordings
+            // and finds no Rename should know it is deliberate.
+            rows.push({text: qsTr("“%1” is one of the project's own folders").arg(bin.name),
+                       enabled: false});
+        }
+        poolMenu.popup(at.x, at.y, rows);
+    }
 
     Rectangle {
         anchors.fill: parent
@@ -126,7 +154,7 @@ Item {
             spacing: 10
 
             Repeater {
-                model: Media.projectFolders
+                model: Media.bins
 
                 delegate: Item {
                     id: tile
@@ -143,8 +171,10 @@ Item {
                                                        : "transparent"
                     }
 
-                    // A folder, drawn rather than shipped as an icon: two rectangles say
-                    // "folder" as well as any picture and follow the theme for free.
+                    // A bin, drawn rather than shipped as an icon: two rectangles say "bin"
+                    // as well as any picture and follow the theme for free. A system bin is
+                    // drawn in the accent because it is the project's own folder; one the
+                    // operator made is plainer.
                     Item {
                         id: glyph
 
@@ -158,7 +188,7 @@ Item {
                             width: 18
                             height: 6
                             radius: 1
-                            color: tile.modelData.exists ? Theme.c.accent : Theme.c.border
+                            color: tile.modelData.system ? Theme.c.accent : Theme.c.textMuted
                         }
 
                         Rectangle {
@@ -166,8 +196,10 @@ Item {
                             width: parent.width
                             height: 28
                             radius: 2
-                            color: tile.modelData.exists ? Theme.c.accent : Theme.c.border
-                            opacity: tile.modelData.exists ? 0.75 : 0.4
+                            color: tile.modelData.system ? Theme.c.accent : Theme.c.textMuted
+                            opacity: tile.modelData.current ? 0.95 : 0.7
+                            border.width: tile.modelData.current ? 1 : 0
+                            border.color: Theme.c.text
                         }
                     }
 
@@ -196,13 +228,37 @@ Item {
 
                         anchors.fill: parent
                         hoverEnabled: true
-                        onClicked: {
-                            Media.openFolder(tile.modelData.path);
+                        acceptedButtons: Qt.LeftButton | Qt.RightButton
+                        onClicked: (ev) => {
+                            if (ev.button === Qt.RightButton) {
+                                panel.showMenu(this, ev, tile.modelData);
+                                return;
+                            }
+                            Media.openBinById(tile.modelData.id);
                             panel.inFolder = true;
                         }
                     }
+
+                    ToolTipText {
+                        text: tile.modelData.system
+                              ? qsTr("%1 — the project's own folder; anything copied into it appears here")
+                                    .arg(tile.modelData.name)
+                              : qsTr("%1 — right-click to rename or remove")
+                                    .arg(tile.modelData.name)
+                        visible: tileMouse.containsMouse
+                        hoverArea: tileMouse
+                    }
                 }
             }
+        }
+
+        // Right-clicking the empty space below the bins is the other way to reach the menu,
+        // and the only one when a project has no bins at all.
+        MouseArea {
+            anchors.fill: parent
+            z: -1
+            acceptedButtons: Qt.RightButton
+            onClicked: (ev) => panel.showMenu(this, ev, null)
         }
     }
 
@@ -416,6 +472,163 @@ Item {
             onClicked: Edit.createTimeline(qsTr("Timeline %1").arg(Edit.timelines.length + 1))
         }
     }
+
+    StripMenu {
+        id: poolMenu
+
+        objectName: "poolMenu"
+        parent: panel.Window.contentItem
+        z: 40
+    }
+
+    /// Asking for one line of text. Small enough to live here rather than be a component:
+    /// naming a bin is the only thing it does.
+    Item {
+        id: newBin
+
+        objectName: "newBinPrompt"
+        anchors.fill: parent
+        z: 30
+        visible: false
+
+        property string value: ""
+
+        function open() {
+            newBin.value = "";
+            newBin.visible = true;
+            newBinField.forceActiveFocus();
+        }
+
+        function accept() {
+            const made = Media.createBin(newBin.value);
+            if (made !== "") {
+                newBin.visible = false;
+                Media.openBinById(made);
+                panel.inFolder = true;
+            }
+        }
+
+        Rectangle {
+            anchors.fill: parent
+            color: "#000000"
+            opacity: 0.4
+            MouseArea { anchors.fill: parent; onClicked: newBin.visible = false }
+        }
+
+        Rectangle {
+            anchors.centerIn: parent
+            width: Math.min(parent.width - 24, 300)
+            height: 96
+            radius: 3
+            color: Theme.c.panelBackground
+            border.color: Theme.c.accent
+            MouseArea { anchors.fill: parent; onClicked: {} }
+
+            Text {
+                id: newBinTitle
+                anchors { left: parent.left; top: parent.top; margins: 12 }
+                text: qsTr("New Bin")
+                font { pixelSize: 12; bold: true }
+                color: Theme.c.text
+            }
+
+            TextLine {
+                id: newBinField
+                objectName: "newBinField"
+                anchors { left: parent.left; right: parent.right; top: newBinTitle.bottom
+                          margins: 12 }
+                labelWidth: 50
+                label: qsTr("Name")
+                value: newBin.value
+                commitOnEdit: true
+                onCommitted: newValue => newBin.value = newValue
+            }
+
+            Row {
+                anchors { right: parent.right; bottom: parent.bottom; margins: 10 }
+                spacing: 6
+                DialogButton { text: qsTr("Cancel"); onClicked: newBin.visible = false }
+                DialogButton {
+                    objectName: "newBinAccept"
+                    text: qsTr("Create")
+                    primary: true
+                    enabled: newBin.value.trim() !== ""
+                    onClicked: newBin.accept()
+                }
+            }
+        }
+    }
+
+    Item {
+        id: renameBin
+
+        anchors.fill: parent
+        z: 30
+        visible: false
+
+        property string binId: ""
+        property string value: ""
+
+        function open(id, name) {
+            renameBin.binId = id;
+            renameBin.value = name;
+            renameBin.visible = true;
+            renameField.forceActiveFocus();
+        }
+
+        Rectangle {
+            anchors.fill: parent
+            color: "#000000"
+            opacity: 0.4
+            MouseArea { anchors.fill: parent; onClicked: renameBin.visible = false }
+        }
+
+        Rectangle {
+            anchors.centerIn: parent
+            width: Math.min(parent.width - 24, 300)
+            height: 96
+            radius: 3
+            color: Theme.c.panelBackground
+            border.color: Theme.c.accent
+            MouseArea { anchors.fill: parent; onClicked: {} }
+
+            Text {
+                id: renameTitle
+                anchors { left: parent.left; top: parent.top; margins: 12 }
+                text: qsTr("Rename Bin")
+                font { pixelSize: 12; bold: true }
+                color: Theme.c.text
+            }
+
+            TextLine {
+                id: renameField
+                anchors { left: parent.left; right: parent.right; top: renameTitle.bottom
+                          margins: 12 }
+                labelWidth: 50
+                label: qsTr("Name")
+                value: renameBin.value
+                commitOnEdit: true
+                onCommitted: newValue => renameBin.value = newValue
+            }
+
+            Row {
+                anchors { right: parent.right; bottom: parent.bottom; margins: 10 }
+                spacing: 6
+                DialogButton { text: qsTr("Cancel"); onClicked: renameBin.visible = false }
+                DialogButton {
+                    text: qsTr("Rename")
+                    primary: true
+                    enabled: renameBin.value.trim() !== ""
+                    onClicked: {
+                        if (Media.renameBin(renameBin.binId, renameBin.value))
+                            renameBin.visible = false;
+                    }
+                }
+            }
+        }
+    }
+
+    MediaImportDialog { id: importer }
 
     ListView {
         id: timelines

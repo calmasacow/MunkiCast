@@ -119,6 +119,7 @@ qt_add_qml_module(munkicast-ui
         qml/FavouritesPanel.qml
         qml/InfoPanel.qml
         qml/LogPanel.qml
+        qml/MediaImportDialog.qml
         qml/MediaTreePanel.qml
         qml/MediaPlayerPanel.qml
         qml/MediaTablePanel.qml

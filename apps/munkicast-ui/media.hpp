@@ -12,6 +12,8 @@
 #include <QThread>
 #include <QVariantList>
 
+#include <ldoc/project.hpp>
+
 #include <memory>
 
 namespace munkicast::ui {
@@ -88,6 +90,11 @@ class Media : public QAbstractListModel {
     /// re-reading it is cheap, and a second model to keep in step is not.
     Q_PROPERTY(QString filter READ filter WRITE setFilter NOTIFY filterChanged)
 
+    /// The bins in the pool: the project's system bins, then the operator's own.
+    Q_PROPERTY(QVariantList bins READ bins NOTIFY binsChanged)
+    /// The bin being shown, by id. Empty while a project folder is being browsed directly.
+    Q_PROPERTY(QString openBin READ openBin NOTIFY binsChanged)
+
 public:
     enum Roles {
         PathRole = Qt::UserRole + 1,
@@ -123,12 +130,38 @@ public:
     [[nodiscard]] QStringList presets() const;
     [[nodiscard]] int count() const { return static_cast<int>(items_.size()); }
     [[nodiscard]] QString filter() const { return filter_; }
+    [[nodiscard]] QVariantList bins() const;
+    [[nodiscard]] QString openBin() const { return open_bin_; }
     void setFilter(const QString& text);
 
     /// Open one of the project's folders by name, or any absolute path.
     Q_INVOKABLE void openFolder(const QString& pathOrName);
     /// List it again. Cheap: it is one directory read.
     Q_INVOKABLE void refresh();
+
+    // ---- bins -----------------------------------------------------------------------
+    //
+    // A system bin is a window onto one of the project's folders, so a file copied in there
+    // by any means appears with no import step. A bin the operator makes holds references to
+    // files wherever they are.
+
+    /// Show a bin's contents.
+    Q_INVOKABLE void openBinById(const QString& id);
+    /// Make a bin. Returns its id, or empty when the name is unusable or already taken.
+    Q_INVOKABLE QString createBin(const QString& name);
+    /// Rename or remove one the operator made. System bins are refused: their names are their
+    /// folders' names, and renaming one here would say something the tree does not.
+    Q_INVOKABLE bool renameBin(const QString& id, const QString& name);
+    Q_INVOKABLE bool removeBin(const QString& id);
+
+    /// Bring files into the pool.
+    ///
+    /// With `copy`, each is copied into SourceMedia first and the bin references the copy, so
+    /// the project carries its own media and still opens when the original is unplugged.
+    /// Without it the bin references where they are.
+    Q_INVOKABLE int importMedia(const QStringList& paths, const QString& binId, bool copy);
+    /// The file extensions this build will import, for a chooser's filter.
+    Q_INVOKABLE [[nodiscard]] QStringList mediaSuffixes() const;
     /// A file:// URL for the player, or empty when nothing is selected.
     Q_INVOKABLE QString selectedUrl() const;
 
@@ -148,6 +181,7 @@ signals:
     void folderChanged();
     void countChanged();
     void filterChanged();
+    void binsChanged();
     void selectedChanged();
     void queueChanged();
     void notice(const QString& text);
@@ -189,6 +223,15 @@ private:
     /// leaves a file that looks finished.
     QString running_partial_;
     QString running_destination_;
+
+    /// Which bin is on screen, and the files a non-system bin holds. The bins themselves live
+    /// in the project manifest; this is the view of them.
+    QString open_bin_;
+    QStringList bin_items_;
+
+    /// Load the project's bins, and write the operator's back.
+    [[nodiscard]] std::vector<ldoc::Bin> loadBins() const;
+    bool saveBins(const std::vector<ldoc::Bin>& bins);
 
     QFileSystemWatcher watcher_;
 };

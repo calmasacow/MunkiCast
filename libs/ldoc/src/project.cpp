@@ -28,6 +28,28 @@ constexpr int kProjectSchemaVersion = 1;
 
 } // namespace
 
+const std::vector<std::string>& system_bin_folders() {
+    // The three a new project starts with. Each maps straight onto a folder, so dropping a
+    // file into one of them from a file manager puts it in the pool with no import step --
+    // which is the point of their being system bins rather than ordinary ones.
+    static const std::vector<std::string> folders{"Clips", "Recordings", "Graphics"};
+    return folders;
+}
+
+std::vector<Bin> project_bins(const ProjectManifest& manifest) {
+    std::vector<Bin> out;
+    for (const std::string& folder : system_bin_folders()) {
+        Bin bin;
+        // Derived from the folder name, not stored: a system bin has no state of its own, so
+        // there is nothing for a manifest to hold that the tree does not already say.
+        bin.name = folder;
+        bin.folder = folder;
+        out.push_back(std::move(bin));
+    }
+    out.insert(out.end(), manifest.bins.begin(), manifest.bins.end());
+    return out;
+}
+
 const std::vector<std::string>& project_folders() {
     static const std::vector<std::string> folders{
         "Collections", "Timelines", "Graphics",   "Recordings", "Clips",
@@ -159,6 +181,23 @@ std::expected<ProjectManifest, std::string> load_manifest(const fs::path& dir) {
     ProjectManifest manifest;
     manifest.schema_version = version;
     manifest.name = root.get("name", "").asString();
+    for (const Json::Value& entry : root["bins"]) {
+        if (!entry.isObject())
+            continue;
+        Bin bin;
+        bin.name = entry.get("name", "").asString();
+        if (bin.name.empty())
+            continue;
+        if (const auto id = Id::parse(entry.get("id", "").asString()))
+            bin.id = *id;
+        else
+            bin.id = Id::generate();
+        for (const Json::Value& item : entry["items"]) {
+            if (item.isString() && !item.asString().empty())
+                bin.items.push_back(item.asString());
+        }
+        manifest.bins.push_back(std::move(bin));
+    }
     manifest.open_collection = root.get("open_collection", "").asString();
     if (const auto id = Id::parse(root.get("id", "").asString()))
         manifest.id = *id;
@@ -176,6 +215,18 @@ std::expected<void, std::string> save_manifest(const fs::path& dir,
     root["id"] = manifest.id.to_string();
     root["name"] = manifest.name;
     root["open_collection"] = manifest.open_collection;
+    Json::Value bins{Json::arrayValue};
+    for (const Bin& bin : manifest.bins) {
+        Json::Value entry{Json::objectValue};
+        entry["id"] = bin.id.to_string();
+        entry["name"] = bin.name;
+        Json::Value items{Json::arrayValue};
+        for (const std::string& path : bin.items)
+            items.append(path);
+        entry["items"] = items;
+        bins.append(entry);
+    }
+    root["bins"] = bins;
 
     Json::StreamWriterBuilder builder;
     builder["indentation"] = "  ";

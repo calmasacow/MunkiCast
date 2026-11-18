@@ -8,6 +8,7 @@
 #include "document.hpp"
 #include "edit.hpp"
 #include "graphics.hpp"
+#include "media.hpp"
 #include "lcomp/composite.hpp"
 #include "ldoc/json.hpp"
 #include "ldoc/project_io.hpp"
@@ -771,6 +772,7 @@ int main(int argc, char** argv) {
                 "MunkiCast", "Graphics");
             auto* shortcuts = engine.singletonInstance<munkicast::ui::Shortcuts*>(
                 "MunkiCast", "Shortcuts");
+            auto* media = engine.singletonInstance<munkicast::ui::Media*>("MunkiCast", "Media");
             // Workspace selects by index; the check wants to name the tab it means.
             const auto select_workspace = [&workspace](const QString& name) {
                 auto* rows = workspace.workspacesModel();
@@ -804,6 +806,7 @@ int main(int argc, char** argv) {
             // A project on disk, because a timeline is a file in one.
             report(document->createCollection(QStringLiteral("Subdoc Check")),
                    "a project can be created for the check");
+            const QString subdocCollection = document->projectPath();
 
             const QString timeline = edit->createTimeline(QStringLiteral("Check Edit"));
             report(!timeline.isEmpty() && edit->hasTimeline(), "a timeline can be made");
@@ -962,6 +965,89 @@ int main(int argc, char** argv) {
                     report(html.contains(QLatin1String("window.setFields")),
                            "the overlay takes the show's data");
                 }
+            }
+
+            // The media pool: three system bins mapping onto the project's own folders, and
+            // bins the operator makes. The difference matters -- a file copied into a system
+            // bin's folder is in the pool with no import at all -- so it is driven rather
+            // than assumed.
+            if (media) {
+                // A real project, because the pool is the project's folders: the check above
+                // made a scene collection, which is a different thing and has no bins. This
+                // is the distinction the whole feature rests on, so getting it wrong here
+                // would be the check agreeing with a bug rather than finding one.
+                QTemporaryDir projectHome;
+                const QString projectDir =
+                    projectHome.path() + QStringLiteral("/Pool Check");
+                report(document->createProject(projectDir, QStringLiteral("Pool Check")),
+                       "a project can be made for the pool check");
+
+                const auto bins = media->bins();
+                report(bins.size() == 3, "a new project has three system bins");
+                QStringList names;
+                for (const QVariant& row : bins) {
+                    const auto bin = row.toMap();
+                    names.append(bin.value(QStringLiteral("name")).toString());
+                    report(bin.value(QStringLiteral("system")).toBool(),
+                           "a starting bin is one of the project's own folders");
+                }
+                report(names == QStringList{QStringLiteral("Clips"),
+                                            QStringLiteral("Recordings"),
+                                            QStringLiteral("Graphics")},
+                       "they are Clips, Recordings and Graphics");
+
+                report(!media->renameBin(QStringLiteral("Recordings"), QStringLiteral("Takes")),
+                       "a system bin keeps the name of its folder");
+                report(!media->removeBin(QStringLiteral("Recordings")),
+                       "and cannot be removed from the pool");
+
+                const QString made = media->createBin(QStringLiteral("Interviews"));
+                report(!made.isEmpty(), "a bin can be made");
+                report(media->bins().size() == 4, "and joins the pool");
+                report(media->createBin(QStringLiteral("interviews")).isEmpty(),
+                       "a second bin of the same name is refused");
+
+                // Import, both ways round. A real file, because the importer reads it.
+                QTemporaryDir incoming;
+                const QString source = incoming.path() + QStringLiteral("/take one.wav");
+                QFile fixture(source);
+                report(fixture.open(QIODevice::WriteOnly) && fixture.write("RIFF") == 4,
+                       "an import fixture is written");
+                fixture.close();
+
+                report(media->importMedia({source}, made, false) == 1,
+                       "media can be imported into a bin without copying");
+                report(!QFileInfo::exists(projectDir + QStringLiteral("/SourceMedia/take one.wav")),
+                       "and is referenced where it is, not copied");
+
+                report(media->importMedia({source}, made, true) == 1,
+                       "media can be imported with a copy");
+                report(QFileInfo::exists(projectDir + QStringLiteral("/SourceMedia/take one.wav")),
+                       "and the copy lands in SourceMedia");
+
+                // Into a system bin the copy has to land in that bin's folder, or the bin --
+                // which *is* the folder -- would not show what was imported into it.
+                report(media->importMedia({source}, QStringLiteral("Clips"), false) == 1,
+                       "media can be imported into a system bin");
+                report(QFileInfo::exists(projectDir + QStringLiteral("/Clips/take one.wav")),
+                       "and lands in that bin's own folder even when copying was not asked for");
+
+                // Never overwrite: a second import of the same name sits beside the first.
+                report(media->importMedia({source}, QStringLiteral("Clips"), false) == 1,
+                       "importing the same name again is allowed");
+                report(QFileInfo::exists(projectDir + QStringLiteral("/Clips/take one (2).wav")),
+                       "and does not overwrite what was already there");
+
+                report(media->removeBin(made), "a bin the operator made can be removed");
+                report(media->bins().size() == 3, "and the pool is back to its system bins");
+                report(QFileInfo::exists(projectDir + QStringLiteral("/SourceMedia/take one.wav")),
+                       "removing a bin does not delete the media it held");
+
+                // Back to the collection this check started on, before `projectHome` goes.
+                // Leaving the catalogue pointed at a directory about to be removed is what
+                // broke five unrelated checks the last time a check opened a project.
+                report(document->openCollection(subdocCollection),
+                       "the shell returns to the collection the check started on");
             }
 
             // The collection the check made is left where `createCollection` put it, as every
