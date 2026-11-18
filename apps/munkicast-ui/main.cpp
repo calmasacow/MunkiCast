@@ -8551,7 +8551,7 @@ int main(int argc, char** argv) {
                 report(document.openProjectName() == QLatin1String("Dialog Check") &&
                            document.openProjectPath() == target,
                        "the project the dialog named is the one that opens");
-                report(QFileInfo::exists(target + QStringLiteral("/project.munki")) &&
+                report(QFileInfo::exists(target + QStringLiteral("/Dialog Check.munki")) &&
                            QFileInfo::exists(target + QStringLiteral("/Collections")) &&
                            QFileInfo::exists(target + QStringLiteral("/Recordings")),
                        "the tree is made inside the project's own folder");

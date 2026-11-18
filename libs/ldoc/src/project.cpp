@@ -19,7 +19,10 @@ namespace {
 namespace fs = std::filesystem;
 // `lc` is the namespace lcore declares.
 
-constexpr std::string_view kManifestFile = "project.munki";
+constexpr std::string_view kManifestExt = ".munki";
+/// What the manifest was called before it was named after its project. Still opened, so a
+/// project made by an earlier build does not stop being one.
+constexpr std::string_view kLegacyManifestFile = "project.munki";
 constexpr std::string_view kCollectionsDir = "Collections";
 constexpr int kProjectSchemaVersion = 1;
 
@@ -33,13 +36,45 @@ const std::vector<std::string>& project_folders() {
     return folders;
 }
 
-fs::path manifest_path(const fs::path& dir) { return dir / kManifestFile; }
+fs::path manifest_path(const fs::path& dir) {
+    // Named after the folder, which is named after the project: opening the folder, the
+    // operator sees "Marathon.munki" rather than a row of identical project.munki files in
+    // every project they have.
+    return dir / (dir.filename().string() + std::string{kManifestExt});
+}
+
+fs::path find_manifest(const fs::path& dir) {
+    const fs::path expected = manifest_path(dir);
+    std::error_code ec;
+    if (fs::is_regular_file(expected, ec) && !ec)
+        return expected;
+
+    // The folder may have been renamed since it was made, or written by a build that called
+    // this project.munki. Take any .munki that is here -- the lowest name, so that a folder
+    // with more than one opens the same way every time rather than by directory order.
+    fs::path found;
+    for (const auto& entry : fs::directory_iterator(dir, ec)) {
+        if (ec)
+            break;
+        if (!entry.is_regular_file() || entry.path().extension() != kManifestExt)
+            continue;
+        if (found.empty() || entry.path().filename() < found.filename())
+            found = entry.path();
+    }
+    if (!found.empty())
+        return found;
+
+    const fs::path legacy = dir / kLegacyManifestFile;
+    return fs::is_regular_file(legacy, ec) && !ec ? legacy : fs::path{};
+}
 
 fs::path collections_dir(const fs::path& dir) { return dir / kCollectionsDir; }
 
 bool is_project(const fs::path& dir) {
     std::error_code ec;
-    return fs::is_regular_file(manifest_path(dir), ec) && !ec;
+    if (!fs::is_directory(dir, ec) || ec)
+        return false;
+    return !find_manifest(dir).empty();
 }
 
 std::vector<std::string> ensure_project_folders(const fs::path& dir) {
@@ -96,7 +131,10 @@ std::expected<ProjectManifest, std::string> create_project_tree(const fs::path& 
 }
 
 std::expected<ProjectManifest, std::string> load_manifest(const fs::path& dir) {
-    const auto text = lc::read_file(manifest_path(dir));
+    const fs::path at = find_manifest(dir);
+    if (at.empty())
+        return std::unexpected(std::format("{} holds no project manifest", dir.string()));
+    const auto text = lc::read_file(at);
     if (!text)
         return std::unexpected(text.error());
 
@@ -105,9 +143,10 @@ std::expected<ProjectManifest, std::string> load_manifest(const fs::path& dir) {
     std::string errors;
     std::istringstream in{*text};
     if (!Json::parseFromStream(builder, in, &root, &errors))
-        return std::unexpected(std::format("{} is not readable: {}", kManifestFile, errors));
+        return std::unexpected(
+            std::format("{} is not readable: {}", at.filename().string(), errors));
     if (!root.isObject())
-        return std::unexpected(std::format("{} is not an object", kManifestFile));
+        return std::unexpected(std::format("{} is not an object", at.filename().string()));
 
     const int version = root.get("schema_version", 0).asInt();
     if (version > kProjectSchemaVersion) {
@@ -124,9 +163,9 @@ std::expected<ProjectManifest, std::string> load_manifest(const fs::path& dir) {
     if (const auto id = Id::parse(root.get("id", "").asString()))
         manifest.id = *id;
     else
-        return std::unexpected(std::format("{} has no usable id", kManifestFile));
+        return std::unexpected(std::format("{} has no usable id", at.filename().string()));
     if (manifest.name.empty())
-        return std::unexpected(std::format("{} has no name", kManifestFile));
+        return std::unexpected(std::format("{} has no name", at.filename().string()));
     return manifest;
 }
 
@@ -140,7 +179,18 @@ std::expected<void, std::string> save_manifest(const fs::path& dir,
 
     Json::StreamWriterBuilder builder;
     builder["indentation"] = "  ";
-    return lc::write_atomic(manifest_path(dir), Json::writeString(builder, root));
+    const fs::path at = manifest_path(dir);
+    if (const auto written = lc::write_atomic(at, Json::writeString(builder, root)); !written)
+        return written;
+
+    // Clear away the old fixed-name manifest once this project has one of its own, so the
+    // folder does not carry both. Only that name: a stray .munki someone else put here is
+    // not ours to delete.
+    std::error_code ec;
+    const fs::path legacy = dir / kLegacyManifestFile;
+    if (legacy != at && fs::is_regular_file(legacy, ec) && !ec)
+        fs::remove(legacy, ec);
+    return {};
 }
 
 std::vector<fs::path> project_collections(const fs::path& dir) {

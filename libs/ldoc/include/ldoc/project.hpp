@@ -23,7 +23,7 @@ namespace ldoc {
 /// On disk:
 ///
 ///     MyProject/                  <- the project directory
-///       project.munki             <- this manifest: name, id, which collection is open
+///       MyProject.munki           <- this manifest: name, id, which collection is open
 ///       Collections/              <- the shows, each its own `.munkicast` bundle
 ///         <ulid>.munkicast/
 ///       Timelines/                <- .mtime files
@@ -54,8 +54,16 @@ struct ProjectManifest {
 /// the writer, and nothing outside it should be putting files in them.
 [[nodiscard]] const std::vector<std::string>& project_folders();
 
-/// Where the manifest lives inside a project directory.
+/// Where this project's manifest goes: `<folder name>.munki` inside the folder.
+///
+/// Named after the project rather than a fixed `project.munki`, so that opening the folder
+/// shows "Marathon.munki" instead of the same filename every project has.
 [[nodiscard]] std::filesystem::path manifest_path(const std::filesystem::path& dir);
+
+/// The manifest this folder actually has, which may not be at `manifest_path`: the folder
+/// could have been renamed, or written by a build that used a fixed name. Empty when there
+/// is none, which is what makes the folder not a project.
+[[nodiscard]] std::filesystem::path find_manifest(const std::filesystem::path& dir);
 
 /// Where this project's collections live.
 [[nodiscard]] std::filesystem::path collections_dir(const std::filesystem::path& dir);

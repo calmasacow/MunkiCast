@@ -53,6 +53,10 @@ LTEST_CASE(a_new_project_gets_the_whole_tree_and_a_manifest) {
         CHECK_MSG(fs::is_directory(dir / folder), "missing {}", folder);
 
     CHECK(is_project(dir));
+    // The manifest is named after the project, not a fixed project.munki: opening the folder
+    // should show "MyShow.munki" rather than the same filename every project has.
+    CHECK(fs::is_regular_file(dir / "MyShow.munki"));
+    CHECK(!fs::exists(dir / "project.munki"));
 }
 
 LTEST_CASE(a_project_is_not_a_scene_collection) {
@@ -121,6 +125,50 @@ LTEST_CASE(making_a_project_where_one_already_is_is_refused) {
     const auto read = load_manifest(dir);
     REQUIRE(read.has_value());
     CHECK_EQ(read->name, std::string{"Taken"});
+}
+
+LTEST_CASE(a_project_whose_folder_was_renamed_still_opens) {
+    // The manifest is named after the folder, so renaming the folder in a file manager would
+    // otherwise leave a project that is no longer one. The manifest is found by its
+    // extension, and saving brings the name back in line.
+    TempDir tmp;
+    const fs::path made_at = tmp.path / "Before";
+    const auto made = create_project_tree(made_at, "Before");
+    REQUIRE_MSG(made.has_value(), "{}", made.error());
+
+    const fs::path now_at = tmp.path / "After";
+    fs::rename(made_at, now_at);
+
+    CHECK(is_project(now_at));
+    const auto read = load_manifest(now_at);
+    REQUIRE_MSG(read.has_value(), "{}", read.error());
+    CHECK(read->id == made->id);
+
+    // Saving writes it under the folder's current name.
+    REQUIRE(save_manifest(now_at, *read).has_value());
+    CHECK(fs::is_regular_file(now_at / "After.munki"));
+}
+
+LTEST_CASE(a_project_written_by_an_older_build_still_opens_and_is_brought_up_to_date) {
+    // Before this, every project's manifest was called project.munki. Those are still
+    // projects; saving gives them a name of their own and clears the old file, so the folder
+    // does not end up carrying both.
+    TempDir tmp;
+    const fs::path dir = tmp.path / "Legacy";
+    REQUIRE(create_project_tree(dir, "Legacy").has_value());
+
+    // Put it back the way an older build left it.
+    fs::rename(dir / "Legacy.munki", dir / "project.munki");
+    REQUIRE(fs::exists(dir / "project.munki"));
+    CHECK(is_project(dir));
+
+    const auto read = load_manifest(dir);
+    REQUIRE_MSG(read.has_value(), "{}", read.error());
+    CHECK_EQ(read->name, std::string{"Legacy"});
+
+    REQUIRE(save_manifest(dir, *read).has_value());
+    CHECK(fs::is_regular_file(dir / "Legacy.munki"));
+    CHECK(!fs::exists(dir / "project.munki"));
 }
 
 LTEST_CASE(a_project_will_not_be_built_inside_a_folder_that_already_has_files) {
