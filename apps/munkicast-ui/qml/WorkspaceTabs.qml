@@ -166,47 +166,5 @@ Item {
                 }
             }
         }
-
-        // The rightmost tab: a new arrangement, starting from whatever is on screen.
-        Item {
-            id: addTab
-
-            objectName: "workspaceAddTab"
-            width: 26
-            height: strip.height
-
-            Rectangle {
-                anchors.fill: parent
-                anchors.topMargin: 2
-                color: addMouse.containsMouse ? Theme.c.panelHeaderActive : "transparent"
-                radius: 2
-            }
-
-            Text {
-                anchors.centerIn: parent
-                text: "+"
-                font.pixelSize: 14
-                color: addMouse.containsMouse ? Theme.c.accent : Theme.c.textMuted
-            }
-
-            MouseArea {
-                id: addMouse
-
-                anchors.fill: parent
-                hoverEnabled: true
-                onClicked: {
-                    // Named for what it is until it is renamed, and numbered so that adding two
-                    // in a row does not collide.
-                    let n = Workspace.workspaceCount() + 1;
-                    Workspace.addWorkspace(qsTr("Workspace %1").arg(n));
-                }
-            }
-
-            ToolTipText {
-                text: qsTr("Save the current arrangement as a new workspace")
-                visible: addMouse.containsMouse
-                hoverArea: addMouse
-            }
-        }
     }
 }

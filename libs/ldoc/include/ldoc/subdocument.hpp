@@ -58,12 +58,46 @@ enum class TransitionKind : std::uint8_t {
 [[nodiscard]] std::string_view to_string(TransitionKind k);
 [[nodiscard]] std::optional<TransitionKind> transition_kind_from_string(std::string_view s);
 
+/// Where a transition sits relative to the cut it covers.
+///
+/// Every NLE offers these three, under these names, because they answer a real question: a
+/// dissolve centred on a cut eats media from both clips, which is wrong when only one of them
+/// has frames to spare beyond the edit.
+enum class TransitionAlign : std::uint8_t {
+    /// Half before the cut, half after. The default, and what "a dissolve" usually means.
+    Centre,
+    /// Begins at the cut and runs into the incoming clip.
+    Start,
+    /// Ends at the cut, running back through the outgoing clip.
+    End,
+};
+
+[[nodiscard]] std::string_view to_string(TransitionAlign a);
+[[nodiscard]] std::optional<TransitionAlign> transition_align_from_string(std::string_view s);
+
 struct Transition {
     TransitionKind kind = TransitionKind::Cut;
-    /// How long it runs, in timeline frames, centred on the cut. Zero is a hard cut.
+    /// How long it runs, in timeline frames. Zero is a hard cut.
     Frame duration = 0;
+    TransitionAlign align = TransitionAlign::Centre;
 
     [[nodiscard]] bool real() const { return kind != TransitionKind::Cut && duration > 0; }
+
+    /// How far the transition reaches back before the cut, in frames.
+    ///
+    /// The drawing and any future render both need this, and deriving it in each place is how
+    /// the two end up disagreeing about where a dissolve starts.
+    [[nodiscard]] Frame lead() const {
+        switch (align) {
+        case TransitionAlign::Centre: return duration / 2;
+        case TransitionAlign::Start:  return 0;
+        case TransitionAlign::End:    return duration;
+        }
+        return duration / 2;
+    }
+
+    /// How far it reaches forward past the cut.
+    [[nodiscard]] Frame trail() const { return duration - lead(); }
 
     friend bool operator==(const Transition&, const Transition&) = default;
 };
@@ -119,6 +153,23 @@ struct Clip {
 /// The non-overlap rule is the track's whole job: two clips on one track at one time have no
 /// defined answer for what is on screen, so the edit operations maintain the invariant instead
 /// of the renderer guessing. Layering is what more tracks are for.
+/// How a track's fader behaves during playback, as every mixer's automation menu offers it.
+enum class AutomationMode : std::uint8_t {
+    /// Ignore the automation lanes; the static values are the mix.
+    Off,
+    /// Play the lanes back. The default, and the only one that changes anything today.
+    Read,
+    /// Write while a control is held, then fall back to reading.
+    Touch,
+    /// Write from the first move until playback stops.
+    Latch,
+    /// Write continuously.
+    Write,
+};
+
+[[nodiscard]] std::string_view to_string(AutomationMode m);
+[[nodiscard]] std::optional<AutomationMode> automation_mode_from_string(std::string_view s);
+
 struct Track {
     Id id;
     std::string name;
@@ -135,6 +186,22 @@ struct Track {
     bool solo = false;
     /// Track gain in dB, applied over each clip's own.
     double gain_db = 0.0;
+    /// Where the track sits between the speakers: -1 hard left, 0 centre, +1 hard right.
+    double pan = 0.0;
+    /// Whether an insert from the Source viewer lands here.
+    ///
+    /// The source patch, as every NLE calls it. Several tracks of the same kind can be
+    /// patched; the first patched one of each kind takes the clip.
+    bool patched = true;
+    /// Armed to record. Nothing records onto a timeline yet, but the state is the document's:
+    /// which tracks were armed is part of how a session was set up.
+    bool armed = false;
+    /// Whether the track's armed to record automation, and how it reads it back.
+    ///
+    /// Only Off and Read mean anything while there is no audio engine to write with, but the
+    /// field is the document's, not the engine's -- a mix opened on another machine has to
+    /// carry which tracks were being automated.
+    AutomationMode automation = AutomationMode::Read;
     /// Clips, sorted by `start`. `Timeline::validate` enforces both the order and the gaps.
     std::vector<Clip> clips;
 

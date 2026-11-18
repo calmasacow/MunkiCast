@@ -546,6 +546,81 @@ LTEST_CASE(the_workbench_reports_which_documents_have_unsaved_work) {
 
 // ---- files --------------------------------------------------------------------------------
 
+LTEST_CASE(a_transition_sits_where_its_alignment_says) {
+    // Centre splits the duration across the cut; Start puts all of it after; End all before.
+    // The lead is what the timeline draws from and what a renderer would mix from, so the two
+    // cannot be allowed to work it out separately.
+    const Transition centred{TransitionKind::CrossDissolve, 24, TransitionAlign::Centre};
+    CHECK_EQ(centred.lead(), Frame{12});
+    CHECK_EQ(centred.trail(), Frame{12});
+
+    const Transition after{TransitionKind::CrossDissolve, 24, TransitionAlign::Start};
+    CHECK_EQ(after.lead(), Frame{0});
+    CHECK_EQ(after.trail(), Frame{24});
+
+    const Transition before{TransitionKind::CrossDissolve, 24, TransitionAlign::End};
+    CHECK_EQ(before.lead(), Frame{24});
+    CHECK_EQ(before.trail(), Frame{0});
+
+    // An odd duration still spans exactly the duration: a dissolve that lost a frame to
+    // rounding would leave a one-frame hole at the cut.
+    const Transition odd{TransitionKind::CrossDissolve, 25, TransitionAlign::Centre};
+    CHECK_EQ(odd.lead() + odd.trail(), Frame{25});
+}
+
+LTEST_CASE(a_track_keeps_its_pan_patch_and_automation_through_a_round_trip) {
+    Fixture f;
+    Track& v1 = f.timeline.tracks.front();
+    v1.pan = -0.5;
+    v1.automation = AutomationMode::Latch;
+    v1.patched = false;
+    v1.armed = true;
+
+    const auto read = timeline_from_json(timeline_to_json(f.timeline, 1));
+    REQUIRE_MSG(read.has_value(), "{}", read.error());
+    const Track& back = read->document.tracks.front();
+    CHECK_EQ(back.pan, -0.5);
+    CHECK(back.automation == AutomationMode::Latch);
+    CHECK(!back.patched);
+    CHECK(back.armed);
+}
+
+LTEST_CASE(setting_one_track_field_leaves_the_others_alone) {
+    // SetTrack carries the whole value, so an inverse that dropped a field would silently
+    // reset it on undo. This is the shape that caught pan being lost when it was added.
+    Fixture f;
+    TimelineHistory h{f.timeline};
+    Track& v1 = f.timeline.tracks.front();
+
+    SetTrack all{v1.id,  "V1",  true, false, false, false,
+                 -3.0,   0.75,  AutomationMode::Touch, false, true};
+    REQUIRE(h.run(all).has_value());
+
+    // Now change only the gain, the way the UI's helper does.
+    const Track* now = h.document().track(v1.id);
+    REQUIRE(now != nullptr);
+    SetTrack louder{now->id,      now->name, now->enabled,    now->locked, now->muted,
+                    now->solo,    0.0,       now->pan,        now->automation,
+                    now->patched, now->armed};
+    REQUIRE(h.run(louder).has_value());
+
+    const Track* after = h.document().track(v1.id);
+    REQUIRE(after != nullptr);
+    CHECK_EQ(after->gain_db, 0.0);
+    CHECK_EQ(after->pan, 0.75);
+    CHECK(after->automation == AutomationMode::Touch);
+    CHECK(!after->patched);
+    CHECK(after->armed);
+
+    // And undo puts the gain back without disturbing any of them.
+    REQUIRE(h.undo());
+    const Track* undone = h.document().track(v1.id);
+    REQUIRE(undone != nullptr);
+    CHECK_EQ(undone->gain_db, -3.0);
+    CHECK_EQ(undone->pan, 0.75);
+    CHECK(undone->armed);
+}
+
 LTEST_CASE(a_timeline_round_trips_through_its_own_file) {
     Fixture f;
     f.timeline.markers.push_back(Marker{Id::generate(), 120, "Chorus", 0x00AAFF});

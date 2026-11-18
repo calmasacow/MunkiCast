@@ -269,10 +269,19 @@ QVariantList Media::projectFolders() const {
     // operator sees them rather than read back from the library, because this list is also what
     // the tree labels and one of them (Exports) is where this panel writes.
     for (const QString& name : {QStringLiteral("Recordings"), QStringLiteral("SourceMedia"),
-                                QStringLiteral("Exports"), QStringLiteral("CacheMedia")}) {
+                                QStringLiteral("Graphics"), QStringLiteral("Exports"),
+                                QStringLiteral("CacheMedia")}) {
         const QString path = QDir(projectDir_).filePath(name);
+        // How many files are in it, for the tile to say so. A count, not a listing: the tile
+        // shows a number and opening the folder is what produces the rows.
+        const QDir dir(path);
+        const int items =
+            dir.exists() ? static_cast<int>(dir.entryList(QDir::Files | QDir::NoDotAndDotDot)
+                                                .size())
+                         : 0;
         rows.append(QVariantMap{{QStringLiteral("name"), name},
                                 {QStringLiteral("path"), path},
+                                {QStringLiteral("items"), items},
                                 {QStringLiteral("exists"), QFileInfo::exists(path)},
                                 {QStringLiteral("current"), path == folder_}});
     }
@@ -303,6 +312,14 @@ void Media::refresh() {
     scan();
 }
 
+void Media::setFilter(const QString& text) {
+    if (filter_ == text)
+        return;
+    filter_ = text;
+    emit filterChanged();
+    scan();
+}
+
 void Media::scan() {
     // The watcher follows the folder on screen and nothing else: one directory, re-read when it
     // changes, rather than a tree of watches that outlives the panel being looked at.
@@ -316,6 +333,9 @@ void Media::scan() {
         const auto entries = dir.entryInfoList(QDir::Files | QDir::Readable, QDir::Time);
         for (const QFileInfo& info : entries) {
             if (!media_suffixes().contains(info.suffix().toLower()))
+                continue;
+            if (!filter_.isEmpty() &&
+                !info.fileName().contains(filter_, Qt::CaseInsensitive))
                 continue;
             MediaItem item;
             item.path = info.absoluteFilePath();

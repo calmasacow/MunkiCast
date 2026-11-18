@@ -202,6 +202,10 @@ public:
     [[nodiscard]] QString encodeOutput() const { return encode_output_; }
     Q_INVOKABLE void openEncode(const QString& outputId = QString{});
     Q_INVOKABLE void selectWorkspace(int index);
+    /// Show the workspace with this name. False when there is no such workspace.
+    ///
+    /// By name because callers know "Media", not an index that moves when a tab is added.
+    Q_INVOKABLE bool showWorkspace(const QString& name);
     /// Add one, starting from the arrangement currently on screen, which is almost always what
     /// someone adding one has just finished setting up.
     Q_INVOKABLE void addWorkspace(const QString& name);

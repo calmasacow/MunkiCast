@@ -26,7 +26,9 @@ Item {
     property string tool: "select"
     property bool snapping: true
 
-    readonly property int headerWidth: 168
+    /// The whole left gutter: the tool rail plus the track headers beside it.
+    readonly property int headerWidth: 208
+    readonly property int railWidth: 26
     readonly property int rulerHeight: 22
     readonly property int trackHeight: 48
 
@@ -46,6 +48,16 @@ Item {
     ///
     /// Snapping is to *cuts*, not to a grid: what an editor lines a clip up against is another
     /// clip, the playhead or a marker, and a grid of frames at this zoom is every pixel.
+    /// The name an operator reads on a transition box.
+    function transitionLabel(kind) {
+        switch (kind) {
+        case "cross-dissolve": return qsTr("Cross Dissolve");
+        case "dip-to-black":   return qsTr("Dip to Black");
+        case "push":           return qsTr("Push");
+        default:               return "";
+        }
+    }
+
     function snap(frame) {
         if (!panel.snapping)
             return frame;
@@ -77,10 +89,22 @@ Item {
         return lane >= 0 && lane < panel.tracks.length ? lane : -1;
     }
 
-    /// Lanes are drawn top-down in reverse, so the last track in the document -- the topmost
-    /// video layer -- is the top lane on screen, the way every editor reads.
+    /// The tracks in the order their lanes are drawn, top to bottom.
+    ///
+    /// Video above audio, always: an editor reads the picture at the top and the sound beneath
+    /// it. Within each half the conventions differ and both are kept -- video counts *up* the
+    /// screen, so V2 sits over V1 because it composites over it, while audio counts *down*,
+    /// A1 first, because nothing stacks and reading order wins.
+    readonly property var lanes: {
+        const video = [];
+        const audio = [];
+        for (const track of panel.tracks)
+            (track.kind === "audio" ? audio : video).push(track);
+        return video.reverse().concat(audio);
+    }
+
     function trackOfLane(lane) {
-        return panel.tracks[panel.tracks.length - 1 - lane];
+        return panel.lanes[lane];
     }
 
     onDocChanged: lanes.requestPaint()
@@ -112,16 +136,17 @@ Item {
 
     // ---- tools ----
     //
-    // In the ruler band, left of the first track. That strip is otherwise empty, and a tool
-    // column beside the headers took width from the one place a name has to be readable.
-    Row {
+    // A rail down the left edge, its own column rather than something laid over the headers.
+    // `headerWidth` counts it, so the headers and the canvas both start clear of it and a
+    // track name keeps the width it needs.
+    Column {
         id: toolbar
 
         anchors.left: parent.left
-        anchors.leftMargin: 4
         anchors.top: parent.top
-        height: panel.rulerHeight
-        spacing: 1
+        anchors.topMargin: panel.rulerHeight + 2
+        width: panel.railWidth
+        spacing: 2
         visible: panel.hasDocument
         z: 3
 
@@ -140,8 +165,8 @@ Item {
                 required property var modelData
 
                 width: 22
-                height: panel.rulerHeight - 4
-                anchors.verticalCenter: parent.verticalCenter
+                height: 22
+                anchors.horizontalCenter: parent.horizontalCenter
                 color: panel.tool === toolButton.modelData.tool ? Theme.c.accent
                      : toolMouse.containsMouse ? Theme.c.panelHeaderActive
                      : "transparent"
@@ -178,9 +203,10 @@ Item {
         id: headers
 
         anchors.left: parent.left
+        anchors.leftMargin: panel.railWidth
         anchors.top: parent.top
         anchors.topMargin: panel.rulerHeight
-        width: panel.headerWidth
+        width: panel.headerWidth - panel.railWidth
         visible: panel.hasDocument
         z: 2
 
@@ -201,10 +227,50 @@ Item {
                 border.width: 1
                 border.color: Theme.c.divider
 
+                // The source patch: which track an insert from the Source viewer lands on.
+                // Every NLE puts this at the head of the track as a short badge, because it
+                // is read far more often than it is changed.
+                Rectangle {
+                    id: patch
+
+                    anchors.left: parent.left
+                    anchors.leftMargin: 6
+                    anchors.verticalCenter: parent.verticalCenter
+                    width: 22
+                    height: 20
+                    radius: 2
+                    color: header.track.patched ? Theme.c.accent : Theme.c.panelBackground
+                    opacity: header.track.patched ? 0.8 : 1.0
+                    border.width: 1
+                    border.color: Theme.c.border
+
+                    Text {
+                        anchors.centerIn: parent
+                        text: header.track.shortName
+                        font.pixelSize: 9
+                        font.weight: Font.DemiBold
+                        color: header.track.patched ? Theme.c.text : Theme.c.textMuted
+                    }
+
+                    MouseArea {
+                        id: patchMouse
+
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        onClicked: Edit.toggleTrack(header.track.id, "patched")
+                    }
+
+                    ToolTipText {
+                        text: qsTr("Patch the source to this track")
+                        visible: patchMouse.containsMouse
+                        hoverArea: patchMouse
+                    }
+                }
+
                 Text {
                     id: trackName
 
-                    anchors.left: parent.left
+                    anchors.left: patch.right
                     anchors.leftMargin: 6
                     anchors.top: parent.top
                     anchors.topMargin: 4
@@ -216,7 +282,7 @@ Item {
 
                 // Lock, eye, mute, solo: the four an editor reaches for without looking.
                 Row {
-                    anchors.left: parent.left
+                    anchors.left: patch.right
                     anchors.leftMargin: 6
                     anchors.bottom: parent.bottom
                     anchors.bottomMargin: 4
@@ -229,7 +295,9 @@ Item {
                                   {flag: "muted", glyph: "M", on: header.track.muted,
                                    tip: qsTr("Mute")},
                                   {flag: "solo", glyph: "S", on: header.track.solo,
-                                   tip: qsTr("Solo")}]
+                                   tip: qsTr("Solo")},
+                                  {flag: "armed", glyph: "●", on: header.track.armed,
+                                   tip: qsTr("Arm this track for recording")}]
                                : [{flag: "locked", glyph: "◯", on: header.track.locked,
                                    tip: qsTr("Lock this track")},
                                   {flag: "enabled", glyph: "◉", on: !header.track.enabled,
@@ -460,24 +528,42 @@ Item {
                         ctx.restore();
                     }
 
-                    // The transition, drawn across the cut it sits on, as every editor draws
-                    // one: a wedge over the overlap rather than a separate block.
+                    // The transition: a named box over the cut, hatched like every NLE draws
+                    // one, placed by its own alignment rather than always centred. `lead` is
+                    // how far it reaches back before the cut, worked out by the document.
                     if (clip.transitionFrames > 0) {
                         const tw = clip.transitionFrames * panel.scale;
+                        const tx = x0 - (clip.transitionLead * panel.scale);
                         ctx.save();
                         ctx.beginPath();
-                        ctx.rect(Math.max(x0 - tw / 2, panel.headerWidth), top, tw, boxHeight);
+                        ctx.rect(Math.max(tx, panel.headerWidth), top, tw, boxHeight);
                         ctx.clip();
-                        ctx.fillStyle = clip.transition === "dip-to-black" ? "#000000"
-                                                                           : "#e0e0e0";
-                        ctx.globalAlpha = 0.5;
-                        ctx.fillRect(x0 - tw / 2, top, tw, boxHeight);
-                        ctx.globalAlpha = 1.0;
+
+                        ctx.fillStyle = clip.transition === "dip-to-black" ? "#101010"
+                                                                          : "#6d5a8c";
+                        ctx.fillRect(tx, top, tw, boxHeight);
+
+                        // The hatching, which is what makes a transition readable as one at a
+                        // glance rather than as a very short clip.
                         ctx.strokeStyle = "#ffffff";
+                        ctx.globalAlpha = 0.35;
                         ctx.beginPath();
-                        ctx.moveTo(x0 - tw / 2, top + boxHeight);
-                        ctx.lineTo(x0 + tw / 2, top);
+                        for (let hx = tx - boxHeight; hx < tx + tw; hx += 7) {
+                            ctx.moveTo(hx, top + boxHeight);
+                            ctx.lineTo(hx + boxHeight, top);
+                        }
                         ctx.stroke();
+                        ctx.globalAlpha = 1.0;
+
+                        if (tw > 34) {
+                            ctx.fillStyle = "#ffffff";
+                            ctx.font = "9px sans-serif";
+                            ctx.fillText(panel.transitionLabel(clip.transition), tx + 3,
+                                         top + 10);
+                        }
+
+                        ctx.strokeStyle = Theme.c.border;
+                        ctx.strokeRect(tx + 0.5, top + 0.5, tw - 1, boxHeight - 1);
                         ctx.restore();
                     }
 

@@ -73,6 +73,71 @@ Item {
 
         Item { width: 1; height: 10 }
 
+        // ---- the transition on this clip's head ----
+        //
+        // A transition belongs to the cut before the clip, so it is edited here rather than as
+        // a thing of its own: selecting the clip is how an editor reaches the cut.
+        Text {
+            width: parent.width
+            text: qsTr("Transition in")
+            font.pixelSize: 10
+            font.weight: Font.DemiBold
+            color: Theme.c.textMuted
+            bottomPadding: 4
+        }
+
+        ChoiceField {
+            width: parent.width
+            label: qsTr("Type")
+            choices: ["cut", "cross-dissolve", "dip-to-black", "push"]
+            choiceLabels: ({
+                "cut": qsTr("None"),
+                "cross-dissolve": qsTr("Cross Dissolve"),
+                "dip-to-black": qsTr("Dip to Black"),
+                "push": qsTr("Push")
+            })
+            value: panel.clip.transition ?? "cut"
+            onCommitted: newValue => {
+                // A real transition needs a length; one chosen from "None" starts at a
+                // second, which is what every editor defaults to.
+                const frames = panel.clip.transitionFrames > 0
+                               ? panel.clip.transitionFrames
+                               : Math.round(Edit.timeline.fps || 30);
+                Edit.setTransition(newValue, newValue === "cut" ? 0 : frames);
+            }
+        }
+
+        NumberField {
+            width: parent.width
+            label: qsTr("Length")
+            visible: (panel.clip.transition ?? "cut") !== "cut"
+            value: panel.clip.transitionFrames ?? 0
+            suffix: qsTr(" frames")
+            decimals: 0
+            minimum: 1
+            maximum: 600
+            steppers: true
+            onCommitted: newValue => Edit.setTransition(panel.clip.transition, newValue)
+        }
+
+        ChoiceField {
+            width: parent.width
+            label: qsTr("Align")
+            visible: (panel.clip.transition ?? "cut") !== "cut"
+            choices: ["centre", "start", "end"]
+            choiceLabels: ({
+                "centre": qsTr("Centre at cut"),
+                "start": qsTr("Start at cut"),
+                "end": qsTr("End at cut")
+            })
+            value: panel.clip.transitionAlign ?? "centre"
+            onCommitted: newValue => Edit.setTransition(panel.clip.transition,
+                                                        panel.clip.transitionFrames,
+                                                        newValue)
+        }
+
+        Item { width: 1; height: 10 }
+
         Text {
             width: parent.width
             text: panel.clip.source ?? ""

@@ -51,6 +51,10 @@ struct SetTrack {
     bool muted = false;
     bool solo = false;
     double gain_db = 0.0;
+    double pan = 0.0;
+    AutomationMode automation = AutomationMode::Read;
+    bool patched = true;
+    bool armed = false;
     friend bool operator==(const SetTrack&, const SetTrack&) = default;
 };
 

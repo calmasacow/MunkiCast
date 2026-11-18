@@ -8,7 +8,9 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QDesktopServices>
 #include <QSaveFile>
+#include <QUrl>
 #include <expected>
 #include <ldoc/command.hpp>
 #include <ldoc/project_io.hpp>
@@ -384,4 +386,19 @@ bool Document::exportCollection(const QString& path, bool obs) {
     emit notice(QStringLiteral("Collection exported to %1").arg(path));
     return true;
 }
+bool Document::showProjectFolder() {
+    const QString dir = projectDirectory();
+    if (dir.isEmpty()) {
+        emit notice(QStringLiteral("This project has never been saved, so it has no folder yet."));
+        return false;
+    }
+    // The desktop's own handler, not a file manager named here: which one is installed is the
+    // operator's business, and the portal already knows.
+    if (!QDesktopServices::openUrl(QUrl::fromLocalFile(dir))) {
+        emit notice(QStringLiteral("Could not open %1.").arg(dir));
+        return false;
+    }
+    return true;
+}
+
 } // namespace munkicast::ui

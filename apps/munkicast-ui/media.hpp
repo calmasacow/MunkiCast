@@ -82,6 +82,11 @@ class Media : public QAbstractListModel {
     /// How many rows are listed. `rowCount` is not a property, and a QML binding on a model's
     /// length has to have something to attach to.
     Q_PROPERTY(int count READ count NOTIFY countChanged)
+    /// Show only files whose name contains this, case-insensitively. Empty shows everything.
+    ///
+    /// Applied in the scan rather than by a proxy model: the list is one directory, so
+    /// re-reading it is cheap, and a second model to keep in step is not.
+    Q_PROPERTY(QString filter READ filter WRITE setFilter NOTIFY filterChanged)
 
 public:
     enum Roles {
@@ -117,6 +122,8 @@ public:
     [[nodiscard]] bool exporting() const { return running_ != nullptr; }
     [[nodiscard]] QStringList presets() const;
     [[nodiscard]] int count() const { return static_cast<int>(items_.size()); }
+    [[nodiscard]] QString filter() const { return filter_; }
+    void setFilter(const QString& text);
 
     /// Open one of the project's folders by name, or any absolute path.
     Q_INVOKABLE void openFolder(const QString& pathOrName);
@@ -140,6 +147,7 @@ public:
 signals:
     void folderChanged();
     void countChanged();
+    void filterChanged();
     void selectedChanged();
     void queueChanged();
     void notice(const QString& text);
@@ -162,6 +170,7 @@ private:
     QString projectDir_;
     QString folder_;
     QVector<MediaItem> items_;
+    QString filter_;
     int selected_ = -1;
 
     /// The prober lives here and is talked to by queued signal, so a file that takes seconds to

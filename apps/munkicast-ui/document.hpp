@@ -753,6 +753,11 @@ public:
     Q_INVOKABLE bool importCollection(const QString& path, bool obs, const QString& name,
                                       int width, int height, int fpsNum, int fpsDen);
     Q_INVOKABLE bool exportCollection(const QString& path, bool obs);
+    /// Open the project's own directory in the desktop's file manager.
+    ///
+    /// The Maya-style tree -- Recordings, Exports, Graphics and the rest -- is a place the
+    /// operator works in by hand as well as through this shell, so it needs a way out to it.
+    Q_INVOKABLE bool showProjectFolder();
 
 
     // ---- for other C++ bridges, deliberately not Q_INVOKABLE -------------------------------

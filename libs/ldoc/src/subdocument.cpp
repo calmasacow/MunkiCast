@@ -54,6 +54,58 @@ std::optional<TransitionKind> transition_kind_from_string(std::string_view s) {
     return std::nullopt;
 }
 
+std::string_view to_string(AutomationMode m) {
+    switch (m) {
+    case AutomationMode::Off:
+        return "off";
+    case AutomationMode::Read:
+        return "read";
+    case AutomationMode::Touch:
+        return "touch";
+    case AutomationMode::Latch:
+        return "latch";
+    case AutomationMode::Write:
+        return "write";
+    }
+    return "read";
+}
+
+std::optional<AutomationMode> automation_mode_from_string(std::string_view s) {
+    if (s == "off")
+        return AutomationMode::Off;
+    if (s == "read")
+        return AutomationMode::Read;
+    if (s == "touch")
+        return AutomationMode::Touch;
+    if (s == "latch")
+        return AutomationMode::Latch;
+    if (s == "write")
+        return AutomationMode::Write;
+    return std::nullopt;
+}
+
+std::string_view to_string(TransitionAlign a) {
+    switch (a) {
+    case TransitionAlign::Centre:
+        return "centre";
+    case TransitionAlign::Start:
+        return "start";
+    case TransitionAlign::End:
+        return "end";
+    }
+    return "centre";
+}
+
+std::optional<TransitionAlign> transition_align_from_string(std::string_view s) {
+    if (s == "centre")
+        return TransitionAlign::Centre;
+    if (s == "start")
+        return TransitionAlign::Start;
+    if (s == "end")
+        return TransitionAlign::End;
+    return std::nullopt;
+}
+
 std::string_view to_string(LayerKind k) {
     switch (k) {
     case LayerKind::Rect:

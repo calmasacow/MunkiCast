@@ -11,6 +11,7 @@
 #include <QFileInfo>
 #include <QTimer>
 
+#include <lcomp/filters.hpp>
 #include <ldoc/json.hpp>
 #include <ldoc/project_io.hpp>
 
@@ -44,6 +45,12 @@ QVariantMap clip_map(const ldoc::Clip& clip) {
          QString::fromStdString(std::string{to_string(clip.transition.kind)})},
         {QStringLiteral("transitionFrames"),
          static_cast<qlonglong>(clip.transition.real() ? clip.transition.duration : 0)},
+        {QStringLiteral("transitionAlign"),
+         QString::fromStdString(std::string{to_string(clip.transition.align)})},
+        // How far the wedge reaches back before the cut. Derived once here rather than in the
+        // painter, so the drawing and any future render cannot disagree about it.
+        {QStringLiteral("transitionLead"),
+         static_cast<qlonglong>(clip.transition.real() ? clip.transition.lead() : 0)},
     };
 }
 
@@ -89,19 +96,32 @@ QVariantMap Edit::timeline() const {
     const ldoc::Timeline& t = h->document();
 
     QVariantList tracks;
+    // V1, V2, A1, A2 ... numbered per kind from the bottom up, which is the order every NLE
+    // names them in and the order the timeline draws them.
+    int video_n = 0;
+    int audio_n = 0;
     for (const ldoc::Track& track : t.tracks) {
         QVariantList clips;
         for (const ldoc::Clip& clip : track.clips)
             clips.append(clip_map(clip));
+        const bool is_audio = track.kind == ldoc::TrackKind::Audio;
+        const int n = is_audio ? ++audio_n : ++video_n;
         tracks.append(QVariantMap{
             {QStringLiteral("id"), to_qt(track.id)},
             {QStringLiteral("name"), QString::fromStdString(track.name)},
+            {QStringLiteral("shortName"), QStringLiteral("%1%2")
+                                              .arg(is_audio ? QStringLiteral("A")
+                                                            : QStringLiteral("V"))
+                                              .arg(n)},
             {QStringLiteral("kind"), QString::fromStdString(std::string{to_string(track.kind)})},
             {QStringLiteral("enabled"), track.enabled},
             {QStringLiteral("locked"), track.locked},
             {QStringLiteral("muted"), track.muted},
             {QStringLiteral("solo"), track.solo},
+            {QStringLiteral("patched"), track.patched},
+            {QStringLiteral("armed"), track.armed},
             {QStringLiteral("gainDb"), track.gain_db},
+            {QStringLiteral("pan"), track.pan},
             {QStringLiteral("audible"), t.audible(track)},
             {QStringLiteral("clips"), clips},
         });
@@ -518,6 +538,21 @@ QVariantMap Edit::clipUnderPlayheadMap() const {
 
 // ---- track headers -----------------------------------------------------------------------
 
+namespace {
+
+/// `SetTrack` carrying a track's current value, for a caller to change one field of.
+///
+/// Every setter needs all nine fields, and spelling them out at each call site is how one of
+/// them ends up quietly reset when a tenth is added -- which is exactly what happened when pan
+/// and automation arrived.
+[[nodiscard]] ldoc::SetTrack track_as_is(const ldoc::Track& t) {
+    return ldoc::SetTrack{t.id,    t.name, t.enabled,    t.locked,  t.muted,
+                          t.solo,  t.gain_db, t.pan,     t.automation,
+                          t.patched, t.armed};
+}
+
+} // namespace
+
 void Edit::toggleTrack(const QString& trackId, const QString& flag) {
     const ldoc::TimelineHistory* h = history();
     if (!h)
@@ -528,8 +563,7 @@ void Edit::toggleTrack(const QString& trackId, const QString& flag) {
 
     // SetTrack carries the whole value, so every field starts from the current one: a setter
     // that forgot a field would quietly reset it.
-    ldoc::SetTrack edit{track->id,    track->name, track->enabled,
-                        track->locked, track->muted, track->solo, track->gain_db};
+    ldoc::SetTrack edit = track_as_is(*track);
     if (flag == QLatin1String("enabled"))
         edit.enabled = !track->enabled;
     else if (flag == QLatin1String("locked"))
@@ -538,6 +572,10 @@ void Edit::toggleTrack(const QString& trackId, const QString& flag) {
         edit.muted = !track->muted;
     else if (flag == QLatin1String("solo"))
         edit.solo = !track->solo;
+    else if (flag == QLatin1String("patched"))
+        edit.patched = !track->patched;
+    else if (flag == QLatin1String("armed"))
+        edit.armed = !track->armed;
     else
         return;
     run(edit);
@@ -550,9 +588,38 @@ void Edit::setTrackGain(const QString& trackId, double db) {
     const ldoc::Track* track = h->document().track(from_qt(trackId));
     if (!track)
         return;
-    run(ldoc::SetTrack{track->id, track->name, track->enabled, track->locked, track->muted,
-                       track->solo, db},
-        QStringLiteral("track.gain:%1").arg(trackId));
+    ldoc::SetTrack edit = track_as_is(*track);
+    edit.gain_db = db;
+    run(edit, QStringLiteral("track.gain:%1").arg(trackId));
+}
+
+void Edit::setTrackPan(const QString& trackId, double pan) {
+    const ldoc::TimelineHistory* h = history();
+    if (!h)
+        return;
+    const ldoc::Track* track = h->document().track(from_qt(trackId));
+    if (!track)
+        return;
+    ldoc::SetTrack edit = track_as_is(*track);
+    edit.pan = std::clamp(pan, -1.0, 1.0);
+    run(edit, QStringLiteral("track.pan:%1").arg(trackId));
+}
+
+void Edit::setTrackAutomation(const QString& trackId, const QString& mode) {
+    const ldoc::TimelineHistory* h = history();
+    if (!h)
+        return;
+    const ldoc::Track* track = h->document().track(from_qt(trackId));
+    if (!track)
+        return;
+    const auto parsed = ldoc::automation_mode_from_string(mode.toStdString());
+    if (!parsed) {
+        emit notice(tr("There is no automation mode called '%1'.").arg(mode));
+        return;
+    }
+    ldoc::SetTrack edit = track_as_is(*track);
+    edit.automation = *parsed;
+    run(edit);
 }
 
 void Edit::renameTrack(const QString& trackId, const QString& name) {
@@ -562,8 +629,9 @@ void Edit::renameTrack(const QString& trackId, const QString& name) {
     const ldoc::Track* track = h->document().track(from_qt(trackId));
     if (!track)
         return;
-    run(ldoc::SetTrack{track->id, name.trimmed().toStdString(), track->enabled, track->locked,
-                       track->muted, track->solo, track->gain_db});
+    ldoc::SetTrack edit = track_as_is(*track);
+    edit.name = name.trimmed().toStdString();
+    run(edit);
 }
 
 void Edit::removeTrack(const QString& trackId) {
@@ -681,7 +749,7 @@ void Edit::razorAtPlayhead() {
     run(ldoc::make_timeline_batch(std::move(steps), "Cut at the playhead"));
 }
 
-void Edit::setTransition(const QString& kind, int frames) {
+void Edit::setTransition(const QString& kind, int frames, const QString& align) {
     if (selected_clip_.is_nil())
         return;
     const auto parsed = ldoc::transition_kind_from_string(kind.toStdString());
@@ -689,8 +757,192 @@ void Edit::setTransition(const QString& kind, int frames) {
         emit notice(tr("There is no transition called '%1'.").arg(kind));
         return;
     }
+    // An empty alignment keeps whatever the clip already has, so changing a dissolve's length
+    // from the properties panel does not quietly re-centre one the operator moved.
+    auto how = ldoc::TransitionAlign::Centre;
+    if (align.isEmpty()) {
+        const ldoc::TimelineHistory* h = history();
+        const ldoc::Track* track = h ? h->document().track(selected_track_) : nullptr;
+        const ldoc::Clip* clip = track ? track->clip(selected_clip_) : nullptr;
+        if (clip)
+            how = clip->transition.align;
+    } else if (const auto parsed_align =
+                   ldoc::transition_align_from_string(align.toStdString())) {
+        how = *parsed_align;
+    } else {
+        emit notice(tr("There is no transition alignment called '%1'.").arg(align));
+        return;
+    }
     run(ldoc::SetTransition{selected_track_, selected_clip_,
-                            ldoc::Transition{*parsed, std::max(0, frames)}});
+                            ldoc::Transition{*parsed, std::max(0, frames), how}});
+}
+
+QVariantMap Edit::sourceMap() const {
+    if (source_path_.isEmpty())
+        return {};
+    const int frames = sourceFrames(source_path_);
+    const ldoc::TimelineHistory* h = history();
+    const double fps = h ? h->document().fps.hz() : 0.0;
+    const ldoc::Frame out = source_out_ > source_in_ ? source_out_ : frames;
+    return QVariantMap{
+        {QStringLiteral("path"), source_path_},
+        {QStringLiteral("name"), QFileInfo(source_path_).fileName()},
+        {QStringLiteral("frames"), frames},
+        {QStringLiteral("in"), static_cast<qlonglong>(source_in_)},
+        {QStringLiteral("out"), static_cast<qlonglong>(out)},
+        {QStringLiteral("rangeFrames"), static_cast<qlonglong>(std::max<ldoc::Frame>(0, out - source_in_))},
+        {QStringLiteral("inSeconds"), fps > 0.0 ? source_in_ / fps : 0.0},
+        {QStringLiteral("seconds"), fps > 0.0 ? frames / fps : 0.0},
+    };
+}
+
+void Edit::openSource(const QString& path) {
+    if (path.isEmpty())
+        return;
+    source_path_ = path;
+    source_in_ = 0;
+    source_out_ = 0;
+    // Asking for the artwork is also what measures the file, and `sourceMap` needs that
+    // length to know where the out point is.
+    if (art_) {
+        art_->request(path, false);
+        art_->request(path, true);
+    }
+    emit sourceChanged();
+}
+
+void Edit::setSourceIn(int frame) {
+    if (source_path_.isEmpty())
+        return;
+    source_in_ = std::max(0, frame);
+    // An in at or past the out clears the out rather than refusing: the operator is marking a
+    // new range, and making them clear the old one first is a step for nothing.
+    if (source_out_ > 0 && source_out_ <= source_in_)
+        source_out_ = 0;
+    emit sourceChanged();
+}
+
+void Edit::setSourceOut(int frame) {
+    if (source_path_.isEmpty())
+        return;
+    source_out_ = std::max(0, frame);
+    if (source_out_ <= source_in_)
+        source_in_ = 0;
+    emit sourceChanged();
+}
+
+void Edit::clearSourceRange() {
+    source_in_ = 0;
+    source_out_ = 0;
+    emit sourceChanged();
+}
+
+void Edit::insertSourceRange(bool overwrite) {
+    const ldoc::TimelineHistory* h = history();
+    if (!h) {
+        emit notice(tr("Open a timeline first."));
+        return;
+    }
+    if (source_path_.isEmpty()) {
+        emit notice(tr("Open a file in the Source viewer first."));
+        return;
+    }
+
+    const ldoc::Timeline& t = h->document();
+    const int frames = sourceFrames(source_path_);
+    const ldoc::Frame out = source_out_ > source_in_ ? source_out_ : frames;
+    const ldoc::Frame length = out - source_in_;
+    if (length <= 0) {
+        emit notice(tr("That range is empty."));
+        return;
+    }
+
+    const Probe probed = probe_asset(source_path_);
+    const bool has_video = !probed.size.isEmpty();
+    const ldoc::Track* video = nullptr;
+    const ldoc::Track* audio = nullptr;
+    // The source patch decides where it lands, which is what the V1/A1 badges on the track
+    // heads are for. A patched track that is locked is still skipped: locked means locked.
+    for (const ldoc::Track& track : t.tracks) {
+        if (track.locked || !track.patched)
+            continue;
+        if (!video && track.kind == ldoc::TrackKind::Video)
+            video = &track;
+        if (!audio && track.kind == ldoc::TrackKind::Audio)
+            audio = &track;
+    }
+    if ((has_video && !video) && !audio) {
+        emit notice(tr("There is no unlocked track to put that on."));
+        return;
+    }
+
+    const ldoc::Frame at = t.playhead;
+    std::vector<ldoc::TimelineCommand> steps;
+
+    const auto lay_down = [&](const ldoc::Track* track) {
+        if (!track)
+            return;
+        if (overwrite) {
+            // Whatever is under the new clip has to go first: AddClip refuses an overlap, and
+            // silently trimming around one would be a different edit from the one asked for.
+            for (const ldoc::Clip& existing : track->clips) {
+                if (existing.end() > at && existing.start < at + length)
+                    steps.push_back(ldoc::RemoveClip{track->id, existing.id});
+            }
+        } else {
+            // Insert: push everything from the playhead on back by the new clip's length.
+            for (const ldoc::Clip& later : track->clips) {
+                if (later.start >= at)
+                    steps.push_back(ldoc::MoveClip{track->id, later.id, later.start + length,
+                                                   ldoc::Id{}});
+            }
+        }
+        ldoc::Clip clip;
+        clip.id = ldoc::Id::generate();
+        clip.source = source_path_.toStdString();
+        clip.name = QFileInfo(source_path_).fileName().toStdString();
+        clip.start = at;
+        clip.duration = length;
+        clip.source_in = source_in_;
+        steps.push_back(ldoc::AddClip{track->id, std::move(clip)});
+    };
+
+    if (has_video)
+        lay_down(video);
+    if (!probed.audio_codec.isEmpty())
+        lay_down(audio);
+
+    if (steps.empty()) {
+        emit notice(tr("There is no unlocked track to put that on."));
+        return;
+    }
+    run(ldoc::make_timeline_batch(
+        std::move(steps),
+        std::format("{} '{}'", overwrite ? "Overwrite" : "Insert",
+                    QFileInfo(source_path_).fileName().toStdString())));
+}
+
+void Edit::setClipEffects(bool on) {
+    if (selected_clip_.is_nil())
+        return;
+    const ldoc::TimelineHistory* h = history();
+    if (!h)
+        return;
+    const ldoc::Track* track = h->document().track(selected_track_);
+    const ldoc::Clip* clip = track ? track->clip(selected_clip_) : nullptr;
+    if (!clip)
+        return;
+    run(ldoc::SetClip{selected_track_, selected_clip_, clip->name, clip->gain_db, on});
+}
+
+QVariantList Edit::effectCatalogue() const {
+    QVariantList out;
+    for (const auto& info : lcomp::filter_catalog()) {
+        out.push_back(QVariantMap{{QStringLiteral("type"), QString::fromStdString(info.type)},
+                                  {QStringLiteral("name"), QString::fromStdString(info.name)},
+                                  {QStringLiteral("audio"), info.audio}});
+    }
+    return out;
 }
 
 void Edit::setInPoint() {
@@ -880,10 +1132,17 @@ QVariantList Edit::levels() const {
         // routing and mute, and becomes a real meter when playback goes through one.
         const double db = heard && clip ? t.master_gain_db + track.gain_db + clip->gain_db
                                         : -60.0;
-        out.append(QVariantMap{{QStringLiteral("track"), to_qt(track.id)},
-                               {QStringLiteral("name"), QString::fromStdString(track.name)},
-                               {QStringLiteral("db"), heard && clip ? db : -60.0},
-                               {QStringLiteral("audible"), t.audible(track)}});
+        out.append(QVariantMap{
+            {QStringLiteral("track"), to_qt(track.id)},
+            {QStringLiteral("name"), QString::fromStdString(track.name)},
+            {QStringLiteral("db"), heard && clip ? db : -60.0},
+            {QStringLiteral("gain"), track.gain_db},
+            {QStringLiteral("pan"), track.pan},
+            {QStringLiteral("automation"),
+             QString::fromStdString(std::string{to_string(track.automation)})},
+            {QStringLiteral("muted"), track.muted},
+            {QStringLiteral("solo"), track.solo},
+            {QStringLiteral("audible"), t.audible(track)}});
     }
     return out;
 }

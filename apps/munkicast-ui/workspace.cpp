@@ -78,7 +78,8 @@ constexpr std::array kKnownPanels = {
     KnownPanel{"export-queue", "Export Queue", "Media"},
 
     // Edit.
-    KnownPanel{"edit-bins", "Bins", "Edit"},
+    KnownPanel{"edit-bins", "Media Browser", "Edit"},
+    KnownPanel{"edit-source", "Source", "Edit"},
     KnownPanel{"edit-program", "Program", "Edit"},
     KnownPanel{"edit-properties", "Clip", "Edit"},
     KnownPanel{"edit-effects", "Effects", "Edit"},
@@ -433,6 +434,16 @@ void Workspace::selectWorkspace(int index) {
     validate_focus();
     touch();
     scheduleSave();
+}
+
+bool Workspace::showWorkspace(const QString& name) {
+    for (std::size_t i = 0; i < workspaces_.size(); ++i) {
+        if (QString::fromStdString(workspaces_.items()[i].name) != name)
+            continue;
+        selectWorkspace(static_cast<int>(i));
+        return true;
+    }
+    return false;
 }
 
 void Workspace::addWorkspace(const QString& name) {

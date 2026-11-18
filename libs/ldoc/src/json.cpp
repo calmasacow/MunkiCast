@@ -1242,6 +1242,11 @@ Jv enc_clip(const Clip& c) {
         Jv t{Json::objectValue};
         t["kind"] = std::string{to_string(c.transition.kind)};
         t["duration"] = static_cast<Json::Int64>(c.transition.duration);
+        // Written only when it is not the default, for the same reason the whole object is
+        // written only when the transition is real: a file meant to diff should not carry a
+        // line saying the usual thing.
+        if (c.transition.align != TransitionAlign::Centre)
+            t["align"] = std::string{to_string(c.transition.align)};
         o["transition"] = t;
     }
     if (c.has_effects)
@@ -1259,6 +1264,10 @@ Jv enc_track(const Track& t) {
     o["muted"] = t.muted;
     o["solo"] = t.solo;
     o["gain_db"] = t.gain_db;
+    o["pan"] = t.pan;
+    o["automation"] = std::string{to_string(t.automation)};
+    o["patched"] = t.patched;
+    o["armed"] = t.armed;
     Jv clips{Json::arrayValue};
     for (const Clip& c : t.clips)
         clips.append(enc_clip(c));
@@ -1390,6 +1399,11 @@ std::expected<SubdocFile<Timeline>, std::string> timeline_from_json(std::string_
             track.muted = rd.boolean(tv, "muted", "track", false);
             track.solo = rd.boolean(tv, "solo", "track", false);
             track.gain_db = rd.number(tv, "gain_db", "track", 0.0);
+            track.pan = rd.number(tv, "pan", "track", 0.0);
+            track.patched = rd.boolean(tv, "patched", "track", true);
+            track.armed = rd.boolean(tv, "armed", "track", false);
+            track.automation = rd.enumerated(tv, "automation", "track",
+                                             automation_mode_from_string, AutomationMode::Read);
             if (const Jv* clips = rd.array(tv, "clips", "track")) {
                 for (const Jv& cv : *clips) {
                     Clip clip;
@@ -1406,6 +1420,9 @@ std::expected<SubdocFile<Timeline>, std::string> timeline_from_json(std::string_
                             rd.enumerated(*tr, "kind", "clip", transition_kind_from_string,
                                           TransitionKind::Cut);
                         clip.transition.duration = rd.integer(*tr, "duration", "clip", 0);
+                        clip.transition.align =
+                            rd.enumerated(*tr, "align", "clip", transition_align_from_string,
+                                          TransitionAlign::Centre);
                     }
                     track.clips.push_back(std::move(clip));
                 }

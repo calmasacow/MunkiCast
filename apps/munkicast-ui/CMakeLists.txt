@@ -124,7 +124,9 @@ qt_add_qml_module(munkicast-ui
         qml/ExportQueuePanel.qml
         qml/EditBinsPanel.qml
         qml/EditMonitorPanel.qml
+        qml/EditSourcePanel.qml
         qml/EditPropertiesPanel.qml
+        qml/EditEffectsPanel.qml
         qml/EditAudioPanel.qml
         qml/EditTimelinePanel.qml
         qml/GraphicsToolsPanel.qml

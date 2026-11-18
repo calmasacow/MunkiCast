@@ -103,10 +103,90 @@ Item {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: parent.top
-        anchors.bottom: transport.top
+        anchors.bottom: scrub.top
         anchors.margins: 8
         fillMode: VideoOutput.PreserveAspectFit
         visible: panel.hasClip
+    }
+
+    // The sequence's whole length as one bar, with the markers and the marked range on it.
+    // The timeline below shows detail; this shows where in the programme you are, which is a
+    // different question and the one a monitor is looked at for.
+    Item {
+        id: scrub
+
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: transport.top
+        anchors.margins: 8
+        height: 14
+        visible: Edit.hasTimeline
+
+        readonly property int total: Edit.hasTimeline ? (Edit.timeline.duration || 0) : 0
+
+        function xOf(frame) {
+            return scrub.total > 0 ? bar.width * (frame / scrub.total) : 0;
+        }
+
+        Rectangle {
+            id: bar
+
+            anchors.verticalCenter: parent.verticalCenter
+            width: parent.width
+            height: 4
+            radius: 2
+            color: Theme.c.panelHeader
+        }
+
+        Rectangle {
+            readonly property int from: Edit.hasTimeline && Edit.timeline.inPoint >= 0
+                                        ? Edit.timeline.inPoint : 0
+            readonly property int to: Edit.hasTimeline && Edit.timeline.outPoint >= 0
+                                      ? Edit.timeline.outPoint : scrub.total
+            visible: Edit.hasTimeline &&
+                     (Edit.timeline.inPoint >= 0 || Edit.timeline.outPoint >= 0)
+            anchors.verticalCenter: parent.verticalCenter
+            x: scrub.xOf(from)
+            width: Math.max(1, scrub.xOf(to) - scrub.xOf(from))
+            height: 4
+            radius: 2
+            color: Theme.c.accent
+            opacity: 0.55
+        }
+
+        Repeater {
+            model: Edit.hasTimeline ? Edit.timeline.markers : []
+
+            delegate: Rectangle {
+                required property var modelData
+
+                x: scrub.xOf(modelData.at)
+                y: 0
+                width: 2
+                height: 5
+                color: Theme.c.warning
+            }
+        }
+
+        Rectangle {
+            x: Math.max(0, Math.min(scrub.xOf(Edit.hasTimeline ? Edit.timeline.playhead : 0),
+                                    bar.width - 2))
+            width: 2
+            height: parent.height
+            color: Theme.c.text
+        }
+
+        MouseArea {
+            anchors.fill: parent
+            onPressed: (mouse) => {
+                if (scrub.total > 0)
+                    Edit.setPlayhead(Math.round(mouse.x / bar.width * scrub.total));
+            }
+            onPositionChanged: (mouse) => {
+                if (pressed && scrub.total > 0)
+                    Edit.setPlayhead(Math.round(mouse.x / bar.width * scrub.total));
+            }
+        }
     }
 
     // The transport. The buttons an editor's hands live on, in the order every deck has had

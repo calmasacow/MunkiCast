@@ -94,12 +94,16 @@ Item {
                 return editBinsComponent;
             case "edit-program":
                 return editMonitorComponent;
+            case "edit-source":
+                return editSourceComponent;
             case "edit-properties":
                 return editPropertiesComponent;
             case "edit-timeline":
                 return editTimelineComponent;
             case "edit-audio":
                 return editAudioComponent;
+            case "edit-effects":
+                return editEffectsComponent;
 
             // Graphics.
             case "graphics-tools":
@@ -245,6 +249,12 @@ Item {
     }
 
     Component {
+        id: editSourceComponent
+
+        EditSourcePanel {}
+    }
+
+    Component {
         id: editPropertiesComponent
 
         EditPropertiesPanel {}
@@ -260,6 +270,12 @@ Item {
         id: editAudioComponent
 
         EditAudioPanel {}
+    }
+
+    Component {
+        id: editEffectsComponent
+
+        EditEffectsPanel {}
     }
 
     Component {

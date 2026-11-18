@@ -49,6 +49,12 @@ class Edit : public QObject {
     /// Per-track audio levels while playing, for the meters. Empty when stopped.
     Q_PROPERTY(QVariantList levels READ levels NOTIFY levelsChanged)
     Q_PROPERTY(double masterGain READ masterGain NOTIFY changed)
+    /// The file loaded in the Source viewer, with the in and out marked on it.
+    ///
+    /// A source clip is not on the timeline, so it is not a document edit and carries no undo:
+    /// it is the operator's scratch space for deciding which part of a file to use. Marking a
+    /// range here and then inserting is what "three-point editing" means.
+    Q_PROPERTY(QVariantMap source READ sourceMap NOTIFY sourceChanged)
 
 public:
     /// Created by the QML engine, which is also where it finds `Document`. Asking the engine
@@ -72,6 +78,7 @@ public:
     [[nodiscard]] double rate() const { return rate_; }
     [[nodiscard]] QVariantList levels() const;
     [[nodiscard]] double masterGain() const;
+    [[nodiscard]] QVariantMap sourceMap() const;
 
     /// Make a timeline, add it to the project and open it. Returns its id.
     Q_INVOKABLE QString createTimeline(const QString& name);
@@ -112,6 +119,10 @@ public:
     /// Toggle one of a track's flags: "enabled", "locked", "muted", "solo".
     Q_INVOKABLE void toggleTrack(const QString& trackId, const QString& flag);
     Q_INVOKABLE void setTrackGain(const QString& trackId, double db);
+    /// Pan a track between the speakers: -1 hard left, 0 centre, +1 hard right.
+    Q_INVOKABLE void setTrackPan(const QString& trackId, double pan);
+    /// "off", "read", "touch", "latch" or "write".
+    Q_INVOKABLE void setTrackAutomation(const QString& trackId, const QString& mode);
     Q_INVOKABLE void renameTrack(const QString& trackId, const QString& name);
     Q_INVOKABLE void removeTrack(const QString& trackId);
     Q_INVOKABLE void setMasterGain(double db);
@@ -130,7 +141,34 @@ public:
     Q_INVOKABLE void razorAtPlayhead();
     /// Put a transition on the selected clip's head. `kind` is "cut", "cross-dissolve",
     /// "dip-to-black" or "push".
-    Q_INVOKABLE void setTransition(const QString& kind, int frames);
+    /// An empty `align` keeps the clip's current alignment.
+    Q_INVOKABLE void setTransition(const QString& kind, int frames,
+                                   const QString& align = {});
+    /// Mark the selected clip as carrying effects, or clear them.
+    ///
+    /// ponytail: a flag, not a list. The clip model has `has_effects` and no parameters, so
+    /// this records that a clip is treated rather than how. It grows a real list when the Edit
+    /// tab renders through the compositor.
+    Q_INVOKABLE void setClipEffects(bool on);
+    /// The renderer's filter catalogue: what could be put on a clip.
+    Q_INVOKABLE [[nodiscard]] QVariantList effectCatalogue() const;
+    // ---- the Source viewer ----------------------------------------------------------------
+    //
+    // Three-point editing: open a file here, mark the part of it you want, then insert or
+    // overwrite that part into the sequence at the playhead.
+
+    /// Load a file into the Source viewer. Its range starts as the whole file.
+    Q_INVOKABLE void openSource(const QString& path);
+    /// Mark the Source viewer's in or out at a frame of the *file*.
+    Q_INVOKABLE void setSourceIn(int frame);
+    Q_INVOKABLE void setSourceOut(int frame);
+    Q_INVOKABLE void clearSourceRange();
+    /// Put the Source viewer's marked range into the sequence at the playhead.
+    ///
+    /// `overwrite` replaces what is already there; otherwise the clips after the playhead are
+    /// pushed back to make room, which is what "insert" means.
+    Q_INVOKABLE void insertSourceRange(bool overwrite);
+
     Q_INVOKABLE void setInPoint();
     Q_INVOKABLE void setOutPoint();
     Q_INVOKABLE void clearRange();
@@ -165,6 +203,7 @@ signals:
     void levelsChanged();
     void listChanged();
     void selectionChanged();
+    void sourceChanged();
     void notice(const QString& text);
     /// A timeline was created, removed or renamed: the project's manifest has to follow.
     void manifestChanged();
@@ -189,6 +228,11 @@ private:
     void tick();
     /// Set the rate and start or stop the timer behind it.
     void setRate(double rate);
+
+    /// The Source viewer's file and its marked range, in that file's own frames.
+    QString source_path_;
+    ldoc::Frame source_in_ = 0;
+    ldoc::Frame source_out_ = 0;
 
     class Document* document_ = nullptr;
     class ClipArt* art_ = nullptr;

@@ -81,7 +81,11 @@ Constraints Constraints::studio_defaults() {
     cs.set("graphics-timeline", PanelMin{260.0, 110.0});
 
     // Both monitors are pictures: too small is not merely ugly, as with the program canvas.
-    cs.set("edit-program", PanelMin{280.0, 180.0});
+    cs.set("edit-program", PanelMin{240.0, 180.0});
+    cs.set("edit-source", PanelMin{240.0, 180.0});
+    // Wide enough for two strips and the master beside them: a mixer squeezed
+    // narrower than its own contents is a mixer you cannot read.
+    cs.set("edit-audio", PanelMin{240.0, 200.0});
     cs.set("media-player", PanelMin{240.0, 160.0});
 
     // The media table folds its columns away as it narrows, so it asks only for the name
@@ -268,12 +272,22 @@ Layout Layout::default_edit() {
     // "edit-program", not "edit-monitor": the workspace file is checked for any mention of
     // screen geometry (ADR-0015 rule 4) and "monitor" is one of the banned words. The panel
     // shows the program, which is the better name for it anyway.
+    // Two viewers, side by side: the file being considered and the sequence being built. An
+    // editor compares them constantly, so they are both on screen rather than two tabs of one
+    // panel, which would make every comparison a click.
+    const NodeId source = tabs({"edit-source"});
     const NodeId monitor = tabs({"edit-program"});
-    const NodeId inspect = tabs({"edit-properties", "edit-audio", "edit-effects"});
+    const NodeId inspect = tabs({"edit-properties", "edit-effects"});
     const NodeId timeline = tabs({"edit-timeline"});
+    const NodeId mixer = tabs({"edit-audio"});
 
-    const NodeId upper = split(Axis::Horizontal, {bins, monitor, inspect}, {0.20, 0.60, 0.20});
-    const NodeId root = split(Axis::Vertical, {upper, timeline}, {0.58, 0.42});
+    const NodeId viewers = split(Axis::Horizontal, {source, monitor}, {0.5, 0.5});
+    const NodeId upper =
+        split(Axis::Horizontal, {bins, viewers, inspect}, {0.22, 0.56, 0.22});
+    // The mixer sits beside the timeline, not above it: both are about the same clips at the
+    // same moment, and a meter is only useful while the thing it measures is in view.
+    const NodeId lower = split(Axis::Horizontal, {timeline, mixer}, {0.72, 0.28});
+    const NodeId root = split(Axis::Vertical, {upper, lower}, {0.56, 0.44});
 
     l.erase_subtree(l.root_);
     l.root_ = root;

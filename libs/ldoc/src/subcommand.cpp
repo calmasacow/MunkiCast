@@ -179,7 +179,8 @@ std::expected<AppliedTo<TimelineCommand>, std::string> apply(Timeline& timeline,
                     return std::unexpected("a track needs a name");
                 SetTrack inverse{c.track,          (*track)->name,  (*track)->enabled,
                                  (*track)->locked, (*track)->muted, (*track)->solo,
-                                 (*track)->gain_db};
+                                 (*track)->gain_db, (*track)->pan,  (*track)->automation,
+                                 (*track)->patched, (*track)->armed};
                 const std::string description = std::format("Change track '{}'", c.name);
                 (*track)->name = c.name;
                 (*track)->enabled = c.enabled;
@@ -187,6 +188,10 @@ std::expected<AppliedTo<TimelineCommand>, std::string> apply(Timeline& timeline,
                 (*track)->muted = c.muted;
                 (*track)->solo = c.solo;
                 (*track)->gain_db = c.gain_db;
+                (*track)->pan = c.pan;
+                (*track)->automation = c.automation;
+                (*track)->patched = c.patched;
+                (*track)->armed = c.armed;
                 return AppliedTo<TimelineCommand>{std::move(inverse), description};
 
             } else if constexpr (std::is_same_v<T, AddClip>) {

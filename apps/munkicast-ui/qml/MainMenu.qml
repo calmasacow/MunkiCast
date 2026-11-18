@@ -106,19 +106,58 @@ Controls.MenuBar {
     }
 
     Menu {
+        id: fileMenu
         title: qsTr("&File")
-        Entry { text: qsTr("Save project"); enabled: Document.projectPath !== ""; onTriggered: Document.save() }
-        Pending { text: qsTr("Show Recordings") }
-        Pending { text: qsTr("Remux Recordings") }
-        Divider {}
-        Menu {
-            title: qsTr("Settings")
-            Entry { text: qsTr("Canvas"); onTriggered: bar.showPanel("canvas") }
-            Entry { text: qsTr("Outputs"); onTriggered: bar.showPanel("outputs") }
-            Entry { text: qsTr("Keyboard Shortcuts"); onTriggered: bar.showPanel("shortcuts") }
+        Entry {
+            objectName: "menuNewProject"
+            text: qsTr("New Project...")
+            onTriggered: bar.collectionDialog.open("new")
         }
-        Pending { text: qsTr("Show Settings Folder") }
-        Pending { text: qsTr("Show Profile Folder") }
+        Entry {
+            objectName: "menuOpenProject"
+            text: qsTr("Open Project...")
+            onTriggered: bar.collectionDialog.open("import")
+        }
+        // Recent projects are the other collections on disk: the one that is open is already
+        // named in the title bar, so listing it again here would be a row that does nothing.
+        Menu {
+            id: recentMenu
+            objectName: "menuRecentProjects"
+            title: qsTr("Recent Projects")
+            Instantiator {
+                model: Document.collections
+                delegate: Entry {
+                    required property var modelData
+                    text: modelData.name
+                    visible: modelData.path !== Document.projectPath
+                    height: visible ? implicitHeight : 0
+                    enabled: visible
+                    onTriggered: Document.openCollection(modelData.path)
+                }
+                onObjectAdded: (index, object) => recentMenu.insertItem(recentMenu.count, object)
+                onObjectRemoved: (index, object) => recentMenu.removeItem(object)
+            }
+        }
+        Divider {}
+        Entry { text: qsTr("Save Project"); enabled: Document.projectPath !== ""; onTriggered: Document.save() }
+        Entry {
+            objectName: "menuExportProject"
+            text: qsTr("Export Project...")
+            enabled: Document.projectPath !== ""
+            onTriggered: bar.collectionDialog.open("export")
+        }
+        Divider {}
+        Entry {
+            objectName: "menuShowRecordings"
+            text: qsTr("Show Recordings")
+            onTriggered: Workspace.showWorkspace("Media")
+        }
+        Entry {
+            objectName: "menuShowProjectFolder"
+            text: qsTr("Show Project Folder")
+            enabled: Document.projectPath !== ""
+            onTriggered: Document.showProjectFolder()
+        }
         Divider {}
         Entry {
             text: qsTr("Exit")
