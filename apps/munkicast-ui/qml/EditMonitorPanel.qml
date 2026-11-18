@@ -26,44 +26,211 @@ Item {
         color: Theme.c.window
     }
 
-    onClipChanged: {
+    onClipChanged: panel.follow()
+
+    /// Keep the player on the clip under the playhead, at the frame under the playhead.
+    ///
+    /// Changing the source is a reload and costs a beat, so it happens only when the playhead
+    /// crosses into a different clip -- which is exactly what a cut is. Within one clip the
+    /// playhead moving is a seek.
+    ///
+    /// ponytail: a cut hitches, because each clip is a separate decode. It goes away when
+    /// playback moves to the renderer, which can have the next shot open before it is needed.
+    function follow() {
         const wanted = panel.hasClip ? "file://" + panel.clip.source : "";
-        if (player.source != wanted)
+        if (player.source != wanted) {
             player.source = wanted;
+            // A fresh source starts at zero, so the seek has to wait for it to be ready.
+            if (panel.hasClip)
+                panel.pendingSeek = panel.clip.sourceSeconds;
+            return;
+        }
+        if (!panel.hasClip)
+            return;
+
+        const ms = panel.clip.sourceSeconds * 1000;
+        if (Edit.playing && Edit.rate === 1) {
+            // While playing forward at speed, the file plays itself: seeking on every frame
+            // would stutter. Only correct when it has drifted away from the timeline.
+            if (player.playbackState !== MediaPlayer.PlayingState)
+                player.play();
+            if (Math.abs(player.position - ms) > 250)
+                player.position = ms;
+        } else {
+            // Scrubbing, stepping or shuttling: the file is a frame store, not a player.
+            if (player.playbackState === MediaPlayer.PlayingState)
+                player.pause();
+            if (Math.abs(player.position - ms) > 30)
+                player.position = ms;
+        }
     }
 
-    // The playhead moving is a seek, not a reload: reassigning the source on every frame of a
-    // scrub would reopen the file sixty times a second.
+    /// Where to seek once the newly-opened source is ready to be seeked.
+    property real pendingSeek: -1
+
     Connections {
         target: Edit
 
-        function onChanged() {
-            if (!panel.hasClip)
-                return;
-            const ms = panel.clip.sourceSeconds * 1000;
-            if (Math.abs(player.position - ms) > 40)
-                player.position = ms;
-        }
+        function onChanged() { panel.follow(); }
+        function onTransportChanged() { panel.follow(); }
     }
 
     MediaPlayer {
         id: player
 
         videoOutput: output
-        audioOutput: AudioOutput {}
+        audioOutput: AudioOutput {
+            // The mix level, so muting a track or pulling the master down is audible here
+            // rather than only in the document.
+            volume: Edit.hasTimeline ? Math.pow(10, Edit.masterGain / 20) : 1.0
+        }
+
+        onMediaStatusChanged: {
+            // A source that has just loaded is at zero whatever was asked for before it was
+            // ready; this is the first moment a seek will land.
+            if (mediaStatus === MediaPlayer.LoadedMedia && panel.pendingSeek >= 0) {
+                player.position = panel.pendingSeek * 1000;
+                panel.pendingSeek = -1;
+                if (Edit.playing && Edit.rate === 1)
+                    player.play();
+            }
+        }
     }
 
     VideoOutput {
         id: output
 
-        anchors.fill: parent
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.bottom: transport.top
         anchors.margins: 8
         fillMode: VideoOutput.PreserveAspectFit
         visible: panel.hasClip
     }
 
+    // The transport. The buttons an editor's hands live on, in the order every deck has had
+    // them since tape: start, back, play, forward, end, with the mark keys beside them.
+    Rectangle {
+        id: transport
+
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.bottom: parent.bottom
+        height: 30
+        visible: Edit.hasTimeline
+        color: Theme.c.panelHeader
+
+        Text {
+            anchors.left: parent.left
+            anchors.leftMargin: 10
+            anchors.verticalCenter: parent.verticalCenter
+            text: Edit.hasTimeline ? Edit.timecode(Edit.timeline.playhead) : ""
+            font.pixelSize: 11
+            font.family: "monospace"
+            color: Theme.c.text
+        }
+
+        Row {
+            anchors.centerIn: parent
+            spacing: 4
+
+            ToolButton {
+                label: "⏮"
+                tip: qsTr("Go to the start (Home)")
+                onClicked: Edit.goToStart()
+            }
+
+            ToolButton {
+                label: "⮜"
+                tip: qsTr("Previous edit (Up)")
+                onClicked: Edit.stepEdit(false)
+            }
+
+            ToolButton {
+                label: "◀◀"
+                tip: qsTr("Shuttle backwards (J)")
+                active: Edit.rate < 0
+                onClicked: Edit.shuttle(-1)
+            }
+
+            ToolButton {
+                label: Edit.playing && Edit.rate > 0 ? "❚❚" : "▶"
+                tip: Edit.playing ? qsTr("Pause (K or space)") : qsTr("Play (space)")
+                active: Edit.rate === 1
+                onClicked: Edit.togglePlay()
+            }
+
+            ToolButton {
+                label: "▶▶"
+                tip: qsTr("Shuttle forwards (L)")
+                active: Edit.rate > 1
+                onClicked: Edit.shuttle(1)
+            }
+
+            ToolButton {
+                label: "⮞"
+                tip: qsTr("Next edit (Down)")
+                onClicked: Edit.stepEdit(true)
+            }
+
+            ToolButton {
+                label: "⏭"
+                tip: qsTr("Go to the end (End)")
+                onClicked: Edit.goToEnd()
+            }
+        }
+
+        Row {
+            anchors.right: parent.right
+            anchors.rightMargin: 6
+            anchors.verticalCenter: parent.verticalCenter
+            spacing: 4
+
+            ToolButton {
+                label: "{"
+                tip: qsTr("Mark in (I)")
+                active: Edit.hasTimeline && Edit.timeline.inPoint >= 0
+                onClicked: Edit.setInPoint()
+            }
+
+            ToolButton {
+                label: "}"
+                tip: qsTr("Mark out (O)")
+                active: Edit.hasTimeline && Edit.timeline.outPoint >= 0
+                onClicked: Edit.setOutPoint()
+            }
+
+            ToolButton {
+                label: "✕"
+                tip: qsTr("Clear the range")
+                enabled: Edit.hasTimeline &&
+                         (Edit.timeline.inPoint >= 0 || Edit.timeline.outPoint >= 0)
+                onClicked: Edit.clearRange()
+            }
+
+            ToolButton {
+                label: "⚑"
+                tip: qsTr("Add a marker (M)")
+                onClicked: Edit.addMarkerAtPlayhead()
+            }
+        }
+
+        // The shuttle rate, when it is not simply playing: an editor racing through at 8x
+        // wants to see that is what is happening.
+        Text {
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.top: parent.top
+            anchors.topMargin: 1
+            visible: Math.abs(Edit.rate) > 1
+            text: Math.abs(Edit.rate) + "×"
+            font.pixelSize: 9
+            color: Theme.c.accent
+        }
+    }
+
     Text {
-        anchors.centerIn: parent
+        anchors.centerIn: output
         visible: !panel.hasClip
         text: Edit.hasTimeline ? qsTr("No clip under the playhead")
                                : qsTr("No timeline open")
@@ -71,25 +238,5 @@ Item {
         color: Theme.c.textMuted
     }
 
-    Rectangle {
-        anchors.left: parent.left
-        anchors.bottom: parent.bottom
-        anchors.margins: 8
-        radius: 2
-        visible: Edit.hasTimeline
-        color: Theme.c.panelBackground
-        opacity: 0.82
-        width: stamp.implicitWidth + 10
-        height: stamp.implicitHeight + 6
 
-        Text {
-            id: stamp
-
-            anchors.centerIn: parent
-            text: Edit.hasTimeline ? Edit.timecode(Edit.timeline.playhead) : ""
-            font.pixelSize: 11
-            font.family: "monospace"
-            color: Theme.c.text
-        }
-    }
 }

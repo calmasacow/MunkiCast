@@ -40,6 +40,34 @@ enum class TrackKind : std::uint8_t {
 [[nodiscard]] std::string_view to_string(TrackKind k);
 [[nodiscard]] std::optional<TrackKind> track_kind_from_string(std::string_view s);
 
+/// How one clip becomes the next at a cut.
+///
+/// Held on the clip whose *head* it is, rather than as an object between two clips. A
+/// transition is a property of an edit point, and an edit point is where a clip begins; keeping
+/// it here means trimming, moving or deleting a clip carries or discards its transition without
+/// a second structure having to be kept in step.
+enum class TransitionKind : std::uint8_t {
+    /// A hard cut: the absence of a transition, stored so a clip can say so explicitly.
+    Cut,
+    CrossDissolve,
+    DipToBlack,
+    /// The incoming clip slides over the outgoing one.
+    Push,
+};
+
+[[nodiscard]] std::string_view to_string(TransitionKind k);
+[[nodiscard]] std::optional<TransitionKind> transition_kind_from_string(std::string_view s);
+
+struct Transition {
+    TransitionKind kind = TransitionKind::Cut;
+    /// How long it runs, in timeline frames, centred on the cut. Zero is a hard cut.
+    Frame duration = 0;
+
+    [[nodiscard]] bool real() const { return kind != TransitionKind::Cut && duration > 0; }
+
+    friend bool operator==(const Transition&, const Transition&) = default;
+};
+
 /// One clip on a track: a window onto a media file, placed at a point in time.
 ///
 /// `source_in` is where the window opens in the *media*, `start` where it lands on the
@@ -67,6 +95,16 @@ struct Clip {
     /// Shown on the clip rather than derived from the asset, so a renamed asset does not
     /// silently relabel an edit that has been reviewed.
     std::string name;
+    /// How this clip arrives. See `Transition`: it belongs to the head of the clip.
+    Transition transition;
+    /// Whether this clip carries effects, for the badge the timeline draws.
+    ///
+    /// A flag rather than a list, because this build has no clip effects to hold. It exists so
+    /// that the thing an editor reads off a timeline -- "this shot has been worked on" -- is in
+    /// the document rather than invented by the panel.
+    ///
+    /// ponytail: becomes `std::vector<Effect>` when the Edit tab grows an effects panel.
+    bool has_effects = false;
 
     [[nodiscard]] Frame end() const { return start + duration; }
     /// The media frame shown at timeline frame `at`, which is only meaningful inside the clip.
@@ -89,6 +127,14 @@ struct Track {
     bool enabled = true;
     /// A locked track refuses every edit, which is what stops a finished layer being nudged.
     bool locked = false;
+    /// Silenced. Separate from `enabled`, which is the picture: an audio track can be muted
+    /// while still being edited, and a video track hidden while its audio plays.
+    bool muted = false;
+    /// Soloed. While any track is soloed, the tracks that are not are silent -- the state is
+    /// per track so that several can be soloed together, which is how a mix is checked.
+    bool solo = false;
+    /// Track gain in dB, applied over each clip's own.
+    double gain_db = 0.0;
     /// Clips, sorted by `start`. `Timeline::validate` enforces both the order and the gaps.
     std::vector<Clip> clips;
 
@@ -131,6 +177,13 @@ struct Timeline {
     /// `out` exclusive, which is the convention every edit operation here uses.
     std::optional<Frame> in_point;
     std::optional<Frame> out_point;
+    /// The mix's output level in dB, over every track's own gain.
+    double master_gain_db = 0.0;
+
+    /// Whether any track is soloed, which is what makes the others silent.
+    [[nodiscard]] bool any_solo() const;
+    /// Whether this track is heard, accounting for mute and for anything soloed.
+    [[nodiscard]] bool audible(const Track& track) const;
 
     [[nodiscard]] const Track* track(const Id& wanted) const;
     [[nodiscard]] Track* track(const Id& wanted);

@@ -57,7 +57,16 @@ Item {
                 readonly property string label: strip.titles[index] ?? ""
                 readonly property bool isActive: index === strip.activeTab
 
-                width: labelText.implicitWidth + (isActive ? 36 : 18)
+                /// A tab too narrow to carry its name shows a handle instead.
+                ///
+                /// A tools strip is one column of square buttons, so the panel is about as wide
+                /// as a scrollbar. Its tab has to stay -- it is how the panel is focused,
+                /// dragged and dropped -- but the word on it has nowhere to go, and a label
+                /// that cannot fit is what was forcing the panel wider than its contents need.
+                readonly property bool handleOnly: strip.width < labelText.implicitWidth + 24
+
+                width: tab.handleOnly ? Math.max(strip.width - 6, 10)
+                                      : labelText.implicitWidth + (isActive ? 36 : 18)
                 height: 22
                 radius: 2
                 color: isActive ? Theme.c.panelHeaderActive
@@ -78,10 +87,37 @@ Item {
                     anchors.left: parent.left
                     anchors.leftMargin: 9
                     anchors.verticalCenter: parent.verticalCenter
+                    visible: !tab.handleOnly
                     text: tab.label
                     font.pixelSize: 12
                     font.weight: tab.isActive ? Font.DemiBold : Font.Normal
                     color: tab.isActive ? Theme.c.text : Theme.c.textMuted
+                }
+
+                // The handle: three dots, the same mark the dividers use for "this can be
+                // dragged". The name is still in the tooltip, which is where it is looked for
+                // once a panel is too narrow to say it.
+                Row {
+                    anchors.centerIn: parent
+                    visible: tab.handleOnly
+                    spacing: 2
+
+                    Repeater {
+                        model: 3
+
+                        delegate: Rectangle {
+                            width: 2
+                            height: 2
+                            radius: 1
+                            color: tab.isActive ? Theme.c.text : Theme.c.textMuted
+                        }
+                    }
+                }
+
+                ToolTipText {
+                    text: tab.label
+                    visible: tab.handleOnly && tabMouse.containsMouse
+                    hoverArea: tabMouse
                 }
 
                 MouseArea {

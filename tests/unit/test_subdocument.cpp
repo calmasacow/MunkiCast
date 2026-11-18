@@ -224,6 +224,94 @@ LTEST_CASE(a_batch_that_fails_part_way_changes_nothing) {
     CHECK(f.timeline == before);
 }
 
+LTEST_CASE(a_transition_needs_a_clip_butted_up_against_the_one_it_opens) {
+    Fixture f;
+    // B starts at 200 and A ends at 100, so there is a gap: nothing to dissolve from.
+    CHECK(!apply(f.timeline,
+                 SetTransition{f.track, f.clip_b, Transition{TransitionKind::CrossDissolve, 12}})
+               .has_value());
+
+    // Butt them together and it is allowed.
+    REQUIRE(apply(f.timeline, MoveClip{f.track, f.clip_b, 100, Id{}}).has_value());
+    const auto applied = apply(
+        f.timeline, SetTransition{f.track, f.clip_b, Transition{TransitionKind::CrossDissolve, 12}});
+    REQUIRE_MSG(applied.has_value(), "{}", applied.error());
+    CHECK_EQ(f.timeline.track(f.track)->clip(f.clip_b)->transition.duration, Frame{12});
+    CHECK(!f.timeline.validate().has_value());
+
+    // And never longer than either clip it joins.
+    CHECK(!apply(f.timeline,
+                 SetTransition{f.track, f.clip_b, Transition{TransitionKind::DipToBlack, 500}})
+               .has_value());
+}
+
+LTEST_CASE(solo_silences_every_audio_track_that_is_not_soloed) {
+    Timeline t;
+    t.id = Id::generate();
+    t.name = "Mix";
+
+    Track a;
+    a.id = Id::generate();
+    a.name = "A1";
+    a.kind = TrackKind::Audio;
+    Track b;
+    b.id = Id::generate();
+    b.name = "A2";
+    b.kind = TrackKind::Audio;
+    t.tracks = {a, b};
+
+    // Nothing soloed: everything is heard.
+    CHECK(!t.any_solo());
+    CHECK(t.audible(t.tracks[0]));
+    CHECK(t.audible(t.tracks[1]));
+
+    t.tracks[0].solo = true;
+    CHECK(t.any_solo());
+    CHECK(t.audible(t.tracks[0]));
+    CHECK(!t.audible(t.tracks[1]));
+
+    // Two soloed together, which is how a pair is checked against each other.
+    t.tracks[1].solo = true;
+    CHECK(t.audible(t.tracks[0]));
+    CHECK(t.audible(t.tracks[1]));
+
+    // Mute wins over solo on the same track: it is the more explicit instruction.
+    t.tracks[0].muted = true;
+    CHECK(!t.audible(t.tracks[0]));
+}
+
+LTEST_CASE(track_audio_and_the_mix_level_round_trip_and_reverse) {
+    Fixture f;
+    const Timeline original = f.timeline;
+    TimelineHistory history{f.timeline};
+
+    REQUIRE(history.run(SetTrack{f.track, "V1", true, false, true, true, -6.0}).has_value());
+    const Track* track = history.document().track(f.track);
+    CHECK(track->muted);
+    CHECK(track->solo);
+    CHECK_EQ(track->gain_db, -6.0);
+
+    REQUIRE(history.run(SetMasterGain{-3.0}).has_value());
+    CHECK_EQ(history.document().master_gain_db, -3.0);
+
+    while (history.can_undo())
+        REQUIRE(history.undo().has_value());
+    CHECK(history.document() == original);
+
+    // And through a file, with the transition that the fixture's clips can hold.
+    REQUIRE(apply(f.timeline, MoveClip{f.track, f.clip_b, 100, Id{}}).has_value());
+    REQUIRE(apply(f.timeline,
+                  SetTransition{f.track, f.clip_b, Transition{TransitionKind::Push, 8}})
+                .has_value());
+    f.timeline.master_gain_db = -4.5;
+    f.timeline.tracks[0].gain_db = 2.0;
+    f.timeline.tracks[0].muted = true;
+
+    const auto read = timeline_from_json(timeline_to_json(f.timeline, 1));
+    REQUIRE_MSG(read.has_value(), "{}", read.error());
+    CHECK(read->document == f.timeline);
+}
+
 // ---- graphics ---------------------------------------------------------------------------------
 
 LTEST_CASE(a_channel_interpolates_between_its_keyframes_and_holds_at_the_ends) {

@@ -198,8 +198,14 @@ Media::~Media() {
         running_->kill();
         running_->waitForFinished(2000);
     }
+    // The prober may be inside an ffprobe run, where `quit()` is not seen until it returns.
+    // `~QThread` aborts the process if its wait times out, so interrupt first and fall back to
+    // terminating rather than taking the whole application down on the way out.
+    prober_.requestInterruption();
     prober_.quit();
-    prober_.wait(5000);
+    if (!prober_.wait(5000))
+        prober_.terminate();
+    prober_.wait(1000);
 }
 
 int Media::rowCount(const QModelIndex& parent) const {

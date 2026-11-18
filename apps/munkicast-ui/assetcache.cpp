@@ -90,6 +90,18 @@ Probe probe_asset(const QString& path) {
     if (!probe.waitForFinished(15000) || probe.exitStatus() != QProcess::NormalExit ||
         probe.exitCode() != 0)
         return {};
+
+    // Whether the file has sound, which `-select_streams v:0` above cannot say. A second,
+    // cheap run rather than parsing a full stream listing: the answer is one word.
+    QProcess audio;
+    audio.start(QStringLiteral("ffprobe"),
+                {QStringLiteral("-v"), QStringLiteral("error"),
+                 QStringLiteral("-select_streams"), QStringLiteral("a:0"),
+                 QStringLiteral("-show_entries"), QStringLiteral("stream=codec_name"),
+                 QStringLiteral("-of"), QStringLiteral("default=nw=1:nk=1"), path});
+    QString audio_codec;
+    if (audio.waitForFinished(15000) && audio.exitCode() == 0)
+        audio_codec = QString::fromUtf8(audio.readAllStandardOutput()).trimmed();
     Probe found;
     int width = 0;
     int height = 0;
@@ -114,6 +126,7 @@ Probe probe_asset(const QString& path) {
     // Reported as found, including a still's dimensions. Whether that makes it something to
     // re-encode is `recipe_for`'s question, and it asks about the duration.
     found.size = QSize(width, height);
+    found.audio_codec = audio_codec;
     return found;
 }
 

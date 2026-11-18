@@ -4,14 +4,19 @@
 #include "edit.hpp"
 
 #include "assetcache.hpp"
+#include "clipart.hpp"
 #include "document.hpp"
 
+#include <QDateTime>
 #include <QFileInfo>
+#include <QTimer>
 
 #include <ldoc/json.hpp>
 #include <ldoc/project_io.hpp>
 
 #include <algorithm>
+#include <cmath>
+#include <format>
 
 namespace munkicast::ui {
 namespace {
@@ -34,6 +39,11 @@ QVariantMap clip_map(const ldoc::Clip& clip) {
         {QStringLiteral("duration"), static_cast<qlonglong>(clip.duration)},
         {QStringLiteral("sourceIn"), static_cast<qlonglong>(clip.source_in)},
         {QStringLiteral("gainDb"), clip.gain_db},
+        {QStringLiteral("hasEffects"), clip.has_effects},
+        {QStringLiteral("transition"),
+         QString::fromStdString(std::string{to_string(clip.transition.kind)})},
+        {QStringLiteral("transitionFrames"),
+         static_cast<qlonglong>(clip.transition.real() ? clip.transition.duration : 0)},
     };
 }
 
@@ -45,6 +55,7 @@ Edit* Edit::create(QQmlEngine* engine, QJSEngine*) {
         // Asking the engine for it creates it if it does not exist yet, so the order these
         // singletons are first touched in does not matter.
         e->document_ = engine->singletonInstance<Document*>("MunkiCast", "Document");
+        e->art_ = engine->singletonInstance<ClipArt*>("MunkiCast", "ClipArt");
         if (e->document_) {
             connect(e->document_, &Document::projectOpened, e, [e](const QString& dir) {
                 e->setProject(dir.isEmpty() ? std::filesystem::path{}
@@ -88,6 +99,10 @@ QVariantMap Edit::timeline() const {
             {QStringLiteral("kind"), QString::fromStdString(std::string{to_string(track.kind)})},
             {QStringLiteral("enabled"), track.enabled},
             {QStringLiteral("locked"), track.locked},
+            {QStringLiteral("muted"), track.muted},
+            {QStringLiteral("solo"), track.solo},
+            {QStringLiteral("gainDb"), track.gain_db},
+            {QStringLiteral("audible"), t.audible(track)},
             {QStringLiteral("clips"), clips},
         });
     }
@@ -116,6 +131,7 @@ QVariantMap Edit::timeline() const {
          t.out_point ? static_cast<qlonglong>(*t.out_point) : qlonglong{-1}},
         {QStringLiteral("tracks"), tracks},
         {QStringLiteral("markers"), markers},
+        {QStringLiteral("masterGainDb"), t.master_gain_db},
     };
 }
 
@@ -379,6 +395,24 @@ QVariantMap Edit::clipAt(const QString& trackId, int frame) const {
     return clip ? clip_map(*clip) : QVariantMap{};
 }
 
+QString Edit::clipArt(const QString& source, bool audio) const {
+    if (source.isEmpty())
+        return {};
+    // Asking is also what queues the build, so a clip that scrolls into view starts its own
+    // artwork. Both calls are cheap once it is cached.
+    art_->request(source, audio);
+    return art_->source(source, audio);
+}
+
+int Edit::sourceFrames(const QString& source) const {
+    const ldoc::TimelineHistory* h = history();
+    if (!h || !art_ || source.isEmpty())
+        return 0;
+    const double seconds = art_->duration(source);
+    const double fps = h->document().fps.hz();
+    return seconds > 0.0 && fps > 0.0 ? static_cast<int>(seconds * fps) : 0;
+}
+
 void Edit::selectClip(const QString& trackId, const QString& clipId) {
     selected_track_ = from_qt(trackId);
     selected_clip_ = from_qt(clipId);
@@ -455,7 +489,7 @@ void Edit::setClipGain(double db) {
     if (!clip)
         return;
     // SetClip carries the whole value, so the name has to come along or it would be cleared.
-    run(ldoc::SetClip{selected_track_, selected_clip_, clip->name, db});
+    run(ldoc::SetClip{selected_track_, selected_clip_, clip->name, db, clip->has_effects});
 }
 
 QVariantMap Edit::clipUnderPlayheadMap() const {
@@ -482,25 +516,410 @@ QVariantMap Edit::clipUnderPlayheadMap() const {
     return {};
 }
 
+// ---- track headers -----------------------------------------------------------------------
+
+void Edit::toggleTrack(const QString& trackId, const QString& flag) {
+    const ldoc::TimelineHistory* h = history();
+    if (!h)
+        return;
+    const ldoc::Track* track = h->document().track(from_qt(trackId));
+    if (!track)
+        return;
+
+    // SetTrack carries the whole value, so every field starts from the current one: a setter
+    // that forgot a field would quietly reset it.
+    ldoc::SetTrack edit{track->id,    track->name, track->enabled,
+                        track->locked, track->muted, track->solo, track->gain_db};
+    if (flag == QLatin1String("enabled"))
+        edit.enabled = !track->enabled;
+    else if (flag == QLatin1String("locked"))
+        edit.locked = !track->locked;
+    else if (flag == QLatin1String("muted"))
+        edit.muted = !track->muted;
+    else if (flag == QLatin1String("solo"))
+        edit.solo = !track->solo;
+    else
+        return;
+    run(edit);
+}
+
+void Edit::setTrackGain(const QString& trackId, double db) {
+    const ldoc::TimelineHistory* h = history();
+    if (!h)
+        return;
+    const ldoc::Track* track = h->document().track(from_qt(trackId));
+    if (!track)
+        return;
+    run(ldoc::SetTrack{track->id, track->name, track->enabled, track->locked, track->muted,
+                       track->solo, db},
+        QStringLiteral("track.gain:%1").arg(trackId));
+}
+
+void Edit::renameTrack(const QString& trackId, const QString& name) {
+    const ldoc::TimelineHistory* h = history();
+    if (!h || name.trimmed().isEmpty())
+        return;
+    const ldoc::Track* track = h->document().track(from_qt(trackId));
+    if (!track)
+        return;
+    run(ldoc::SetTrack{track->id, name.trimmed().toStdString(), track->enabled, track->locked,
+                       track->muted, track->solo, track->gain_db});
+}
+
+void Edit::removeTrack(const QString& trackId) {
+    const ldoc::Id id = from_qt(trackId);
+    if (id == selected_track_) {
+        selected_clip_ = {};
+        selected_track_ = {};
+        emit selectionChanged();
+    }
+    run(ldoc::RemoveTrack{id});
+}
+
+void Edit::setMasterGain(double db) {
+    run(ldoc::SetMasterGain{db}, QStringLiteral("timeline.master"));
+}
+
+double Edit::masterGain() const {
+    const ldoc::TimelineHistory* h = history();
+    return h ? h->document().master_gain_db : 0.0;
+}
+
+// ---- edit operations ---------------------------------------------------------------------
+
+void Edit::trimSelectedClip(int frame, bool head) {
+    const ldoc::TimelineHistory* h = history();
+    if (!h || selected_clip_.is_nil())
+        return;
+    const ldoc::Track* track = h->document().track(selected_track_);
+    const ldoc::Clip* clip = track ? track->clip(selected_clip_) : nullptr;
+    if (!clip)
+        return;
+
+    ldoc::TrimClip edit{selected_track_, selected_clip_, clip->start, clip->duration,
+                        clip->source_in};
+    if (head) {
+        // The media window moves with the edge, so the picture under the cursor stays still
+        // rather than sliding as the clip is trimmed.
+        const ldoc::Frame at = std::clamp<ldoc::Frame>(frame, 0, clip->end() - 1);
+        const ldoc::Frame delta = at - clip->start;
+        if (clip->source_in + delta < 0)
+            return;
+        edit.start = at;
+        edit.duration = clip->end() - at;
+        edit.source_in = clip->source_in + delta;
+    } else {
+        const ldoc::Frame at = std::max<ldoc::Frame>(frame, clip->start + 1);
+        edit.duration = at - clip->start;
+    }
+    run(edit, QStringLiteral("clip.trim:%1").arg(to_qt(selected_clip_)));
+}
+
+void Edit::rippleDeleteSelectedClip() {
+    const ldoc::TimelineHistory* h = history();
+    if (!h || selected_clip_.is_nil())
+        return;
+    const ldoc::Track* track = h->document().track(selected_track_);
+    const ldoc::Clip* clip = track ? track->clip(selected_clip_) : nullptr;
+    if (!clip)
+        return;
+
+    // Remove, then pull everything after it back by its length. One batch, so it is one undo
+    // step: an operator who ripples a clip out means the whole move, not half of it.
+    const ldoc::Frame gap = clip->duration;
+    const ldoc::Frame from = clip->start;
+    std::vector<ldoc::TimelineCommand> steps{ldoc::RemoveClip{selected_track_, selected_clip_}};
+    for (const ldoc::Clip& later : track->clips) {
+        if (later.start > from)
+            steps.push_back(ldoc::MoveClip{selected_track_, later.id, later.start - gap,
+                                           ldoc::Id{}});
+    }
+    const std::string name = clip->name;
+    selected_clip_ = {};
+    emit selectionChanged();
+    run(ldoc::make_timeline_batch(std::move(steps), std::format("Ripple delete '{}'", name)));
+}
+
+void Edit::slipSelectedClip(int byFrames) {
+    const ldoc::TimelineHistory* h = history();
+    if (!h || selected_clip_.is_nil() || byFrames == 0)
+        return;
+    const ldoc::Track* track = h->document().track(selected_track_);
+    const ldoc::Clip* clip = track ? track->clip(selected_clip_) : nullptr;
+    if (!clip)
+        return;
+    // The clip stays where it is and shows different media: start and duration are untouched,
+    // only the window into the file moves.
+    const ldoc::Frame source_in = clip->source_in + byFrames;
+    if (source_in < 0)
+        return;
+    run(ldoc::TrimClip{selected_track_, selected_clip_, clip->start, clip->duration, source_in},
+        QStringLiteral("clip.slip:%1").arg(to_qt(selected_clip_)));
+}
+
+void Edit::razorAtPlayhead() {
+    const ldoc::TimelineHistory* h = history();
+    if (!h)
+        return;
+    const ldoc::Frame at = h->document().playhead;
+
+    // Every unlocked track at once, which is what a razor across a sequence means. One batch,
+    // so the whole cut is one undo step.
+    std::vector<ldoc::TimelineCommand> steps;
+    for (const ldoc::Track& track : h->document().tracks) {
+        if (track.locked)
+            continue;
+        const ldoc::Clip* clip = track.clip_at(at);
+        if (!clip || clip->start == at)
+            continue;
+        steps.push_back(ldoc::SplitClip{track.id, clip->id, at, ldoc::Id::generate()});
+    }
+    if (steps.empty()) {
+        emit notice(tr("There is nothing to cut at the playhead."));
+        return;
+    }
+    run(ldoc::make_timeline_batch(std::move(steps), "Cut at the playhead"));
+}
+
+void Edit::setTransition(const QString& kind, int frames) {
+    if (selected_clip_.is_nil())
+        return;
+    const auto parsed = ldoc::transition_kind_from_string(kind.toStdString());
+    if (!parsed) {
+        emit notice(tr("There is no transition called '%1'.").arg(kind));
+        return;
+    }
+    run(ldoc::SetTransition{selected_track_, selected_clip_,
+                            ldoc::Transition{*parsed, std::max(0, frames)}});
+}
+
+void Edit::setInPoint() {
+    const ldoc::TimelineHistory* h = history();
+    if (!h)
+        return;
+    const ldoc::Timeline& t = h->document();
+    // An in point at or after the out clears the out rather than being refused: the operator
+    // is marking a new range, and making them clear the old one first is a step for nothing.
+    const auto out = t.out_point && *t.out_point > t.playhead ? t.out_point
+                                                              : std::optional<ldoc::Frame>{};
+    run(ldoc::SetTimelineRange{t.playhead, out});
+}
+
+void Edit::setOutPoint() {
+    const ldoc::TimelineHistory* h = history();
+    if (!h)
+        return;
+    const ldoc::Timeline& t = h->document();
+    const auto in = t.in_point && *t.in_point < t.playhead ? t.in_point
+                                                           : std::optional<ldoc::Frame>{};
+    run(ldoc::SetTimelineRange{in, t.playhead});
+}
+
+void Edit::clearRange() {
+    run(ldoc::SetTimelineRange{std::nullopt, std::nullopt});
+}
+
+void Edit::addMarkerAtPlayhead() {
+    const ldoc::TimelineHistory* h = history();
+    if (!h)
+        return;
+    ldoc::Marker m;
+    m.id = ldoc::Id::generate();
+    m.at = h->document().playhead;
+    m.name = tr("Marker").toStdString();
+    run(ldoc::AddMarker{std::move(m)});
+}
+
+// ---- transport ---------------------------------------------------------------------------
+
+void Edit::setRate(double rate) {
+    const ldoc::TimelineHistory* h = history();
+    if (!h) {
+        rate_ = 0.0;
+        emit transportChanged();
+        return;
+    }
+    rate_ = rate;
+    if (rate_ == 0.0) {
+        if (transport_)
+            transport_->stop();
+    } else {
+        // Where and when this run started, so the playhead is computed from the clock rather
+        // than accumulated from timer ticks -- which drift, and drift more under load.
+        started_frame_ = h->document().playhead;
+        started_ms_ = QDateTime::currentMSecsSinceEpoch();
+        if (!transport_) {
+            transport_ = new QTimer(this);
+            // Faster than any timeline's frame rate, so the playhead lands on the right frame
+            // rather than on the nearest tick of a coarser timer.
+            transport_->setInterval(8);
+            connect(transport_, &QTimer::timeout, this, &Edit::tick);
+        }
+        transport_->start();
+    }
+    emit transportChanged();
+}
+
+void Edit::tick() {
+    ldoc::TimelineHistory* h = history();
+    if (!h || rate_ == 0.0) {
+        setRate(0.0);
+        return;
+    }
+    const ldoc::Timeline& t = h->document();
+    const double fps = t.fps.hz();
+    if (fps <= 0.0)
+        return;
+
+    const double elapsed = (QDateTime::currentMSecsSinceEpoch() - started_ms_) / 1000.0;
+    auto at = static_cast<ldoc::Frame>(started_frame_ + elapsed * fps * rate_);
+
+    // Playback stops at the end, and at the out point when a range is set: an operator who
+    // marked a range is reviewing it, and running past it is not what they asked for.
+    const ldoc::Frame last = t.out_point ? *t.out_point : t.duration();
+    if (at >= last && rate_ > 0.0) {
+        at = last;
+        setRate(0.0);
+    }
+    const ldoc::Frame first = t.in_point.value_or(0);
+    if (at <= first && rate_ < 0.0) {
+        at = first;
+        setRate(0.0);
+    }
+    setPlayhead(static_cast<int>(std::max<ldoc::Frame>(at, 0)));
+    emit levelsChanged();
+}
+
+void Edit::play() {
+    if (rate_ == 0.0)
+        setRate(1.0);
+}
+
+void Edit::pause() {
+    setRate(0.0);
+}
+
+void Edit::togglePlay() {
+    rate_ == 0.0 ? play() : pause();
+}
+
+void Edit::step(int frames) {
+    const ldoc::TimelineHistory* h = history();
+    if (!h)
+        return;
+    pause();
+    setPlayhead(static_cast<int>(h->document().playhead + frames));
+}
+
+void Edit::shuttle(int direction) {
+    if (direction == 0) {
+        pause();
+        return;
+    }
+    // J and L again go faster, as they do everywhere: 1, 2, 4, 8. Pressing the opposite one
+    // returns to normal speed in that direction rather than slowing through the gears.
+    const double current = rate_;
+    const bool same_way = (current > 0) == (direction > 0) && current != 0.0;
+    const double speed = same_way ? std::min(std::abs(current) * 2.0, 8.0) : 1.0;
+    setRate(speed * (direction > 0 ? 1.0 : -1.0));
+}
+
+void Edit::goToStart() {
+    pause();
+    setPlayhead(0);
+}
+
+void Edit::goToEnd() {
+    const ldoc::TimelineHistory* h = history();
+    if (!h)
+        return;
+    pause();
+    setPlayhead(static_cast<int>(h->document().duration()));
+}
+
+void Edit::stepEdit(bool forward) {
+    const ldoc::TimelineHistory* h = history();
+    if (!h)
+        return;
+    const ldoc::Timeline& t = h->document();
+    const ldoc::Frame at = t.playhead;
+
+    // Every cut on every track, which is what an editor walks between: the nearest one in the
+    // direction asked for, or the end of the sequence.
+    ldoc::Frame best = forward ? t.duration() : 0;
+    bool found = false;
+    for (const ldoc::Track& track : t.tracks) {
+        for (const ldoc::Clip& clip : track.clips) {
+            for (const ldoc::Frame edge : {clip.start, clip.end()}) {
+                if (forward ? (edge > at && (!found || edge < best))
+                            : (edge < at && (!found || edge > best))) {
+                    best = edge;
+                    found = true;
+                }
+            }
+        }
+    }
+    pause();
+    setPlayhead(static_cast<int>(best));
+}
+
+QVariantList Edit::levels() const {
+    const ldoc::TimelineHistory* h = history();
+    if (!h)
+        return {};
+    const ldoc::Timeline& t = h->document();
+
+    QVariantList out;
+    for (const ldoc::Track& track : t.tracks) {
+        if (track.kind != ldoc::TrackKind::Audio)
+            continue;
+        const bool heard = t.audible(track) && rate_ != 0.0;
+        const ldoc::Clip* clip = track.clip_at(t.playhead);
+        // ponytail: the level is what the document says it is, not what the samples are.
+        // There is no audio engine on this tab yet; a meter driven from gain is honest about
+        // routing and mute, and becomes a real meter when playback goes through one.
+        const double db = heard && clip ? t.master_gain_db + track.gain_db + clip->gain_db
+                                        : -60.0;
+        out.append(QVariantMap{{QStringLiteral("track"), to_qt(track.id)},
+                               {QStringLiteral("name"), QString::fromStdString(track.name)},
+                               {QStringLiteral("db"), heard && clip ? db : -60.0},
+                               {QStringLiteral("audible"), t.audible(track)}});
+    }
+    return out;
+}
+
 void Edit::appendToFirstTrack(const QString& path) {
     const ldoc::TimelineHistory* h = history();
     if (!h)
         return;
 
-    // A file with no video stream belongs on an audio track; anything else goes on video. The
-    // probe is the same one the clip length comes from, so this costs nothing extra.
+    // A file with no picture is audio; anything else has a picture. Most recordings have
+    // both, and both halves are laid down together -- a clip whose sound stays behind on the
+    // original file is not what dropping a recording on a timeline means.
     const Probe probed = probe_asset(path);
-    const bool audio_only = probed.size.isEmpty();
-    const auto wanted = audio_only ? ldoc::TrackKind::Audio : ldoc::TrackKind::Video;
+    const bool has_video = !probed.size.isEmpty();
 
+    const ldoc::Track* video = nullptr;
+    const ldoc::Track* audio = nullptr;
     for (const ldoc::Track& track : h->document().tracks) {
-        if (track.kind == wanted && !track.locked) {
-            appendMedia(path, to_qt(track.id));
-            return;
-        }
+        if (track.locked)
+            continue;
+        if (!video && track.kind == ldoc::TrackKind::Video)
+            video = &track;
+        if (!audio && track.kind == ldoc::TrackKind::Audio)
+            audio = &track;
     }
-    emit notice(tr("There is no unlocked %1 track to put that on.")
-                    .arg(audio_only ? tr("audio") : tr("video")));
+
+    if (has_video && video)
+        appendMedia(path, to_qt(video->id));
+    // The audio half only when the file has one: a silent clip on an audio track is a lie
+    // about what is in the edit.
+    if (!probed.audio_codec.isEmpty() && audio)
+        appendMedia(path, to_qt(audio->id));
+
+    if ((has_video && !video) || (!has_video && !audio))
+        emit notice(tr("There is no unlocked %1 track to put that on.")
+                        .arg(has_video ? tr("video") : tr("audio")));
 }
 
 } // namespace munkicast::ui

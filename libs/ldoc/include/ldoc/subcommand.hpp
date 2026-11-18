@@ -48,7 +48,23 @@ struct SetTrack {
     std::string name;
     bool enabled = true;
     bool locked = false;
+    bool muted = false;
+    bool solo = false;
+    double gain_db = 0.0;
     friend bool operator==(const SetTrack&, const SetTrack&) = default;
+};
+
+/// Set the transition into a clip. A `Cut` of zero length removes one.
+struct SetTransition {
+    Id track;
+    Id clip;
+    Transition transition;
+    friend bool operator==(const SetTransition&, const SetTransition&) = default;
+};
+
+struct SetMasterGain {
+    double gain_db = 0.0;
+    friend bool operator==(const SetMasterGain&, const SetMasterGain&) = default;
 };
 
 /// Place a clip on a track. Refused when it would overlap one already there -- the caller trims
@@ -92,6 +108,7 @@ struct SetClip {
     Id clip;
     std::string name;
     double gain_db = 0.0;
+    bool has_effects = false;
     friend bool operator==(const SetClip&, const SetClip&) = default;
 };
 
@@ -145,7 +162,7 @@ struct TimelineBatch {
 using TimelineCommand =
     std::variant<SetTimelineName, AddTrack, RemoveTrack, SetTrack, AddClip, RemoveClip, MoveClip,
                  TrimClip, SetClip, SplitClip, AddMarker, RemoveMarker, SetTimelineRange,
-                 SetTimelineFormat, TimelineBatch>;
+                 SetTimelineFormat, SetTransition, SetMasterGain, TimelineBatch>;
 
 struct TimelineBatchBody {
     std::vector<TimelineCommand> commands;

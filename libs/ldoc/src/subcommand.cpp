@@ -4,6 +4,7 @@
 #include "ldoc/subcommand.hpp"
 
 #include <algorithm>
+#include <cmath>
 #include <format>
 #include <utility>
 
@@ -176,11 +177,16 @@ std::expected<AppliedTo<TimelineCommand>, std::string> apply(Timeline& timeline,
                     return std::unexpected(track.error());
                 if (c.name.empty())
                     return std::unexpected("a track needs a name");
-                SetTrack inverse{c.track, (*track)->name, (*track)->enabled, (*track)->locked};
+                SetTrack inverse{c.track,          (*track)->name,  (*track)->enabled,
+                                 (*track)->locked, (*track)->muted, (*track)->solo,
+                                 (*track)->gain_db};
                 const std::string description = std::format("Change track '{}'", c.name);
                 (*track)->name = c.name;
                 (*track)->enabled = c.enabled;
                 (*track)->locked = c.locked;
+                (*track)->muted = c.muted;
+                (*track)->solo = c.solo;
+                (*track)->gain_db = c.gain_db;
                 return AppliedTo<TimelineCommand>{std::move(inverse), description};
 
             } else if constexpr (std::is_same_v<T, AddClip>) {
@@ -265,10 +271,12 @@ std::expected<AppliedTo<TimelineCommand>, std::string> apply(Timeline& timeline,
                 Clip* clip = (*track)->clip(c.clip);
                 if (!clip)
                     return std::unexpected("there is no such clip on that track");
-                SetClip inverse{c.track, c.clip, clip->name, clip->gain_db};
+                SetClip inverse{c.track, c.clip, clip->name, clip->gain_db,
+                                clip->has_effects};
                 const std::string description = std::format("Change '{}'", c.name);
                 clip->name = c.name;
                 clip->gain_db = c.gain_db;
+                clip->has_effects = c.has_effects;
                 return AppliedTo<TimelineCommand>{std::move(inverse), description};
 
             } else if constexpr (std::is_same_v<T, SplitClip>) {
@@ -360,6 +368,46 @@ std::expected<AppliedTo<TimelineCommand>, std::string> apply(Timeline& timeline,
                 timeline.width = c.width;
                 timeline.height = c.height;
                 return AppliedTo<TimelineCommand>{inverse, description};
+
+            } else if constexpr (std::is_same_v<T, SetTransition>) {
+                auto track = find_track(timeline, c.track);
+                if (!track)
+                    return std::unexpected(track.error());
+                if ((*track)->locked)
+                    return std::unexpected(std::format("track '{}' is locked", (*track)->name));
+                Clip* clip = (*track)->clip(c.clip);
+                if (!clip)
+                    return std::unexpected("there is no such clip on that track");
+                if (c.transition.duration < 0)
+                    return std::unexpected("a transition cannot be shorter than nothing");
+                if (c.transition.real() && c.transition.duration > clip->duration)
+                    return std::unexpected("that transition is longer than the clip it opens");
+                // A transition reaches back into the clip before it, so there has to be one
+                // there: a dissolve at the start of a track has nothing to dissolve from.
+                if (c.transition.real()) {
+                    const auto it = std::ranges::find((*track)->clips, c.clip, &Clip::id);
+                    if (it == (*track)->clips.begin() ||
+                        std::prev(it)->end() != clip->start)
+                        return std::unexpected(
+                            "a transition needs a clip butted up against this one");
+                    if (c.transition.duration > std::prev(it)->duration)
+                        return std::unexpected(
+                            "that transition is longer than the clip before it");
+                }
+                SetTransition inverse{c.track, c.clip, clip->transition};
+                const std::string description =
+                    c.transition.real()
+                        ? std::format("Add {} to '{}'", to_string(c.transition.kind), clip->name)
+                        : std::format("Remove the transition from '{}'", clip->name);
+                clip->transition = c.transition;
+                return AppliedTo<TimelineCommand>{inverse, description};
+
+            } else if constexpr (std::is_same_v<T, SetMasterGain>) {
+                if (!std::isfinite(c.gain_db))
+                    return std::unexpected("that is not a level");
+                SetMasterGain inverse{timeline.master_gain_db};
+                timeline.master_gain_db = c.gain_db;
+                return AppliedTo<TimelineCommand>{inverse, "Set the mix level"};
 
             } else if constexpr (std::is_same_v<T, TimelineBatch>) {
                 if (!c.body)
@@ -572,6 +620,10 @@ std::string_view command_name(const TimelineCommand& command) {
                 return "timeline.setRange";
             else if constexpr (std::is_same_v<T, SetTimelineFormat>)
                 return "timeline.setFormat";
+            else if constexpr (std::is_same_v<T, SetTransition>)
+                return "timeline.setTransition";
+            else if constexpr (std::is_same_v<T, SetMasterGain>)
+                return "timeline.setMasterGain";
             else
                 return "timeline.batch";
         },

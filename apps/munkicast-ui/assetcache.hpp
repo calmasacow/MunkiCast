@@ -62,6 +62,9 @@ struct Recipe {
 struct Probe {
     QSize size;
     QString codec;
+    /// The first audio stream's codec, empty when the file has no sound. What tells a caller
+    /// whether putting this on an audio track would mean anything.
+    QString audio_codec;
     /// Seconds, for turning ffmpeg's progress into a fraction. 0 when unknown.
     double duration = 0.0;
     /// Frames in the stream, 0 when the container does not say. A still is 1.

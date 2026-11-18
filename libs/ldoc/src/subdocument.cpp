@@ -28,6 +28,32 @@ std::optional<TrackKind> track_kind_from_string(std::string_view s) {
     return std::nullopt;
 }
 
+std::string_view to_string(TransitionKind k) {
+    switch (k) {
+    case TransitionKind::Cut:
+        return "cut";
+    case TransitionKind::CrossDissolve:
+        return "cross-dissolve";
+    case TransitionKind::DipToBlack:
+        return "dip-to-black";
+    case TransitionKind::Push:
+        return "push";
+    }
+    return "cut";
+}
+
+std::optional<TransitionKind> transition_kind_from_string(std::string_view s) {
+    if (s == "cut")
+        return TransitionKind::Cut;
+    if (s == "cross-dissolve")
+        return TransitionKind::CrossDissolve;
+    if (s == "dip-to-black")
+        return TransitionKind::DipToBlack;
+    if (s == "push")
+        return TransitionKind::Push;
+    return std::nullopt;
+}
+
 std::string_view to_string(LayerKind k) {
     switch (k) {
     case LayerKind::Rect:
@@ -94,6 +120,20 @@ Frame Timeline::duration() const {
     return longest;
 }
 
+bool Timeline::any_solo() const {
+    return std::ranges::any_of(tracks, [](const Track& t) {
+        return t.kind == TrackKind::Audio && t.solo;
+    });
+}
+
+bool Timeline::audible(const Track& track) const {
+    if (track.muted)
+        return false;
+    // Solo is exclusive: while anything is soloed, everything else is silent. That is what
+    // makes it useful for checking one element against the picture.
+    return !any_solo() || track.solo;
+}
+
 std::optional<std::string> Timeline::validate() const {
     if (!fps.valid())
         return std::format("timeline '{}' has an invalid frame rate ({}/{})", name, fps.num,
@@ -123,6 +163,12 @@ std::optional<std::string> Timeline::validate() const {
             if (c.source_in < 0)
                 return std::format("clip '{}' on track '{}' starts before its media", c.name,
                                    t.name);
+            if (c.transition.duration < 0)
+                return std::format("clip '{}' has a transition of negative length", c.name);
+            // A transition is centred on the cut, so it reaches half its length into the clip
+            // on each side. One longer than the clip it opens has nothing to dissolve from.
+            if (c.transition.real() && c.transition.duration > c.duration)
+                return std::format("the transition into '{}' is longer than the clip", c.name);
             // Order and overlap in one test: a clip starting before the previous one ended is
             // either out of order or on top of it, and neither has a defined picture.
             if (!first && c.start < previous_end)

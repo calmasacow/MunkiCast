@@ -1236,6 +1236,16 @@ Jv enc_clip(const Clip& c) {
     o["duration"] = static_cast<Json::Int64>(c.duration);
     o["source_in"] = static_cast<Json::Int64>(c.source_in);
     o["gain_db"] = c.gain_db;
+    // Only when there is one: a hard cut is the overwhelming majority of edit points, and
+    // writing `"transition": {"kind": "cut"}` on every clip is noise in a file meant to diff.
+    if (c.transition.real()) {
+        Jv t{Json::objectValue};
+        t["kind"] = std::string{to_string(c.transition.kind)};
+        t["duration"] = static_cast<Json::Int64>(c.transition.duration);
+        o["transition"] = t;
+    }
+    if (c.has_effects)
+        o["has_effects"] = true;
     return o;
 }
 
@@ -1246,6 +1256,9 @@ Jv enc_track(const Track& t) {
     o["kind"] = std::string{to_string(t.kind)};
     o["enabled"] = t.enabled;
     o["locked"] = t.locked;
+    o["muted"] = t.muted;
+    o["solo"] = t.solo;
+    o["gain_db"] = t.gain_db;
     Jv clips{Json::arrayValue};
     for (const Clip& c : t.clips)
         clips.append(enc_clip(c));
@@ -1287,6 +1300,7 @@ std::string timeline_to_json(const Timeline& timeline, std::uint64_t generation)
     root["width"] = timeline.width;
     root["height"] = timeline.height;
     root["playhead"] = static_cast<Json::Int64>(timeline.playhead);
+    root["master_gain_db"] = timeline.master_gain_db;
     if (timeline.in_point)
         root["in_point"] = static_cast<Json::Int64>(*timeline.in_point);
     if (timeline.out_point)
@@ -1358,6 +1372,7 @@ std::expected<SubdocFile<Timeline>, std::string> timeline_from_json(std::string_
     t.width = rd.integer32(*root, "width", "timeline", t.width);
     t.height = rd.integer32(*root, "height", "timeline", t.height);
     t.playhead = rd.integer(*root, "playhead", "timeline", 0);
+    t.master_gain_db = rd.number(*root, "master_gain_db", "timeline", 0.0);
     if (root->isMember("in_point"))
         t.in_point = rd.integer(*root, "in_point", "timeline", 0);
     if (root->isMember("out_point"))
@@ -1372,6 +1387,9 @@ std::expected<SubdocFile<Timeline>, std::string> timeline_from_json(std::string_
                                        TrackKind::Video);
             track.enabled = rd.boolean(tv, "enabled", "track", true);
             track.locked = rd.boolean(tv, "locked", "track", false);
+            track.muted = rd.boolean(tv, "muted", "track", false);
+            track.solo = rd.boolean(tv, "solo", "track", false);
+            track.gain_db = rd.number(tv, "gain_db", "track", 0.0);
             if (const Jv* clips = rd.array(tv, "clips", "track")) {
                 for (const Jv& cv : *clips) {
                     Clip clip;
@@ -1382,6 +1400,13 @@ std::expected<SubdocFile<Timeline>, std::string> timeline_from_json(std::string_
                     clip.duration = rd.integer(cv, "duration", "clip", 0);
                     clip.source_in = rd.integer(cv, "source_in", "clip", 0);
                     clip.gain_db = rd.number(cv, "gain_db", "clip", 0.0);
+                    clip.has_effects = rd.boolean(cv, "has_effects", "clip", false);
+                    if (const Jv* tr = rd.object(cv, "transition", "clip")) {
+                        clip.transition.kind =
+                            rd.enumerated(*tr, "kind", "clip", transition_kind_from_string,
+                                          TransitionKind::Cut);
+                        clip.transition.duration = rd.integer(*tr, "duration", "clip", 0);
+                    }
                     track.clips.push_back(std::move(clip));
                 }
             }

@@ -27,6 +27,8 @@ qt_add_executable(munkicast-ui
     connectors.hpp
     assetcache.cpp
     assetcache.hpp
+    clipart.cpp
+    clipart.hpp
     media.cpp
     media.hpp
     edit.cpp
@@ -123,6 +125,7 @@ qt_add_qml_module(munkicast-ui
         qml/EditBinsPanel.qml
         qml/EditMonitorPanel.qml
         qml/EditPropertiesPanel.qml
+        qml/EditAudioPanel.qml
         qml/EditTimelinePanel.qml
         qml/GraphicsToolsPanel.qml
         qml/GraphicsStagePanel.qml

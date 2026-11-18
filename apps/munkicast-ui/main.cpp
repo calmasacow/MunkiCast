@@ -642,7 +642,8 @@ int main(int argc, char** argv) {
                                   // a document would be caught here as a zero-size body.
                                   "media-tree", "media-player", "media-table", "media-details",
                                   "export-queue", "edit-bins", "edit-program",
-                                  "edit-properties", "edit-timeline", "graphics-tools",
+                                  "edit-properties", "edit-timeline", "edit-audio",
+                                  "graphics-tools",
                                   "graphics-stage", "graphics-properties", "graphics-data",
                                   "graphics-library", "graphics-timeline"}) {
                 workspace.closePanel(QLatin1String(id));
@@ -848,6 +849,30 @@ int main(int argc, char** argv) {
                    "undo on Graphics reverses the graphic's last change");
             report(document->projectName() == QLatin1String("Renamed Show"),
                    "undo on Graphics leaves the show alone");
+
+            // A picture of the Edit tab with something on it, when asked for: the panels
+            // cannot be said to work until someone has looked at them, and an offscreen grab
+            // is the only way this check can look.
+            if (parser.isSet(shot_opt)) {
+                report(select_workspace(QStringLiteral("Edit")), "the Edit tab can be shown");
+                // Something to draw: two clips, a cut between them and a dissolve over it.
+                const QStringList media = parser.value(shot_opt).split(QLatin1Char(','));
+                if (media.size() > 1) {
+                    for (int i = 1; i < media.size(); ++i)
+                        edit->appendToFirstTrack(media[i]);
+                }
+                QDir().mkpath(media.front());
+                // Clip artwork is built off-thread by ffmpeg, so a grab taken a moment after
+                // the clips land catches flat rectangles. Wait for the pictures, with a
+                // ceiling so a machine without ffmpeg still writes a shot rather than hanging.
+                for (int i = 0; i < 480; ++i) {
+                    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+                    QThread::msleep(25);
+                }
+                window->grabWindow().save(media.front() + QStringLiteral("/edit-tab.png"));
+                std::fprintf(stderr, "  .. wrote %s/edit-tab.png\n",
+                             qPrintable(media.front()));
+            }
 
             // The exported overlay is the point of the Graphics tab, so it is checked rather
             // than assumed: a page that was not written is a tab that does not work.

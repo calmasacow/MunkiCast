@@ -69,6 +69,25 @@ Constraints Constraints::studio_defaults() {
     // reverted: it does not fit the default layout's right-hand column, which is 18% of the
     // window, and the engine then water-fills against it and the whole layout stops scaling.
     cs.set("broadcast-stats", PanelMin{200.0, 160.0});
+
+    // A single column of square tool buttons, as every editor's tool strip is. The fallback
+    // minimum is for a panel with a list in it and is seven times wider than this needs, which
+    // left the Graphics stage paying for empty space down its left edge.
+    cs.set("graphics-tools", PanelMin{26.0, 110.0});
+
+    // The timeline's scale is time, and the thing an editor needs most of is time on screen --
+    // but it also carries track headers, so it cannot go below what those need to be read.
+    cs.set("edit-timeline", PanelMin{320.0, 140.0});
+    cs.set("graphics-timeline", PanelMin{260.0, 110.0});
+
+    // Both monitors are pictures: too small is not merely ugly, as with the program canvas.
+    cs.set("edit-program", PanelMin{280.0, 180.0});
+    cs.set("media-player", PanelMin{240.0, 160.0});
+
+    // The media table folds its columns away as it narrows, so it asks only for the name
+    // column and a little else rather than for the full six.
+    cs.set("media-table", PanelMin{220.0, 110.0});
+    cs.set("graphics-stage", PanelMin{240.0, 160.0});
     return cs;
 }
 
@@ -250,7 +269,7 @@ Layout Layout::default_edit() {
     // screen geometry (ADR-0015 rule 4) and "monitor" is one of the banned words. The panel
     // shows the program, which is the better name for it anyway.
     const NodeId monitor = tabs({"edit-program"});
-    const NodeId inspect = tabs({"edit-properties", "edit-effects"});
+    const NodeId inspect = tabs({"edit-properties", "edit-audio", "edit-effects"});
     const NodeId timeline = tabs({"edit-timeline"});
 
     const NodeId upper = split(Axis::Horizontal, {bins, monitor, inspect}, {0.20, 0.60, 0.20});

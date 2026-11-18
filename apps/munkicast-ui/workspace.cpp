@@ -83,6 +83,7 @@ constexpr std::array kKnownPanels = {
     KnownPanel{"edit-properties", "Clip", "Edit"},
     KnownPanel{"edit-effects", "Effects", "Edit"},
     KnownPanel{"edit-timeline", "Timeline", "Edit"},
+    KnownPanel{"edit-audio", "Mix", "Edit"},
 
     // Graphics.
     KnownPanel{"graphics-tools", "Tools", "Graphics"},
@@ -592,10 +593,11 @@ QStringList Workspace::closedPanels() const {
     // Only the panels that belong to the workspace on screen. The Encode tab draws a fixed
     // view rather than a dock tree, so it offers none at all.
     const QString active = activeWorkspaceName();
-    const bool show_workspace = active != QLatin1String("Encode");
-    const bool shows_show_panels = show_workspace && active != QLatin1String("Media") &&
-                                   active != QLatin1String("Edit") &&
-                                   active != QLatin1String("Graphics");
+    // Build, Live, and any arrangement the operator added: the workspaces that run the show.
+    // Encode draws a fixed view with no dock tree, so nothing is reopenable there at all.
+    const bool shows_show_panels =
+        active != QLatin1String("Encode") && active != QLatin1String("Media") &&
+        active != QLatin1String("Edit") && active != QLatin1String("Graphics");
 
     QStringList out;
     for (const KnownPanel& p : kKnownPanels) {
@@ -614,9 +616,10 @@ QStringList Workspace::closedPanels() const {
             }
         }
     }
-    // A browser dock is the operator's own, not a workspace's, so it can be reopened wherever
-    // there is a dock tree to put it in.
-    if (show_workspace) {
+    // Browser docks belong to the show: a chat window or a social feed is something watched
+    // while on air, not while cutting a recording or drawing a lower third. They follow the
+    // same rule as the rest of the show's panels rather than appearing on every tab.
+    if (shows_show_panels) {
         for (const auto& dock : browser_docks_) {
             const auto id = dock.toMap().value("id").toString();
             if (!layout().has_panel(to_std(id)))

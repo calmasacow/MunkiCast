@@ -98,6 +98,8 @@ Item {
                 return editPropertiesComponent;
             case "edit-timeline":
                 return editTimelineComponent;
+            case "edit-audio":
+                return editAudioComponent;
 
             // Graphics.
             case "graphics-tools":
@@ -252,6 +254,12 @@ Item {
         id: editTimelineComponent
 
         EditTimelinePanel {}
+    }
+
+    Component {
+        id: editAudioComponent
+
+        EditAudioPanel {}
     }
 
     Component {

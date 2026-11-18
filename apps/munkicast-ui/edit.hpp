@@ -12,6 +12,8 @@
 
 #include <filesystem>
 
+class QTimer;
+
 namespace munkicast::ui {
 
 /// The Edit workspace: the open timeline, and the edits made to it.
@@ -41,6 +43,12 @@ class Edit : public QObject {
     Q_PROPERTY(QString undoDescription READ undoDescription NOTIFY changed)
     Q_PROPERTY(QString redoDescription READ redoDescription NOTIFY changed)
     Q_PROPERTY(bool dirty READ dirty NOTIFY changed)
+    Q_PROPERTY(bool playing READ playing NOTIFY transportChanged)
+    /// 1 while playing forward at normal speed, negative backwards, 0 stopped.
+    Q_PROPERTY(double rate READ rate NOTIFY transportChanged)
+    /// Per-track audio levels while playing, for the meters. Empty when stopped.
+    Q_PROPERTY(QVariantList levels READ levels NOTIFY levelsChanged)
+    Q_PROPERTY(double masterGain READ masterGain NOTIFY changed)
 
 public:
     /// Created by the QML engine, which is also where it finds `Document`. Asking the engine
@@ -60,6 +68,10 @@ public:
     [[nodiscard]] QString undoDescription() const;
     [[nodiscard]] QString redoDescription() const;
     [[nodiscard]] bool dirty() const;
+    [[nodiscard]] bool playing() const { return rate_ != 0.0; }
+    [[nodiscard]] double rate() const { return rate_; }
+    [[nodiscard]] QVariantList levels() const;
+    [[nodiscard]] double masterGain() const;
 
     /// Make a timeline, add it to the project and open it. Returns its id.
     Q_INVOKABLE QString createTimeline(const QString& name);
@@ -77,6 +89,12 @@ public:
     Q_INVOKABLE void addTrack(const QString& kind);
     /// The clip covering `frame` on that track, or an empty map.
     Q_INVOKABLE QVariantMap clipAt(const QString& trackId, int frame) const;
+    /// Where the artwork for a clip lives, for the timeline to draw into it. Empty until the
+    /// cache has built it, which is why the panel asks again on `ClipArt::ready`.
+    Q_INVOKABLE [[nodiscard]] QString clipArt(const QString& source, bool audio) const;
+    /// How many of *this timeline's* frames the whole media file spans, or 0 until it has been
+    /// looked at. What the panel needs to place artwork under a clip that has been trimmed.
+    Q_INVOKABLE [[nodiscard]] int sourceFrames(const QString& source) const;
     Q_INVOKABLE void selectClip(const QString& trackId, const QString& clipId);
     Q_INVOKABLE void moveSelectedClip(int start);
     Q_INVOKABLE void removeSelectedClip();
@@ -88,6 +106,50 @@ public:
     /// one without. What a double-click in the bins means, where there is no track to name.
     Q_INVOKABLE void appendToFirstTrack(const QString& path);
     Q_INVOKABLE void setClipGain(double db);
+
+    // ---- track headers ------------------------------------------------------------------
+
+    /// Toggle one of a track's flags: "enabled", "locked", "muted", "solo".
+    Q_INVOKABLE void toggleTrack(const QString& trackId, const QString& flag);
+    Q_INVOKABLE void setTrackGain(const QString& trackId, double db);
+    Q_INVOKABLE void renameTrack(const QString& trackId, const QString& name);
+    Q_INVOKABLE void removeTrack(const QString& trackId);
+    Q_INVOKABLE void setMasterGain(double db);
+
+    // ---- edit operations ----------------------------------------------------------------
+
+    /// Trim an edge of the selected clip to a frame. `head` trims its start, moving the media
+    /// window with it; otherwise its end.
+    Q_INVOKABLE void trimSelectedClip(int frame, bool head);
+    /// Remove the selected clip and close the gap it leaves, which is what "ripple" means.
+    Q_INVOKABLE void rippleDeleteSelectedClip();
+    /// Slip the selected clip's media window without moving it on the timeline.
+    Q_INVOKABLE void slipSelectedClip(int byFrames);
+    /// Cut every unlocked track at the playhead, which is what a razor does when nothing is
+    /// selected in particular.
+    Q_INVOKABLE void razorAtPlayhead();
+    /// Put a transition on the selected clip's head. `kind` is "cut", "cross-dissolve",
+    /// "dip-to-black" or "push".
+    Q_INVOKABLE void setTransition(const QString& kind, int frames);
+    Q_INVOKABLE void setInPoint();
+    Q_INVOKABLE void setOutPoint();
+    Q_INVOKABLE void clearRange();
+    Q_INVOKABLE void addMarkerAtPlayhead();
+
+    // ---- transport ----------------------------------------------------------------------
+
+    /// Playback runs the playhead on a timer; the monitor follows it.
+    Q_INVOKABLE void play();
+    Q_INVOKABLE void pause();
+    Q_INVOKABLE void togglePlay();
+    /// Move by whole frames, for the arrow keys and the step buttons.
+    Q_INVOKABLE void step(int frames);
+    /// J-K-L: negative is backwards, 0 stops, and repeated presses multiply the rate.
+    Q_INVOKABLE void shuttle(int direction);
+    Q_INVOKABLE void goToStart();
+    Q_INVOKABLE void goToEnd();
+    /// The next or previous edit point on any track, which is how an editor walks a sequence.
+    Q_INVOKABLE void stepEdit(bool forward);
     /// The clip the playhead is over, with the second of its media that is showing, for the
     /// monitor. Empty when nothing is under it.
     Q_INVOKABLE [[nodiscard]] QVariantMap clipUnderPlayheadMap() const;
@@ -99,6 +161,8 @@ public:
 
 signals:
     void changed();
+    void transportChanged();
+    void levelsChanged();
     void listChanged();
     void selectionChanged();
     void notice(const QString& text);
@@ -120,8 +184,21 @@ private:
     /// can forget to do one of the three.
     void run(const ldoc::TimelineCommand& command, const QString& gesture = {});
 
+    /// Advance the playhead by one tick of playback. Bound to a timer rather than driven by
+    /// the monitor, so the timeline keeps time even where the monitor has nothing to show.
+    void tick();
+    /// Set the rate and start or stop the timer behind it.
+    void setRate(double rate);
+
     class Document* document_ = nullptr;
+    class ClipArt* art_ = nullptr;
     ldoc::Workbench bench_;
+    QTimer* transport_ = nullptr;
+    double rate_ = 0.0;
+    /// When the current playback run started, so the playhead follows the clock rather than
+    /// counting timer ticks -- which drift, and drift differently under load.
+    qint64 started_ms_ = 0;
+    ldoc::Frame started_frame_ = 0;
     ldoc::Id open_;
     ldoc::Id selected_clip_;
     ldoc::Id selected_track_;
