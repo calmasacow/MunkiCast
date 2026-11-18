@@ -12,6 +12,7 @@ Controls.MenuBar {
     objectName: "mainMenu"
     required property var mainWindow
     required property var collectionDialog
+    required property var projectDialog
     property bool statusBarVisible: true
     readonly property bool editable: Document.selectedNode !== "" && !Document.nodeProperties.locked
     // Invokables do not notify bindings. Use revision in control flow here and in checked
@@ -114,12 +115,7 @@ Controls.MenuBar {
         Entry {
             objectName: "menuNewProject"
             text: qsTr("New Project...")
-            onTriggered: {
-                const dir = FileDialog.directory(qsTr("New Project Folder"),
-                                                 Document.openProjectPath);
-                if (dir)
-                    Document.createProject(dir, dir.split("/").pop());
-            }
+            onTriggered: bar.projectDialog.open()
         }
         Entry {
             objectName: "menuOpenProject"

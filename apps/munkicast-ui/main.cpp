@@ -8511,6 +8511,84 @@ int main(int argc, char** argv) {
             }
         }
 
+        // Making a project through its own dialog: a name and a place for it, and the folder
+        // made where those two say. Driven here rather than trusted because the first version
+        // asked only for a location and built the tree inside whatever was picked, which
+        // emptied itself into an existing media folder.
+        {
+            const auto restoreTo = document.projectPath();
+            const auto dialogs = collect(window->contentItem(), QStringLiteral("projectDialog"));
+            report(dialogs.size() == 1, "New Project has one GUI dialog");
+            if (!dialogs.isEmpty()) {
+                auto* dialog = dialogs.front();
+                QTemporaryDir where;
+
+                QMetaObject::invokeMethod(dialog, "open");
+                settle();
+                report(dialog->isVisible(), "the New Project dialog opens");
+                // Nothing filled in: there is nothing to create, and the button says so.
+                report(dialog->property("target").toString().isEmpty(),
+                       "a project with no name and no location has nowhere to go");
+
+                dialog->setProperty("projectName", QStringLiteral("Dialog Check"));
+                dialog->setProperty("location", where.path());
+                settle();
+                const QString target = dialog->property("target").toString();
+                report(target == where.path() + QStringLiteral("/Dialog Check"),
+                       "the project goes in a folder of its own, named after itself");
+
+                const auto buttons = collect(dialog, QStringLiteral("projectAccept"));
+                report(!buttons.isEmpty(), "the dialog has a Create button");
+                if (!buttons.isEmpty()) {
+                    auto* button = buttons.front();
+                    const auto at =
+                        button->mapToScene(QPointF(button->width() / 2, button->height() / 2));
+                    post(QEvent::MouseButtonPress, at, Qt::LeftButton, Qt::LeftButton);
+                    post(QEvent::MouseButtonRelease, at, Qt::LeftButton, Qt::NoButton);
+                    settle();
+                }
+                report(!dialog->isVisible(), "creating a project closes the dialog");
+                report(document.openProjectName() == QLatin1String("Dialog Check") &&
+                           document.openProjectPath() == target,
+                       "the project the dialog named is the one that opens");
+                report(QFileInfo::exists(target + QStringLiteral("/project.munki")) &&
+                           QFileInfo::exists(target + QStringLiteral("/Collections")) &&
+                           QFileInfo::exists(target + QStringLiteral("/Recordings")),
+                       "the tree is made inside the project's own folder");
+                // And it opens ready to work: a project with no collection in it has nothing
+                // for the Live or Build tabs to draw.
+                report(document.projectName() == QLatin1String("Dialog Check") &&
+                           document.projectPath().startsWith(target),
+                       "a new project opens with a scene collection of its own");
+                // The folder that was picked holds the project and nothing else: the tree did
+                // not spill into it.
+                report(!QFileInfo::exists(where.path() + QStringLiteral("/Collections")) &&
+                           !QFileInfo::exists(where.path() + QStringLiteral("/Recordings")),
+                       "nothing is written into the folder that was chosen");
+
+                // A folder with something in it is refused rather than filled.
+                QTemporaryDir busy;
+                QFile occupied(busy.path() + QStringLiteral("/holiday.mp4"));
+                report(occupied.open(QIODevice::WriteOnly) && occupied.write("x") == 1,
+                       "a non-empty folder fixture is written");
+                occupied.close();
+                report(!document.createProject(busy.path(), QStringLiteral("Scattered")),
+                       "a project will not be built inside a folder that already has files");
+                report(!QFileInfo::exists(busy.path() + QStringLiteral("/Collections")),
+                       "and that refusal leaves no half-built tree behind");
+
+                // Put the shell back where it was. Opening a project points the collection
+                // catalogue at that project's folder, and this one's folder is a
+                // QTemporaryDir that is about to be removed -- leaving the catalogue aimed
+                // at a directory that no longer exists, where every later check's save
+                // fails for a reason that has nothing to do with what it is testing.
+                document.useCollectionRoot(
+                    std::filesystem::path(collectionsBase / "collections"));
+                report(document.openCollection(restoreTo),
+                       "the shell returns to the collection it was on");
+            }
+        }
+
         // Reproduce a saved show whose second scene is on air while the first is Preview.
         // Both construction and the GUI collection workflow must align with real Program.
         {

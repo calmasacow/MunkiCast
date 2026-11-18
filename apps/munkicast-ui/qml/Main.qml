@@ -101,6 +101,7 @@ Window {
     }
 
     CollectionDialog { id: collectionEditor }
+    ProjectDialog { id: projectEditor }
 
     // One of these for the whole shell: it shows itself whenever a cache build runs, wherever
     // the build was started -- the Caching menu, a source row's indicator, or Preferences.
@@ -128,6 +129,7 @@ Window {
         anchors.top: parent.top
         mainWindow: root
         collectionDialog: collectionEditor
+        projectDialog: projectEditor
     }
 
     BroadcastBar {

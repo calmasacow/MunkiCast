@@ -123,6 +123,38 @@ LTEST_CASE(making_a_project_where_one_already_is_is_refused) {
     CHECK_EQ(read->name, std::string{"Taken"});
 }
 
+LTEST_CASE(a_project_will_not_be_built_inside_a_folder_that_already_has_files) {
+    // The bug this exists for: "New Project" asked only for a location and built the tree
+    // inside whatever was picked. Choosing an existing media folder scattered Collections,
+    // Recordings and the rest through it, with nothing to undo it. A project owns its folder.
+    TempDir tmp;
+    const fs::path busy = tmp.path / "My Videos";
+    fs::create_directories(busy);
+    std::ofstream{busy / "holiday.mp4"} << "not really a video";
+
+    const auto made = create_project_tree(busy, "Scattered");
+    CHECK(!made.has_value());
+
+    // Nothing was made, including the folders -- a half-built tree left behind would be the
+    // same mess arriving by a different route.
+    CHECK(!fs::exists(busy / "Collections"));
+    CHECK(!fs::exists(busy / "Recordings"));
+    CHECK(!is_project(busy));
+    CHECK(fs::exists(busy / "holiday.mp4"));
+}
+
+LTEST_CASE(an_existing_empty_folder_is_a_fine_place_for_a_project) {
+    // Making the folder first and then the project in it is a normal way to reach this, so
+    // emptiness is the test rather than non-existence.
+    TempDir tmp;
+    const fs::path empty = tmp.path / "Ready And Waiting";
+    fs::create_directories(empty);
+
+    const auto made = create_project_tree(empty, "Ready And Waiting");
+    REQUIRE_MSG(made.has_value(), "{}", made.error());
+    CHECK(is_project(empty));
+}
+
 LTEST_CASE(a_project_from_a_newer_build_is_refused_rather_than_half_read) {
     TempDir tmp;
     const fs::path dir = tmp.path / "From The Future";

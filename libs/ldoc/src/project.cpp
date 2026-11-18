@@ -66,6 +66,19 @@ std::expected<ProjectManifest, std::string> create_project_tree(const fs::path& 
     if (is_project(dir))
         return std::unexpected(std::format("{} is already a project.", dir.string()));
 
+    // And refused on any directory that already holds something. A project owns its folder:
+    // building the tree inside a folder that was already somebody's -- their Videos, say --
+    // scatters Collections and Recordings through it and there is no undo for that. An
+    // existing *empty* directory is fine, because making the folder first and then the
+    // project in it is a normal way to reach this.
+    std::error_code existing;
+    if (fs::is_directory(dir, existing) && !existing &&
+        fs::directory_iterator(dir, existing) != fs::directory_iterator{} && !existing) {
+        return std::unexpected(
+            std::format("{} already has files in it. A project needs a folder of its own.",
+                        dir.string()));
+    }
+
     std::error_code ec;
     fs::create_directories(dir, ec);
     if (ec)

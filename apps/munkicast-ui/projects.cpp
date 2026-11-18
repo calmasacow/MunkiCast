@@ -120,7 +120,15 @@ bool Document::createProject(const QString& path, const QString& name) {
         emit notice(QString::fromStdString(made.error()));
         return false;
     }
-    return openProject(path);
+    if (!openProject(path))
+        return false;
+
+    // A project with no shows in it is a project you cannot do anything in: every panel on
+    // the Live and Build tabs needs a collection to draw. Making the first one here means a
+    // new project opens ready to work rather than opening empty and saying so.
+    if (ldoc::project_collections(fs::path(path.toStdString())).empty())
+        return createCollection(name.trimmed());
+    return true;
 }
 
 bool Document::openProject(const QString& path) {

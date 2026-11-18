@@ -87,6 +87,7 @@ qt_add_qml_module(munkicast-ui
         qml/BroadcastStatsPanel.qml
         qml/CanvasManagerDialog.qml
         qml/CollectionDialog.qml
+        qml/ProjectDialog.qml
         qml/CacheConfirm.qml
         qml/CacheProgressDialog.qml
         qml/CacheStateDialog.qml
