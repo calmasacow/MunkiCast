@@ -865,16 +865,10 @@ int main(int argc, char** argv) {
                         edit->appendToFirstTrack(media[i]);
                 }
                 QDir().mkpath(media.front());
-                // Clip artwork is built off-thread by ffmpeg, so a grab taken a moment after
-                // the clips land catches flat rectangles. Wait for the pictures, with a
-                // ceiling so a machine without ffmpeg still writes a shot rather than hanging.
-                for (int i = 0; i < 480; ++i) {
-                    QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
-                    QThread::msleep(25);
-                }
-                window->grabWindow().save(media.front() + QStringLiteral("/edit-tab.png"));
-                std::fprintf(stderr, "  .. wrote %s/edit-tab.png\n",
-                             qPrintable(media.front()));
+                // The grab itself happens after the pool checks below, which are what make a
+                // project exist. Taken here it caught a shell holding only a scene collection,
+                // so the Media Pool was empty and the picture said the panel was broken when
+                // the check was.
             }
 
             // Clip effects: a real list on the document, not a flag, with its parameters
@@ -1042,6 +1036,26 @@ int main(int argc, char** argv) {
                 report(media->bins().size() == 3, "and the pool is back to its system bins");
                 report(QFileInfo::exists(projectDir + QStringLiteral("/SourceMedia/take one.wav")),
                        "removing a bin does not delete the media it held");
+
+                // Now the picture, with a project open so the Media Pool has its bins and the
+                // timeline has its clips.
+                if (parser.isSet(shot_opt)) {
+                    const QStringList media =
+                        parser.value(shot_opt).split(QLatin1Char(','));
+                    // Clip artwork is built off-thread by ffmpeg, so a grab taken a moment
+                    // after the clips land catches flat rectangles. Wait for the pictures,
+                    // with a ceiling so a machine without ffmpeg still writes a shot rather
+                    // than hanging.
+                    for (int i = 0; i < 480; ++i) {
+                        QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+                        QThread::msleep(25);
+                    }
+                    window->grabWindow().save(media.front() +
+                                              QStringLiteral("/edit-tab.png"));
+                    std::fprintf(stderr, "  .. wrote %s/edit-tab.png\n",
+                                 qPrintable(media.front()));
+                }
+
 
                 // Back to the collection this check started on, before `projectHome` goes.
                 // Leaving the catalogue pointed at a directory about to be removed is what
