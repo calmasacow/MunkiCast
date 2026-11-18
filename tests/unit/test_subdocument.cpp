@@ -674,6 +674,79 @@ LTEST_CASE(an_older_timeline_that_only_says_it_had_effects_keeps_its_badge) {
     CHECK(read->document.tracks.front().clips.front().has_effects());
 }
 
+LTEST_CASE(overwrite_trims_and_splits_what_is_under_it_rather_than_deleting_it) {
+    // EDL record semantics, as every NLE has them. The first version of this removed any
+    // clip the new one overlapped, so laying two seconds over the middle of a five-minute
+    // take deleted the take. That is data loss, and this is the case that catches it.
+    Fixture f;
+    TimelineHistory h{f.timeline};
+    const Id track = f.timeline.tracks.front().id;
+
+    // One long clip, 0..100, and a short one laid over 40..60.
+    {
+        const Track* t = h.document().track(track);
+        REQUIRE(t != nullptr);
+        std::vector<TimelineCommand> clear;
+        for (const Clip& c : t->clips)
+            clear.push_back(RemoveClip{track, c.id});
+        REQUIRE(h.run(make_timeline_batch(std::move(clear), "clear")).has_value());
+    }
+
+    Clip take;
+    take.id = Id::generate();
+    take.source = "/media/take.mov";
+    take.name = "Take";
+    take.start = 0;
+    take.duration = 100;
+    take.source_in = 0;
+    REQUIRE(h.run(AddClip{track, take}).has_value());
+
+    // The three pieces the overwrite makes: head 0..40, the new clip 40..60, tail 60..100.
+    const Id tail = Id::generate();
+    const Id rest = Id::generate();
+    Clip laid;
+    laid.id = Id::generate();
+    laid.source = "/media/insert.mov";
+    laid.name = "Insert";
+    laid.start = 40;
+    laid.duration = 20;
+
+    std::vector<TimelineCommand> steps{
+        SplitClip{track, take.id, 40, tail},
+        SplitClip{track, tail, 60, rest},
+        RemoveClip{track, tail},
+        AddClip{track, laid},
+    };
+    REQUIRE(h.run(make_timeline_batch(std::move(steps), "Overwrite")).has_value());
+
+    const Track* t = h.document().track(track);
+    REQUIRE(t != nullptr);
+    REQUIRE(t->clips.size() == std::size_t{3});
+
+    // The take survives on both sides of what was laid over it.
+    CHECK_EQ(t->clips[0].start, Frame{0});
+    CHECK_EQ(t->clips[0].duration, Frame{40});
+    CHECK_EQ(t->clips[0].source, std::string{"/media/take.mov"});
+
+    CHECK_EQ(t->clips[1].start, Frame{40});
+    CHECK_EQ(t->clips[1].duration, Frame{20});
+    CHECK_EQ(t->clips[1].source, std::string{"/media/insert.mov"});
+
+    CHECK_EQ(t->clips[2].start, Frame{60});
+    CHECK_EQ(t->clips[2].duration, Frame{40});
+    CHECK_EQ(t->clips[2].source, std::string{"/media/take.mov"});
+    // And the tail still shows the right part of the file: frame 60 of the timeline is
+    // frame 60 of the take, not frame 0 of it.
+    CHECK_EQ(t->clips[2].source_in, Frame{60});
+
+    // One undo, because it was one gesture.
+    REQUIRE(h.undo());
+    const Track* back = h.document().track(track);
+    REQUIRE(back != nullptr);
+    REQUIRE(back->clips.size() == std::size_t{1});
+    CHECK_EQ(back->clips.front().duration, Frame{100});
+}
+
 LTEST_CASE(a_timeline_round_trips_through_its_own_file) {
     Fixture f;
     f.timeline.markers.push_back(Marker{Id::generate(), 120, "Chorus", 0x00AAFF});

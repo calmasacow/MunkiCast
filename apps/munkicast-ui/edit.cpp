@@ -468,11 +468,21 @@ QString Edit::clipArt(const QString& source, bool audio) const {
 
 int Edit::sourceFrames(const QString& source) const {
     const ldoc::TimelineHistory* h = history();
-    if (!h || !art_ || source.isEmpty())
+    if (!h || source.isEmpty())
         return 0;
-    const double seconds = art_->duration(source);
     const double fps = h->document().fps.hz();
-    return seconds > 0.0 && fps > 0.0 ? static_cast<int>(seconds * fps) : 0;
+    if (fps <= 0.0)
+        return 0;
+
+    // The artwork pass measures the file as a side effect of drawing it, which is free once
+    // it has run. Until it has, ask ffprobe: a file whose length is not known yet is a file
+    // the Source viewer says is zero frames long, and a zero-length range cannot be marked,
+    // dragged or inserted. That made opening a clip and immediately dragging it impossible
+    // for as long as the thumbnails took.
+    double seconds = art_ ? art_->duration(source) : 0.0;
+    if (seconds <= 0.0)
+        seconds = probe_asset(source).duration;
+    return seconds > 0.0 ? static_cast<int>(seconds * fps) : 0;
 }
 
 void Edit::selectClip(const QString& trackId, const QString& clipId) {
@@ -916,6 +926,72 @@ void Edit::clearSourceRange() {
     emit sourceChanged();
 }
 
+/// Lay a clip onto one track, recording over what is there or pushing it along.
+///
+/// Shared by the Source viewer's insert and overwrite buttons and by a drop onto the
+/// timeline, because they are the same edit reached two ways -- and when they were written
+/// twice, only one of them got the overwrite semantics right.
+std::vector<ldoc::TimelineCommand> Edit::placeOnTrack(const ldoc::Track& track,
+                                                      const QString& path, ldoc::Frame at,
+                                                      ldoc::Frame source_in,
+                                                      ldoc::Frame length, bool overwrite) {
+    std::vector<ldoc::TimelineCommand> steps;
+    if (overwrite) {
+        // EDL record semantics: what is under the new clip is trimmed and split, not
+        // removed. Removing it was the first version of this and it was plain data loss --
+        // laying a two-second clip over the middle of a five-minute take deleted the take.
+        for (const ldoc::Clip& existing : track.clips) {
+            const ldoc::Frame from = existing.start;
+            const ldoc::Frame to = existing.end();
+            if (to <= at || from >= at + length)
+                continue; // untouched
+
+            const bool keeps_head = from < at;
+            const bool keeps_tail = to > at + length;
+
+            if (keeps_head && keeps_tail) {
+                // The new clip lands inside it: cut at both edges and drop the middle.
+                // Split first, so the right-hand piece exists to be split again.
+                const ldoc::Id middle = ldoc::Id::generate();
+                steps.push_back(ldoc::SplitClip{track.id, existing.id, at, middle});
+                const ldoc::Id rest = ldoc::Id::generate();
+                steps.push_back(ldoc::SplitClip{track.id, middle, at + length, rest});
+                steps.push_back(ldoc::RemoveClip{track.id, middle});
+            } else if (keeps_head) {
+                // Overlapped on its tail: shorten it to where the new clip starts.
+                steps.push_back(
+                    ldoc::TrimClip{track.id, existing.id, from, at - from, existing.source_in});
+            } else if (keeps_tail) {
+                // Overlapped on its head: move its start forward, and move the media window
+                // with it so the picture does not slide.
+                const ldoc::Frame cut = at + length;
+                steps.push_back(ldoc::TrimClip{track.id, existing.id, cut, to - cut,
+                                               existing.source_in + (cut - from)});
+            } else {
+                // Covered completely. The only case where a clip goes.
+                steps.push_back(ldoc::RemoveClip{track.id, existing.id});
+            }
+        }
+    } else {
+        // Insert: push everything from here on back by the new clip's length.
+        for (const ldoc::Clip& later : track.clips) {
+            if (later.start >= at)
+                steps.push_back(
+                    ldoc::MoveClip{track.id, later.id, later.start + length, ldoc::Id{}});
+        }
+    }
+
+    ldoc::Clip clip;
+    clip.id = ldoc::Id::generate();
+    clip.source = path.toStdString();
+    clip.name = QFileInfo(path).fileName().toStdString();
+    clip.start = at;
+    clip.duration = length;
+    clip.source_in = source_in;
+    steps.push_back(ldoc::AddClip{track.id, std::move(clip)});
+    return steps;
+}
+
 void Edit::insertSourceRange(bool overwrite) {
     const ldoc::TimelineHistory* h = history();
     if (!h) {
@@ -957,33 +1033,12 @@ void Edit::insertSourceRange(bool overwrite) {
 
     const ldoc::Frame at = t.playhead;
     std::vector<ldoc::TimelineCommand> steps;
-
     const auto lay_down = [&](const ldoc::Track* track) {
         if (!track)
             return;
-        if (overwrite) {
-            // Whatever is under the new clip has to go first: AddClip refuses an overlap, and
-            // silently trimming around one would be a different edit from the one asked for.
-            for (const ldoc::Clip& existing : track->clips) {
-                if (existing.end() > at && existing.start < at + length)
-                    steps.push_back(ldoc::RemoveClip{track->id, existing.id});
-            }
-        } else {
-            // Insert: push everything from the playhead on back by the new clip's length.
-            for (const ldoc::Clip& later : track->clips) {
-                if (later.start >= at)
-                    steps.push_back(ldoc::MoveClip{track->id, later.id, later.start + length,
-                                                   ldoc::Id{}});
-            }
-        }
-        ldoc::Clip clip;
-        clip.id = ldoc::Id::generate();
-        clip.source = source_path_.toStdString();
-        clip.name = QFileInfo(source_path_).fileName().toStdString();
-        clip.start = at;
-        clip.duration = length;
-        clip.source_in = source_in_;
-        steps.push_back(ldoc::AddClip{track->id, std::move(clip)});
+        auto part = placeOnTrack(*track, source_path_, at, source_in_, length, overwrite);
+        steps.insert(steps.end(), std::make_move_iterator(part.begin()),
+                     std::make_move_iterator(part.end()));
     };
 
     if (has_video)
@@ -999,6 +1054,116 @@ void Edit::insertSourceRange(bool overwrite) {
         std::move(steps),
         std::format("{} '{}'", overwrite ? "Overwrite" : "Insert",
                     QFileInfo(source_path_).fileName().toStdString())));
+}
+
+QVariantMap Edit::dragPayload() const {
+    if (drag_path_.isEmpty())
+        return {};
+    return QVariantMap{
+        {QStringLiteral("path"), drag_path_},
+        {QStringLiteral("name"), QFileInfo(drag_path_).fileName()},
+        {QStringLiteral("frames"), static_cast<qlonglong>(drag_out_ - drag_in_)},
+        {QStringLiteral("video"), drag_video_},
+        {QStringLiteral("audio"), drag_audio_},
+    };
+}
+
+void Edit::beginSourceDrag(bool video, bool audio) {
+    if (source_path_.isEmpty())
+        return;
+    const int frames = sourceFrames(source_path_);
+    const ldoc::Frame out = source_out_ > source_in_ ? source_out_ : frames;
+    if (out <= source_in_)
+        return;
+
+    const Probe probed = probe_asset(source_path_);
+    // Only offer the halves the file actually has: dragging "audio only" from a silent file
+    // would put an empty clip on an audio track, which is a lie about what is in the edit.
+    const bool wants_video = video && !probed.size.isEmpty();
+    const bool wants_audio = audio && !probed.audio_codec.isEmpty();
+    if (!wants_video && !wants_audio)
+        return;
+
+    // Snapshotted now, not read at the drop: an operator who nudges the in point mid-drag
+    // means to place what they picked up.
+    drag_path_ = source_path_;
+    drag_in_ = source_in_;
+    drag_out_ = out;
+    drag_video_ = wants_video;
+    drag_audio_ = wants_audio;
+    emit dragPayloadChanged();
+}
+
+void Edit::cancelSourceDrag() {
+    if (drag_path_.isEmpty())
+        return;
+    drag_path_.clear();
+    drag_video_ = false;
+    drag_audio_ = false;
+    emit dragPayloadChanged();
+}
+
+bool Edit::dropOnTimeline(const QString& trackId, int frame, bool overwrite) {
+    const ldoc::TimelineHistory* h = history();
+    if (!h || drag_path_.isEmpty())
+        return false;
+
+    const ldoc::Timeline& t = h->document();
+    const ldoc::Track* dropped_on = t.track(from_qt(trackId));
+    if (!dropped_on) {
+        cancelSourceDrag();
+        return false;
+    }
+    if (dropped_on->locked) {
+        emit notice(tr("Track '%1' is locked.")
+                        .arg(QString::fromStdString(dropped_on->name)));
+        cancelSourceDrag();
+        return false;
+    }
+
+    const ldoc::Frame at = std::max<ldoc::Frame>(0, frame);
+    const ldoc::Frame length = drag_out_ - drag_in_;
+
+    // The track it was dropped on takes its own half; the other half goes to the first
+    // unlocked track of the other kind. Dropping video onto V2 and having its audio appear
+    // on A1 is what every editor expects, and leaving the sound behind is not.
+    const bool dropped_video = dropped_on->kind == ldoc::TrackKind::Video;
+    const ldoc::Track* other = nullptr;
+    if ((dropped_video && drag_audio_ && drag_video_) ||
+        (!dropped_video && drag_video_ && drag_audio_)) {
+        for (const ldoc::Track& track : t.tracks) {
+            if (track.locked || track.kind == dropped_on->kind)
+                continue;
+            other = &track;
+            break;
+        }
+    }
+
+    std::vector<ldoc::TimelineCommand> steps;
+    const auto lay_down = [&](const ldoc::Track* track) {
+        if (!track)
+            return;
+        auto part = placeOnTrack(*track, drag_path_, at, drag_in_, length, overwrite);
+        steps.insert(steps.end(), std::make_move_iterator(part.begin()),
+                     std::make_move_iterator(part.end()));
+    };
+
+    // Only lay on the track under the pointer when that kind was being dragged at all.
+    if ((dropped_video && drag_video_) || (!dropped_video && drag_audio_))
+        lay_down(dropped_on);
+    lay_down(other);
+
+    const QString name = QFileInfo(drag_path_).fileName();
+    cancelSourceDrag();
+    if (steps.empty()) {
+        emit notice(tr("That cannot go on a %1 track.")
+                        .arg(dropped_video ? tr("video") : tr("audio")));
+        return false;
+    }
+    run(ldoc::make_timeline_batch(std::move(steps),
+                                  std::format("{} '{}'", overwrite ? "Overwrite" : "Insert",
+                                              name.toStdString())));
+    return true;
 }
 
 void Edit::addClipEffect(const QString& type) {

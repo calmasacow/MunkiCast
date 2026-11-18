@@ -352,6 +352,15 @@ Item {
 
                     anchors.fill: parent
                     hoverEnabled: true
+                    // Dragged onto the Source viewer, which is how a clip is auditioned
+                    // before any of it is used. The payload is the file; the Source viewer
+                    // is what decides which part of it goes anywhere.
+                    drag.target: gridGhost
+                    onPressed: {
+                        gridGhost.path = gtile.path;
+                        gridGhost.label = gtile.name;
+                    }
+                    onReleased: gridGhost.drop()
                     onClicked: Edit.openSource(gtile.path)
                     onDoubleClicked: {
                         if (!Edit.hasTimeline)
@@ -360,9 +369,13 @@ Item {
                     }
                 }
 
+                PoolDragGhost {
+                    id: gridGhost
+                }
+
                 ToolTipText {
-                    text: qsTr("Click to open in the Source viewer, double-click to append")
-                    visible: gridMouse.containsMouse
+                    text: qsTr("Click or drag to the Source viewer, double-click to append")
+                    visible: gridMouse.containsMouse && !gridGhost.Drag.active
                     hoverArea: gridMouse
                 }
             }
@@ -424,6 +437,12 @@ Item {
 
                     anchors.fill: parent
                     hoverEnabled: true
+                    drag.target: rowGhost
+                    onPressed: {
+                        rowGhost.path = file.path;
+                        rowGhost.label = file.name;
+                    }
+                    onReleased: rowGhost.drop()
                     onClicked: Edit.openSource(file.path)
                     // Double-click appends, rather than drag-and-drop: dropping onto a
                     // Canvas-drawn timeline would need its own hit testing, and appending is
@@ -435,9 +454,13 @@ Item {
                     }
                 }
 
+                PoolDragGhost {
+                    id: rowGhost
+                }
+
                 ToolTipText {
-                    text: qsTr("Click to open in the Source viewer, double-click to append")
-                    visible: fileMouse.containsMouse
+                    text: qsTr("Click or drag to the Source viewer, double-click to append")
+                    visible: fileMouse.containsMouse && !rowGhost.Drag.active
                     hoverArea: fileMouse
                 }
             }

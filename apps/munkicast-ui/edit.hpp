@@ -79,6 +79,7 @@ public:
     [[nodiscard]] QVariantList levels() const;
     [[nodiscard]] double masterGain() const;
     [[nodiscard]] QVariantMap sourceMap() const;
+    [[nodiscard]] QVariantMap dragPayload() const;
 
     /// Make a timeline, add it to the project and open it. Returns its id.
     Q_INVOKABLE QString createTimeline(const QString& name);
@@ -166,6 +167,20 @@ public:
     Q_INVOKABLE void setSourceIn(int frame);
     Q_INVOKABLE void setSourceOut(int frame);
     Q_INVOKABLE void clearSourceRange();
+    /// What is being dragged out of the Source viewer, or empty.
+    ///
+    /// The marked range is snapshotted when the drag starts, not read when it is dropped: an
+    /// operator who nudges the in point while dragging means to place what they picked up.
+    Q_PROPERTY(QVariantMap dragPayload READ dragPayload NOTIFY dragPayloadChanged)
+
+    /// Begin dragging the Source viewer's marked range. `video` and `audio` pick which
+    /// halves go, as the three drag buttons every NLE's source monitor has.
+    Q_INVOKABLE void beginSourceDrag(bool video, bool audio);
+    Q_INVOKABLE void cancelSourceDrag();
+    /// Drop what is being dragged onto a track at a frame. `overwrite` records over what is
+    /// there; otherwise the clips after it are pushed back.
+    Q_INVOKABLE bool dropOnTimeline(const QString& trackId, int frame, bool overwrite);
+
     /// Put the Source viewer's marked range into the sequence at the playhead.
     ///
     /// `overwrite` replaces what is already there; otherwise the clips after the playhead are
@@ -207,6 +222,7 @@ signals:
     void listChanged();
     void selectionChanged();
     void sourceChanged();
+    void dragPayloadChanged();
     void notice(const QString& text);
     /// A timeline was created, removed or renamed: the project's manifest has to follow.
     void manifestChanged();
@@ -232,6 +248,13 @@ private:
     /// Set the rate and start or stop the timer behind it.
     void setRate(double rate);
 
+    /// What a drag out of the Source viewer is carrying, snapshotted at its start.
+    QString drag_path_;
+    ldoc::Frame drag_in_ = 0;
+    ldoc::Frame drag_out_ = 0;
+    bool drag_video_ = false;
+    bool drag_audio_ = false;
+
     /// The Source viewer's file and its marked range, in that file's own frames.
     QString source_path_;
     ldoc::Frame source_in_ = 0;
@@ -240,6 +263,11 @@ private:
     class Document* document_ = nullptr;
     /// The selected clip, or nothing. Every effect command needs it.
     [[nodiscard]] const ldoc::Clip* selectedClip_() const;
+    /// The commands that lay one clip onto one track. Shared by the Source viewer's buttons
+    /// and by a drop, so the two cannot disagree about what overwrite means.
+    [[nodiscard]] std::vector<ldoc::TimelineCommand> placeOnTrack(
+        const ldoc::Track& track, const QString& path, ldoc::Frame at, ldoc::Frame source_in,
+        ldoc::Frame length, bool overwrite);
 
     class ClipArt* art_ = nullptr;
     ldoc::Workbench bench_;

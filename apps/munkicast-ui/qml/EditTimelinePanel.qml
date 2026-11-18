@@ -962,4 +962,57 @@ Item {
             }
         }
     }
+
+    // A range dragged out of the Source viewer lands on the track under the pointer, at the
+    // frame under it. Holding Alt records over what is there instead of pushing it along --
+    // the same two edits the Source viewer's own buttons make, reached by dropping.
+    DropArea {
+        id: timelineDrop
+
+        anchors.fill: parent
+        keys: ["application/x-munkicast-source"]
+
+        property int dropFrame: 0
+        property string dropTrack: ""
+
+        function aim(x, y) {
+            timelineDrop.dropFrame = panel.snap(panel.frameAt(x));
+            const lane = panel.laneAt(y);
+            const track = lane >= 0 ? panel.trackOfLane(lane) : null;
+            timelineDrop.dropTrack = track ? track.id : "";
+        }
+
+        onPositionChanged: (drag) => timelineDrop.aim(drag.x, drag.y)
+        onEntered: (drag) => timelineDrop.aim(drag.x, drag.y)
+        onExited: timelineDrop.dropTrack = ""
+
+        onDropped: (drop) => {
+            if (timelineDrop.dropTrack !== "") {
+                Edit.dropOnTimeline(timelineDrop.dropTrack, timelineDrop.dropFrame,
+                                    (drop.modifiers & Qt.AltModifier) !== 0);
+                drop.accept();
+            }
+            timelineDrop.dropTrack = "";
+        }
+
+        // Where it would land, drawn on the track it would land on: dropping a shot without
+        // being shown where it goes is guesswork.
+        Rectangle {
+            visible: timelineDrop.containsDrag && timelineDrop.dropTrack !== ""
+            x: panel.xOf(timelineDrop.dropFrame)
+            y: {
+                for (let lane = 0; lane < panel.lanes.length; ++lane) {
+                    if (panel.lanes[lane].id === timelineDrop.dropTrack)
+                        return panel.rulerHeight + lane * panel.trackHeight + 3;
+                }
+                return 0;
+            }
+            width: Math.max(2, (Edit.dragPayload.frames || 0) * panel.scale)
+            height: panel.trackHeight - 7
+            color: Theme.c.accent
+            opacity: 0.35
+            border.width: 1
+            border.color: Theme.c.text
+        }
+    }
 }

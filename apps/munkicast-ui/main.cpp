@@ -1037,6 +1037,115 @@ int main(int argc, char** argv) {
                 report(QFileInfo::exists(projectDir + QStringLiteral("/SourceMedia/take one.wav")),
                        "removing a bin does not delete the media it held");
 
+                // Dragging a marked range out of the Source viewer onto a track, and what
+                // overwrite does to what is already there. Driven because the first version
+                // of overwrite removed every clip it touched -- laying two seconds over the
+                // middle of a long take deleted the take, which is data loss and exactly the
+                // kind of thing that has to be caught here rather than in use.
+                {
+                    // The media handed to `--check-shots`, because this needs a file with a
+                    // real duration: the Clips folder holds the four-byte fixture the import
+                    // checks wrote, which has no length to mark a range in.
+                    const QStringList given = parser.isSet(shot_opt)
+                                                  ? parser.value(shot_opt).split(QLatin1Char(','))
+                                                  : QStringList{};
+                    const QString realMedia = given.size() > 1 ? given[1] : QString{};
+                    // Opening a project closes whatever timeline was open in the last one,
+                    // so this makes its own rather than depending on one from before the
+                    // switch -- which is why these checks silently did nothing at first.
+                    if (!edit->hasTimeline())
+                        edit->createTimeline(QStringLiteral("Drop Check"));
+                    if (realMedia.isEmpty() || !edit->hasTimeline()) {
+                        std::fprintf(stderr,
+                                     "  .. no real media given; drag checks skipped\n");
+                    } else {
+                        // Something to drop onto, and to be overwritten.
+                        edit->appendToFirstTrack(realMedia);
+                        edit->openSource(realMedia);
+                        // The source's length comes from the artwork pass, which runs off
+                        // thread; without it the marked range is empty and the drag refuses.
+                        for (int i = 0; i < 200; ++i) {
+                            QCoreApplication::processEvents(QEventLoop::AllEvents, 20);
+                            QThread::msleep(25);
+                        }
+
+                        const auto payloadBefore = edit->dragPayload();
+                        report(payloadBefore.isEmpty(), "nothing is being dragged to begin with");
+
+                        edit->beginSourceDrag(true, true);
+                        const auto payload = edit->dragPayload();
+                        report(!payload.isEmpty() && payload.value(QStringLiteral("frames"))
+                                                             .toLongLong() > 0,
+                               "a marked range can be picked up from the Source viewer");
+
+                        // Where it lands: the first unlocked video track, at frame 0.
+                        QString videoTrack;
+                        const auto tracks =
+                            edit->timeline().value(QStringLiteral("tracks")).toList();
+                        for (const QVariant& row : tracks) {
+                            const auto map = row.toMap();
+                            if (map.value(QStringLiteral("kind")).toString() ==
+                                QLatin1String("video")) {
+                                videoTrack = map.value(QStringLiteral("id")).toString();
+                                break;
+                            }
+                        }
+                        report(!videoTrack.isEmpty(), "there is a video track to drop onto");
+
+                        if (!videoTrack.isEmpty()) {
+                            const auto clipsOf = [&](const QString& id) {
+                                for (const QVariant& row :
+                                     edit->timeline().value(QStringLiteral("tracks")).toList()) {
+                                    const auto map = row.toMap();
+                                    if (map.value(QStringLiteral("id")).toString() == id)
+                                        return map.value(QStringLiteral("clips")).toList();
+                                }
+                                return QVariantList{};
+                            };
+                            const auto spanOf = [&](const QString& id) {
+                                qlonglong total = 0;
+                                for (const QVariant& row : clipsOf(id)) {
+                                    total += row.toMap()
+                                                 .value(QStringLiteral("duration"))
+                                                 .toLongLong();
+                                }
+                                return total;
+                            };
+
+                            const qlonglong before = spanOf(videoTrack);
+                            const int wasCount = clipsOf(videoTrack).size();
+                            report(wasCount > 0 && before > 0,
+                                   "the track already has something on it");
+
+                            // Drop over the middle of what is there, recording.
+                            const qlonglong dropped =
+                                payload.value(QStringLiteral("frames")).toLongLong();
+                            report(edit->dropOnTimeline(videoTrack, 10, true),
+                                   "a dragged range can be dropped onto a track");
+                            report(edit->dragPayload().isEmpty(),
+                                   "and the drag ends when it is dropped");
+
+                            const auto after = clipsOf(videoTrack);
+                            report(after.size() > wasCount,
+                                   "overwrite splits what was under it rather than removing it");
+                            // The take is still as long as it was: the overwrite replaced a
+                            // window of it, it did not shorten the track.
+                            report(spanOf(videoTrack) >= before,
+                                   "and the material that was there is not lost");
+
+                            // Undo puts it back exactly, in one step.
+                            shortcuts->perform(QStringLiteral("edit.undo"));
+                            report(clipsOf(videoTrack).size() == wasCount &&
+                                       spanOf(videoTrack) == before,
+                                   "one undo takes the whole drop back");
+
+                            static_cast<void>(dropped);
+                        }
+
+                        edit->cancelSourceDrag();
+                    }
+                }
+
                 // Now the picture, with a project open so the Media Pool has its bins and the
                 // timeline has its clips.
                 if (parser.isSet(shot_opt)) {

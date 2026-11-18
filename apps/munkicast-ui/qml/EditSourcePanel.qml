@@ -23,6 +23,10 @@ Item {
     /// Where the viewer's own playhead sits, in seconds into the file. Not the sequence's.
     property real position: 0
 
+    /// Which halves a drag out of the picture carries. Both, until told otherwise.
+    property bool dragVideo: true
+    property bool dragAudio: true
+
     onSrcChanged: {
         const wanted = panel.hasSource ? "file://" + panel.src.path : "";
         if (player.source != wanted) {
@@ -48,6 +52,29 @@ Item {
         color: Theme.c.window
     }
 
+    // A clip dragged out of the Media Pool lands here, which is how one is auditioned
+    // before any of it is used.
+    DropArea {
+        anchors.fill: parent
+        keys: ["text/uri-list"]
+
+        onDropped: (drop) => {
+            const uri = drop.getDataAsString("text/uri-list");
+            if (uri.startsWith("file://"))
+                Edit.openSource(uri.substring(7));
+            drop.accept();
+        }
+
+        Rectangle {
+            anchors.fill: parent
+            visible: parent.containsDrag
+            color: "transparent"
+            border.width: 2
+            border.color: Theme.c.accent
+            opacity: 0.8
+        }
+    }
+
     MediaPlayer {
         id: player
 
@@ -56,6 +83,42 @@ Item {
         onPositionChanged: {
             if (player.playbackState === MediaPlayer.PlayingState)
                 panel.position = player.position / 1000;
+        }
+    }
+
+    /// Dragging out of the picture is how a marked range reaches the timeline. The three
+    /// buttons below pick which halves go; dragging the picture itself takes both, which is
+    /// what an editor means by dragging a shot.
+    Item {
+        id: dragOut
+
+        anchors.fill: output
+        z: 5
+        visible: panel.hasSource
+
+        Drag.active: dragMouse.drag.active
+        Drag.hotSpot.x: 0
+        Drag.hotSpot.y: 0
+        Drag.mimeData: ({"application/x-munkicast-source": panel.src.path})
+        Drag.dragType: Drag.Internal
+
+        MouseArea {
+            id: dragMouse
+
+            anchors.fill: parent
+            drag.target: dragOut
+            // A click still scrubs nothing and a drag still starts: the threshold keeps a
+            // careless press from becoming an edit.
+            drag.threshold: 8
+            onPressed: Edit.beginSourceDrag(panel.dragVideo, panel.dragAudio)
+            onReleased: {
+                if (dragOut.Drag.active)
+                    dragOut.Drag.drop();
+                else
+                    Edit.cancelSourceDrag();
+                dragOut.x = 0;
+                dragOut.y = 0;
+            }
         }
     }
 
@@ -211,6 +274,34 @@ Item {
             // The two ways a marked range reaches the sequence. Insert pushes what is there
             // along; overwrite replaces it. Every NLE has both, and which one is wanted is
             // never guessable from the gesture.
+            // Which halves a drag out of the picture carries. A mode rather than a gesture:
+            // every source monitor has these three, because laying picture over an existing
+            // soundtrack is an ordinary edit, and the choice has to survive the press that
+            // starts the drag.
+            ToolButton {
+                label: "V"
+                tip: qsTr("Drag video only")
+                enabled: panel.hasSource
+                active: panel.dragVideo && !panel.dragAudio
+                onClicked: { panel.dragVideo = true; panel.dragAudio = false; }
+            }
+
+            ToolButton {
+                label: "A"
+                tip: qsTr("Drag audio only")
+                enabled: panel.hasSource
+                active: panel.dragAudio && !panel.dragVideo
+                onClicked: { panel.dragVideo = false; panel.dragAudio = true; }
+            }
+
+            ToolButton {
+                label: "V+A"
+                tip: qsTr("Drag video and audio")
+                enabled: panel.hasSource
+                active: panel.dragVideo && panel.dragAudio
+                onClicked: { panel.dragVideo = true; panel.dragAudio = true; }
+            }
+
             ToolButton {
                 label: "⇥"
                 tip: qsTr("Insert the marked range at the playhead")
