@@ -81,8 +81,11 @@ public:
     [[nodiscard]] QVariantMap sourceMap() const;
     [[nodiscard]] QVariantMap dragPayload() const;
 
-    /// Make a timeline, add it to the project and open it. Returns its id.
-    Q_INVOKABLE QString createTimeline(const QString& name);
+    /// Make a timeline, add it to the project and open it. Returns its id. The format is
+    /// the New Timeline dialog's; the defaults are what a call without one gets.
+    Q_INVOKABLE QString createTimeline(const QString& name, int fpsNum = 30, int fpsDen = 1,
+                                       int width = 1920, int height = 1080, int videoTracks = 1,
+                                       int audioTracks = 1);
     Q_INVOKABLE void openTimeline(const QString& id);
     Q_INVOKABLE void closeTimeline();
     Q_INVOKABLE void save();
@@ -176,6 +179,9 @@ public:
     /// Begin dragging the Source viewer's marked range. `video` and `audio` pick which
     /// halves go, as the three drag buttons every NLE's source monitor has.
     Q_INVOKABLE void beginSourceDrag(bool video, bool audio);
+    /// Begin dragging a whole file, both halves it has: a clip carried straight out of the
+    /// Media Pool, with no Source viewer marks to take a range from.
+    Q_INVOKABLE void beginFileDrag(const QString& path);
     Q_INVOKABLE void cancelSourceDrag();
     /// Drop what is being dragged onto a track at a frame. `overwrite` records over what is
     /// there; otherwise the clips after it are pushed back.
@@ -202,6 +208,11 @@ public:
     Q_INVOKABLE void step(int frames);
     /// J-K-L: negative is backwards, 0 stops, and repeated presses multiply the rate.
     Q_INVOKABLE void shuttle(int direction);
+    /// The rate one more J (-1) or L (+1) press gives from `current`. Shared by every player,
+    /// so the timeline's transport and the file viewers' shuttle step through the same gears.
+    Q_INVOKABLE [[nodiscard]] double shuttleRate(double current, int direction) const;
+    /// The closed hand while something is being dragged out of the pool or the Source picture.
+    Q_INVOKABLE void setDragCursor(bool on);
     Q_INVOKABLE void goToStart();
     Q_INVOKABLE void goToEnd();
     /// The next or previous edit point on any track, which is how an editor walks a sequence.
@@ -273,6 +284,7 @@ private:
     ldoc::Workbench bench_;
     QTimer* transport_ = nullptr;
     double rate_ = 0.0;
+    bool drag_cursor_ = false;
     /// When the current playback run started, so the playhead follows the clock rather than
     /// counting timer ticks -- which drift, and drift differently under load.
     qint64 started_ms_ = 0;

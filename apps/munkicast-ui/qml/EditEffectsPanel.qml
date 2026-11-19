@@ -228,7 +228,15 @@ Item {
             height: Math.max(44, panel.height - 44 - appliedList.height -
                              (settings.visible ? settings.height + 22 : 0))
             clip: true
-            model: Edit.effectCatalogue()
+            // Picture first, then sound, each under its own heading: in one list the two were
+            // mixed, and an audio filter offered between two colour ones reads as a mistake.
+            model: {
+                const all = Edit.effectCatalogue();
+                const video = all.filter(e => !e.audio);
+                const audio = all.filter(e => e.audio);
+                return [{heading: qsTr("Video")}].concat(video,
+                                                         [{heading: qsTr("Audio")}], audio);
+            }
             boundsBehavior: Flickable.StopAtBounds
 
             NoDragScroll {}
@@ -237,24 +245,29 @@ Item {
                 id: row
 
                 required property var modelData
+                /// A heading row: what kind the effects under it are, not an effect.
+                readonly property bool heading: !!row.modelData.heading
 
+                objectName: row.heading ? "effectsHeading" : "effectRow"
                 width: ListView.view.width
-                height: 22
+                height: row.heading ? 20 : 22
 
                 Rectangle {
                     anchors.fill: parent
-                    color: rowMouse.containsMouse ? Theme.c.panelHeaderActive : "transparent"
+                    color: row.heading ? Theme.c.window
+                         : rowMouse.containsMouse ? Theme.c.panelHeaderActive : "transparent"
                 }
 
                 Text {
                     anchors.left: parent.left
-                    anchors.leftMargin: 12
+                    anchors.leftMargin: row.heading ? 8 : 16
                     anchors.right: parent.right
                     anchors.rightMargin: 10
                     anchors.verticalCenter: parent.verticalCenter
-                    text: row.modelData.name
-                    font.pixelSize: 11
-                    color: Theme.c.text
+                    text: row.heading ? row.modelData.heading : row.modelData.name
+                    font.pixelSize: row.heading ? 10 : 11
+                    font.bold: row.heading
+                    color: row.heading ? Theme.c.textMuted : Theme.c.text
                     elide: Text.ElideRight
                 }
 
@@ -262,13 +275,14 @@ Item {
                     id: rowMouse
 
                     anchors.fill: parent
+                    enabled: !row.heading
                     hoverEnabled: true
                     onDoubleClicked: Edit.addClipEffect(row.modelData.type)
                 }
 
                 ToolTipText {
                     text: qsTr("Double-click to put this on the clip")
-                    visible: rowMouse.containsMouse
+                    visible: rowMouse.containsMouse && !row.heading
                     hoverArea: rowMouse
                 }
             }

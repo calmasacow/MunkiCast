@@ -787,15 +787,21 @@ Item {
 
     // ---- keys ----
     //
-    // The standard set, so an editor's hands work here without being taught: J-K-L to shuttle,
-    // space to play, arrows to step, I and O to mark, and the tools on their usual letters.
+    // J-K-L and space, as shortcuts rather than key presses: `Keys` needs this item to hold
+    // keyboard focus, and a click on a clip or a button took it away, so they went dead.
+    TransportKeys {
+        panelId: "edit-timeline"
+        onReverse: Edit.shuttle(-1)
+        onStop: Edit.pause()
+        onForward: Edit.shuttle(1)
+        onToggle: Edit.togglePlay()
+    }
+
+    // The rest of the standard set, so an editor's hands work here without being taught:
+    // arrows to step, I and O to mark, and the tools on their usual letters.
     focus: panel.hasDocument
     Keys.onPressed: event => {
         switch (event.key) {
-        case Qt.Key_Space: Edit.togglePlay(); break;
-        case Qt.Key_J: Edit.shuttle(-1); break;
-        case Qt.Key_K: Edit.pause(); break;
-        case Qt.Key_L: Edit.shuttle(1); break;
         case Qt.Key_Left: Edit.step(event.modifiers & Qt.ShiftModifier ? -10 : -1); break;
         case Qt.Key_Right: Edit.step(event.modifiers & Qt.ShiftModifier ? 10 : 1); break;
         case Qt.Key_Up: Edit.stepEdit(false); break;
@@ -973,7 +979,8 @@ Item {
 
         objectName: "timelineDrop"
         anchors.fill: parent
-        keys: ["application/x-munkicast-source"]
+        // The Source viewer's marked range, or a whole file carried straight from the pool.
+        keys: ["application/x-munkicast-source", "text/uri-list"]
 
         property int dropFrame: 0
         property string dropTrack: ""
@@ -986,16 +993,35 @@ Item {
         }
 
         onPositionChanged: (drag) => timelineDrop.aim(drag.x, drag.y)
-        onEntered: (drag) => timelineDrop.aim(drag.x, drag.y)
-        onExited: timelineDrop.dropTrack = ""
+        /// The drag over this came from the pool, and its payload was made on the way in.
+        property bool fromPool: false
+
+        onEntered: (drag) => {
+            // From the pool the file rides on the ghost; nothing has been marked, so the
+            // whole of it goes.
+            timelineDrop.fromPool = !!drag.source && drag.source.objectName === "poolDragGhost";
+            if (timelineDrop.fromPool)
+                Edit.beginFileDrag(drag.source.path);
+            timelineDrop.aim(drag.x, drag.y);
+        }
+        onExited: {
+            timelineDrop.dropTrack = "";
+            // Carried on past, to the Source viewer say: nothing is on its way here.
+            if (timelineDrop.fromPool)
+                Edit.cancelSourceDrag();
+            timelineDrop.fromPool = false;
+        }
 
         onDropped: (drop) => {
             if (timelineDrop.dropTrack !== "") {
                 Edit.dropOnTimeline(timelineDrop.dropTrack, timelineDrop.dropFrame,
                                     (drop.modifiers & Qt.AltModifier) !== 0);
                 drop.accept();
+            } else if (timelineDrop.fromPool) {
+                Edit.cancelSourceDrag();
             }
             timelineDrop.dropTrack = "";
+            timelineDrop.fromPool = false;
         }
 
         // Where it would land, drawn on the track it would land on: dropping a shot without

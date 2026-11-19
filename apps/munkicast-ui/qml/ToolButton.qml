@@ -22,6 +22,8 @@ Rectangle {
     /// press altogether. `activeColor` is what it latches to.
     property bool active: false
     property color activeColor: Theme.c.accent
+    /// The glyph's size. Transports want theirs bigger than a footer's.
+    property int glyphSize: 13
 
     signal clicked
 
@@ -54,7 +56,7 @@ Rectangle {
     Text {
         anchors.centerIn: parent
         text: button.label
-        font.pixelSize: 13
+        font.pixelSize: button.glyphSize
         color: !button.enabled ? Qt.rgba(Theme.c.textMuted.r, Theme.c.textMuted.g,
                                          Theme.c.textMuted.b, 0.4)
              : mouse.pressed || button.active ? Theme.c.window

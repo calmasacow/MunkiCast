@@ -29,83 +29,53 @@ Item {
     /// size. Fit is what a monitor is looked at in; the zooms are for checking an edge.
     property string zoom: "fit"
 
-    /// Where the warmed player is parked, in seconds into its own file.
-    property real warmSeconds: 0
+    /// Which deck is on screen.
+    property int front: 0
+    readonly property var decks: [deckA, deckB]
 
-    /// Open the file the next cut needs, if it is not the one already playing.
-    function warmNext() {
-        const next = panel.hasClip && panel.clip.nextSource
-                     ? "file://" + panel.clip.nextSource : "";
-        if (next === "" || next === String(player.source)) {
-            warm.source = "";
+    /// Keep a deck on the clip under the playhead, at the frame under the playhead.
+    ///
+    /// Two decks, each a player with its own picture. A cut loads the next file on the deck
+    /// that is not showing, and the screen changes over only once that deck has drawn a frame.
+    /// One player, reloaded at every cut, went black for as long as the load took -- which,
+    /// dragged across a cut, was the whole drag.
+    ///
+    /// The deck not showing also opens the next shot ahead of the playhead, so a cut while
+    /// playing is usually a change of picture rather than a load.
+    ///
+    /// ponytail: the changeover is still not frame-exact. Exactness needs the renderer, which
+    /// can decode both and hand over on a known frame.
+    function follow() {
+        const shown = panel.decks[panel.front];
+        const spare = panel.decks[1 - panel.front];
+        if (!panel.hasClip) {
+            shown.hold();
+            spare.hold();
             return;
         }
-        if (warm.source != next) {
-            panel.warmSeconds = panel.clip.nextSourceSeconds ?? 0;
-            warm.source = next;
+        const wanted = "file://" + panel.clip.source;
+        const ms = panel.clip.sourceSeconds * 1000;
+        const target = shown.url === wanted ? shown : spare;
+        if (target.url !== wanted)
+            target.load(wanted);
+        target.drive(ms);
+        // The other one parks: if it is still on screen it keeps its last frame until the
+        // target has one of its own.
+        (target === shown ? spare : shown).hold();
+        if (target.ready && target !== shown)
+            panel.front = 1 - panel.front;
+        // Warm the next shot on the deck that is not needed now.
+        if (target === panel.decks[panel.front] && panel.clip.nextSource) {
+            const other = panel.decks[1 - panel.front];
+            const next = "file://" + panel.clip.nextSource;
+            if (next !== wanted && other.url !== next) {
+                other.load(next);
+                other.cue((panel.clip.nextSourceSeconds ?? 0) * 1000);
+            }
         }
-    }
-
-    Rectangle {
-        anchors.fill: parent
-        color: Theme.c.window
     }
 
     onClipChanged: panel.follow()
-
-    /// Keep the player on the clip under the playhead, at the frame under the playhead.
-    ///
-    /// Changing the source is a reload and costs a beat, so it happens only when the playhead
-    /// crosses into a different clip -- which is exactly what a cut is. Within one clip the
-    /// playhead moving is a seek.
-    ///
-    /// The next shot is opened on a second player while this one is still running, so a cut
-    /// is a swap between two loaded decoders rather than a load. That is what took the hitch
-    /// out of every edit.
-    ///
-    /// ponytail: the swap is still a swap, so a cut is not frame-exact. Exactness needs the
-    /// renderer, which can decode both and hand over on a known frame.
-    function follow() {
-        const wanted = panel.hasClip ? "file://" + panel.clip.source : "";
-        if (player.source != wanted) {
-            // Already warmed? Then the cut is a swap: the decoder for this file is open and
-            // sitting at the right frame, so take it and start warming the one after.
-            if (wanted !== "" && warm.source == wanted) {
-                player.source = wanted;
-                player.position = panel.clip.sourceSeconds * 1000;
-                panel.pendingSeek = panel.clip.sourceSeconds;
-            } else {
-                player.source = wanted;
-                // A fresh source starts at zero, so the seek has to wait for it to be ready.
-                if (panel.hasClip)
-                    panel.pendingSeek = panel.clip.sourceSeconds;
-            }
-            panel.warmNext();
-            return;
-        }
-        panel.warmNext();
-        if (!panel.hasClip)
-            return;
-
-        const ms = panel.clip.sourceSeconds * 1000;
-        if (Edit.playing && Edit.rate === 1) {
-            // While playing forward at speed, the file plays itself: seeking on every frame
-            // would stutter. Only correct when it has drifted away from the timeline.
-            if (player.playbackState !== MediaPlayer.PlayingState)
-                player.play();
-            if (Math.abs(player.position - ms) > 250)
-                player.position = ms;
-        } else {
-            // Scrubbing, stepping or shuttling: the file is a frame store, not a player.
-            if (player.playbackState === MediaPlayer.PlayingState)
-                player.pause();
-            if (Math.abs(player.position - ms) > 30)
-                player.position = ms;
-        }
-    }
-
-    /// Where to seek once the newly-opened source is ready to be seeked.
-    property real pendingSeek: -1
 
     Connections {
         target: Edit
@@ -114,56 +84,168 @@ Item {
         function onTransportChanged() { panel.follow(); }
     }
 
-    MediaPlayer {
-        id: player
+    // The sequence's own J-K-L, so it answers here as it does in the timeline.
+    TransportKeys {
+        panelId: "edit-program"
+        onReverse: Edit.shuttle(-1)
+        onStop: Edit.pause()
+        onForward: Edit.shuttle(1)
+        onToggle: Edit.togglePlay()
+    }
 
-        videoOutput: output
-        audioOutput: AudioOutput {
-            // The mix level, so muting a track or pulling the master down is audible here
-            // rather than only in the document.
-            volume: Edit.hasTimeline ? Math.pow(10, Edit.masterGain / 20) : 1.0
+    /// One file's player and its picture.
+    component Deck: Item {
+        id: deck
+
+        property string url: ""
+        /// A frame of `url` is on this deck's picture.
+        property bool ready: false
+        /// Where it should be parked, in ms into its file.
+        property real wantMs: 0
+        /// A seek is out and its frame not yet drawn, since `sentAt`.
+        property bool waiting: false
+        property real sentAt: 0
+        property bool audible: false
+        property alias output: picture
+        readonly property bool loaded: player.mediaStatus === MediaPlayer.LoadedMedia
+                                       || player.mediaStatus === MediaPlayer.BufferedMedia
+                                       || player.mediaStatus === MediaPlayer.BufferingMedia
+                                       || player.mediaStatus === MediaPlayer.EndOfMedia
+
+        function load(u) {
+            deck.url = u;
+            deck.ready = false;
+            deck.waiting = false;
+            player.source = u;
         }
 
-        onMediaStatusChanged: {
-            // A source that has just loaded is at zero whatever was asked for before it was
-            // ready; this is the first moment a seek will land.
-            if (mediaStatus === MediaPlayer.LoadedMedia && panel.pendingSeek >= 0) {
-                player.position = panel.pendingSeek * 1000;
-                panel.pendingSeek = -1;
-                if (Edit.playing && Edit.rate === 1)
+        /// One seek in flight at a time: a seek over an unfinished one cancels its decode,
+        /// and a drag's worth of them drew nothing. The last one asked for is the one that
+        /// is sent when the frame in flight lands.
+        function park() {
+            if (!deck.loaded || player.playbackState === MediaPlayer.PlayingState)
+                return;
+            if (deck.ready && Math.abs(player.position - deck.wantMs) <= 20)
+                return;
+            if (deck.waiting && Date.now() - deck.sentAt < 250)
+                return;
+            deck.waiting = true;
+            deck.sentAt = Date.now();
+            player.position = deck.wantMs;
+        }
+
+        function drive(ms) {
+            deck.wantMs = ms;
+            if (!deck.loaded)
+                return;
+            if (Edit.playing && Edit.rate > 0) {
+                // Forwards at any speed the file plays itself at the timeline's rate,
+                // corrected only when it has drifted, with slack that grows with the speed.
+                if (player.playbackRate !== Edit.rate)
+                    player.playbackRate = Edit.rate;
+                if (player.playbackState !== MediaPlayer.PlayingState)
                     player.play();
+                if (Math.abs(player.position - ms) > Math.max(250, 120 * Edit.rate))
+                    player.position = ms;
+                return;
+            }
+            // Scrubbing, stepping or running backwards: the file is a frame store.
+            if (player.playbackState === MediaPlayer.PlayingState)
+                player.pause();
+            player.playbackRate = 1;
+            deck.park();
+        }
+
+        /// Parked at `ms` and left there: the next shot, waiting off screen.
+        function cue(ms) {
+            deck.wantMs = ms;
+            deck.hold();
+            deck.park();
+        }
+
+        function hold() {
+            if (player.playbackState === MediaPlayer.PlayingState)
+                player.pause();
+        }
+
+        MediaPlayer {
+            id: player
+
+            videoOutput: picture
+            audioOutput: AudioOutput {
+                // The mix level, so muting a track or pulling the master down is audible
+                // here rather than only in the document. Only the deck on screen is heard.
+                volume: Edit.hasTimeline ? Math.pow(10, Edit.masterGain / 20) : 1.0
+                muted: !deck.audible
+            }
+            // Loaded is the first moment a seek lands. Paused rather than left stopped: a
+            // stopped player draws nothing, and the monitor stayed black.
+            onMediaStatusChanged: {
+                if (player.mediaStatus === MediaPlayer.LoadedMedia
+                        && player.playbackState === MediaPlayer.StoppedState) {
+                    player.pause();
+                    deck.waiting = false;
+                    panel.follow();
+                    deck.park();
+                }
+            }
+        }
+
+        VideoOutput {
+            id: picture
+            anchors.fill: parent
+            fillMode: panel.zoom === "fit" ? VideoOutput.PreserveAspectFit
+                                           : VideoOutput.PreserveAspectCrop
+            scale: panel.zoom === "fit" ? 1.0 : parseFloat(panel.zoom)
+            transformOrigin: Item.Center
+        }
+
+        Connections {
+            target: picture.videoSink
+            function onVideoFrameChanged() {
+                // Ready on a frame from a seek, not the first one the file opens on: changing
+                // over to that showed the head of the clip for a beat at every cut. The
+                // frame's own time is not readable from here, so it is the order of events
+                // that says: a frame that lands while a seek is out is that seek's.
+                const settled = deck.waiting || player.playbackState === MediaPlayer.PlayingState;
+                deck.waiting = false;
+                if (!deck.ready && settled) {
+                    deck.ready = true;
+                    panel.follow();
+                }
+                // Moved on while that one decoded: go to where it is now.
+                deck.park();
             }
         }
     }
 
-    /// The next shot, opened and parked at its first frame. Never shown: it exists so that
-    /// the decoder is already up when the playhead reaches the cut.
-    MediaPlayer {
-        id: warm
-
-        onMediaStatusChanged: {
-            // Park it where the next clip starts, so the swap lands on the right frame
-            // rather than at the head of the file.
-            if (warm.mediaStatus === MediaPlayer.LoadedMedia ||
-                warm.mediaStatus === MediaPlayer.BufferedMedia) {
-                warm.position = panel.warmSeconds * 1000;
-            }
-        }
-    }
-
-    VideoOutput {
+    Item {
         id: output
 
+        objectName: "programOutput"
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.top: parent.top
         anchors.bottom: scrub.top
         anchors.margins: 8
-        fillMode: panel.zoom === "fit" ? VideoOutput.PreserveAspectFit
-                                       : VideoOutput.PreserveAspectCrop
-        scale: panel.zoom === "fit" ? 1.0 : parseFloat(panel.zoom)
-        transformOrigin: Item.Center
+        clip: panel.zoom !== "fit"
         visible: panel.hasClip
+
+        Deck {
+            id: deckA
+            objectName: "programDeckA"
+            anchors.fill: parent
+            visible: panel.front === 0
+            audible: panel.front === 0
+        }
+
+        Deck {
+            id: deckB
+            objectName: "programDeckB"
+            anchors.fill: parent
+            visible: panel.front === 1
+            audible: panel.front === 1
+        }
     }
 
     // What the picture cannot show yet: that this frame is inside a dissolve, and how far
@@ -300,7 +382,7 @@ Item {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
-        height: 30
+        height: 40
         visible: Edit.hasTimeline
         color: Theme.c.panelHeader
 
@@ -314,23 +396,27 @@ Item {
             color: Theme.c.text
         }
 
+        // Plain triangles: ⏮ and ⏭ fall back to the colour emoji font, drawn as blue tiles.
         Row {
             anchors.centerIn: parent
-            spacing: 4
+            spacing: 6
 
             ToolButton {
-                label: "⏮"
+                width: 34; height: 30; glyphSize: 18
+                label: "|◀◀"
                 tip: qsTr("Go to the start (Home)")
                 onClicked: Edit.goToStart()
             }
 
             ToolButton {
+                width: 34; height: 30; glyphSize: 18
                 label: "⮜"
                 tip: qsTr("Previous edit (Up)")
                 onClicked: Edit.stepEdit(false)
             }
 
             ToolButton {
+                width: 34; height: 30; glyphSize: 18
                 label: "◀◀"
                 tip: qsTr("Shuttle backwards (J)")
                 active: Edit.rate < 0
@@ -338,6 +424,7 @@ Item {
             }
 
             ToolButton {
+                width: 34; height: 30; glyphSize: 18
                 label: Edit.playing && Edit.rate > 0 ? "❚❚" : "▶"
                 tip: Edit.playing ? qsTr("Pause (K or space)") : qsTr("Play (space)")
                 active: Edit.rate === 1
@@ -345,6 +432,7 @@ Item {
             }
 
             ToolButton {
+                width: 34; height: 30; glyphSize: 18
                 label: "▶▶"
                 tip: qsTr("Shuttle forwards (L)")
                 active: Edit.rate > 1
@@ -352,13 +440,15 @@ Item {
             }
 
             ToolButton {
+                width: 34; height: 30; glyphSize: 18
                 label: "⮞"
                 tip: qsTr("Next edit (Down)")
                 onClicked: Edit.stepEdit(true)
             }
 
             ToolButton {
-                label: "⏭"
+                width: 34; height: 30; glyphSize: 18
+                label: "▶▶|"
                 tip: qsTr("Go to the end (End)")
                 onClicked: Edit.goToEnd()
             }

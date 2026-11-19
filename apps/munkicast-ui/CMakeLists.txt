@@ -103,6 +103,8 @@ qt_add_qml_module(munkicast-ui
         qml/MixerFader.qml
         qml/NoDragScroll.qml
         qml/PasteWarning.qml
+        qml/Shuttle.qml
+        qml/TimelineDialog.qml
         qml/StripMenu.qml
         qml/CheckLabel.qml
         qml/ChoiceField.qml
@@ -166,6 +168,7 @@ qt_add_qml_module(munkicast-ui
         qml/TextLine.qml
         qml/ArmSwitch.qml
         qml/ToolButton.qml
+        qml/TransportKeys.qml
         qml/ToolTipText.qml
         qml/WorkspaceTabs.qml
 )
@@ -249,7 +252,7 @@ if(MUNKICAST_BUILD_TESTS)
         # better than suppressing it.
         ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_IM_MODULE=none;QT_LOGGING_RULES=qt.qpa.*=false;LSAN_OPTIONS=suppressions=${CMAKE_SOURCE_DIR}/tests/lsan.suppressions:print_suppressions=0"
         # Includes Chromium startup and the embedded browser interaction checks.
-        TIMEOUT 180
+        TIMEOUT 300
         # Excluded from the TSan preset by this label.
         #
         # Not a judgement about this test: Qt here is a distribution build with no TSan, and

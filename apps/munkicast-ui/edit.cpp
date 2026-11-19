@@ -3,6 +3,9 @@
 
 #include "edit.hpp"
 
+#include <QCursor>
+#include <QGuiApplication>
+
 #include "assetcache.hpp"
 #include "clipart.hpp"
 #include "document.hpp"
@@ -267,27 +270,38 @@ void Edit::setProject(const std::filesystem::path& dir) {
     emit selectionChanged();
 }
 
-QString Edit::createTimeline(const QString& name) {
+QString Edit::createTimeline(const QString& name, int fpsNum, int fpsDen, int width,
+                             int height, int videoTracks, int audioTracks) {
     if (dir_.empty()) {
         emit notice(tr("Open a project before making a timeline."));
         return {};
     }
-
+    // The dialog is a trust boundary of sorts: a typed size or a hand-made call can say
+    // anything, and the document refuses to load a timeline it cannot draw.
+    if (fpsNum <= 0 || fpsDen <= 0 || width <= 0 || height <= 0 || width > 16384 ||
+        height > 16384) {
+        emit notice(tr("That timeline format is not one that can be made."));
+        return {};
+    }
     ldoc::Timeline t;
     t.id = ldoc::Id::generate();
-    t.name = name.isEmpty() ? tr("Timeline").toStdString() : name.toStdString();
-
-    // One video and one audio track to start, because a timeline with no tracks has nowhere to
-    // put the first clip and the operator would have to make one before doing anything.
-    ldoc::Track video;
-    video.id = ldoc::Id::generate();
-    video.name = "V1";
-    video.kind = ldoc::TrackKind::Video;
-    ldoc::Track audio;
-    audio.id = ldoc::Id::generate();
-    audio.name = "A1";
-    audio.kind = ldoc::TrackKind::Audio;
-    t.tracks = {std::move(video), std::move(audio)};
+    t.name = name.trimmed().isEmpty() ? tr("Timeline").toStdString() : name.trimmed().toStdString();
+    t.fps = ldoc::Fps{fpsNum, fpsDen};
+    t.width = width;
+    t.height = height;
+    // At least one of each: a timeline with no tracks has nowhere to put the first clip, and
+    // the operator would make one before doing anything. Video listed bottom-first.
+    const auto add = [&](ldoc::TrackKind kind, const char* prefix, int count) {
+        for (int i = 1; i <= std::clamp(count, 1, 32); ++i) {
+            ldoc::Track track;
+            track.id = ldoc::Id::generate();
+            track.name = std::format("{}{}", prefix, i);
+            track.kind = kind;
+            t.tracks.push_back(std::move(track));
+        }
+    };
+    add(ldoc::TrackKind::Video, "V", videoTracks);
+    add(ldoc::TrackKind::Audio, "A", audioTracks);
 
     // Written before it is announced: a manifest entry naming a file that does not exist is a
     // project that reports a missing document on its next open.
@@ -468,9 +482,12 @@ QString Edit::clipArt(const QString& source, bool audio) const {
 
 int Edit::sourceFrames(const QString& source) const {
     const ldoc::TimelineHistory* h = history();
-    if (!h || source.isEmpty())
+    if (source.isEmpty())
         return 0;
-    const double fps = h->document().fps.hz();
+    // No timeline yet is still a file with a length: counted at the rate `timecode` falls
+    // back to, so the Source viewer's clock and scrub bar work before any sequence exists.
+    // Returning 0 here made every seek clamp to the start and the timecode never move.
+    const double fps = h ? h->document().fps.hz() : 30.0;
     if (fps <= 0.0)
         return 0;
 
@@ -871,7 +888,7 @@ QVariantMap Edit::sourceMap() const {
         return {};
     const int frames = sourceFrames(source_path_);
     const ldoc::TimelineHistory* h = history();
-    const double fps = h ? h->document().fps.hz() : 0.0;
+    const double fps = h ? h->document().fps.hz() : 30.0;
     const ldoc::Frame out = source_out_ > source_in_ ? source_out_ : frames;
     return QVariantMap{
         {QStringLiteral("path"), source_path_},
@@ -1091,6 +1108,21 @@ void Edit::beginSourceDrag(bool video, bool audio) {
     drag_out_ = out;
     drag_video_ = wants_video;
     drag_audio_ = wants_audio;
+    emit dragPayloadChanged();
+}
+
+void Edit::beginFileDrag(const QString& path) {
+    if (path.isEmpty() || path == drag_path_)
+        return;
+    const int frames = sourceFrames(path);
+    const Probe probed = probe_asset(path);
+    if (frames <= 0 || (probed.size.isEmpty() && probed.audio_codec.isEmpty()))
+        return;
+    drag_path_ = path;
+    drag_in_ = 0;
+    drag_out_ = frames;
+    drag_video_ = !probed.size.isEmpty();
+    drag_audio_ = !probed.audio_codec.isEmpty();
     emit dragPayloadChanged();
 }
 
@@ -1404,17 +1436,37 @@ void Edit::step(int frames) {
     setPlayhead(static_cast<int>(h->document().playhead + frames));
 }
 
+double Edit::shuttleRate(double current, int direction) const {
+    if (direction == 0)
+        return 0.0;
+    // J and L again go faster, as they do everywhere: 1, 2, 4, 8, 16, 32. Pressing the opposite
+    // one returns to normal speed in that direction rather than slowing through the gears.
+    // ponytail: 32x ceiling; Premiere goes to 64x, raise kMax if anyone asks.
+    constexpr double kMax = 32.0;
+    const bool same_way = current != 0.0 && (current > 0) == (direction > 0);
+    const double speed = same_way ? std::min(std::abs(current) * 2.0, kMax) : 1.0;
+    return direction > 0 ? speed : -speed;
+}
+
 void Edit::shuttle(int direction) {
     if (direction == 0) {
         pause();
         return;
     }
-    // J and L again go faster, as they do everywhere: 1, 2, 4, 8. Pressing the opposite one
-    // returns to normal speed in that direction rather than slowing through the gears.
-    const double current = rate_;
-    const bool same_way = (current > 0) == (direction > 0) && current != 0.0;
-    const double speed = same_way ? std::min(std::abs(current) * 2.0, 8.0) : 1.0;
-    setRate(speed * (direction > 0 ? 1.0 : -1.0));
+    setRate(shuttleRate(rate_, direction));
+}
+
+void Edit::setDragCursor(bool on) {
+    // An override, not a MouseArea's cursorShape: the pointer is grabbed by the item the drag
+    // began on, and the shape follows whatever is under it -- the closed hand dropped back to
+    // an arrow the moment it crossed into another panel.
+    if (on == drag_cursor_)
+        return;
+    drag_cursor_ = on;
+    if (on)
+        QGuiApplication::setOverrideCursor(Qt::ClosedHandCursor);
+    else
+        QGuiApplication::restoreOverrideCursor();
 }
 
 void Edit::goToStart() {

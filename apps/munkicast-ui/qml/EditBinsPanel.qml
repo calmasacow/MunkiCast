@@ -36,13 +36,15 @@ Item {
         /// release has been swallowed, so a drag does not also open the file.
         property bool wasDrag: false
 
-        function press(filePath, label, at) {
+        function press(filePath, label, at, from, local) {
             poolDragState.path = filePath;
             poolDragState.from = at;
             poolDragState.active = false;
             poolDragState.wasDrag = false;
             poolDrag.label = label;
             poolDrag.path = filePath;
+            poolDrag.itemSize = Qt.size(from.width, from.height);
+            poolDrag.grabbed = local;
         }
 
         function move(at) {
@@ -59,8 +61,8 @@ Item {
             }
             // The ghost lives on the window, so it is not clipped to the pool.
             const p = panel.mapToItem(poolDrag.parent, at.x, at.y);
-            poolDrag.x = p.x;
-            poolDrag.y = p.y;
+            poolDrag.x = p.x - poolDrag.grabbed.x;
+            poolDrag.y = p.y - poolDrag.grabbed.y;
         }
 
         function release() {
@@ -434,7 +436,8 @@ Item {
                     // item by moving it, and a one-pixel item inside a delegate has nowhere
                     // to be moved to.
                     onPressed: (ev) => poolDragState.press(gtile.path, gtile.name,
-                                                      gridMouse.mapToItem(panel, ev.x, ev.y))
+                                                      gridMouse.mapToItem(panel, ev.x, ev.y),
+                                                      gridMouse, Qt.point(ev.x, ev.y))
                     onPositionChanged: (ev) => poolDragState.move(
                         gridMouse.mapToItem(panel, ev.x, ev.y))
                     onReleased: poolDragState.release()
@@ -515,7 +518,8 @@ Item {
                     anchors.fill: parent
                     hoverEnabled: true
                     onPressed: (ev) => poolDragState.press(file.path, file.name,
-                                                      fileMouse.mapToItem(panel, ev.x, ev.y))
+                                                      fileMouse.mapToItem(panel, ev.x, ev.y),
+                                                      fileMouse, Qt.point(ev.x, ev.y))
                     onPositionChanged: (ev) => poolDragState.move(
                         fileMouse.mapToItem(panel, ev.x, ev.y))
                     onReleased: poolDragState.release()
@@ -557,8 +561,14 @@ Item {
             anchors.verticalCenter: parent.verticalCenter
             label: "+"
             tip: qsTr("New timeline")
-            onClicked: Edit.createTimeline(qsTr("Timeline %1").arg(Edit.timelines.length + 1))
+            objectName: "newTimelineButton"
+            onClicked: newTimeline.open()
         }
+    }
+
+    TimelineDialog {
+        id: newTimeline
+        parent: panel.Window.contentItem
     }
 
     PoolDragGhost {

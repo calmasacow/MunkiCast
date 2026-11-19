@@ -49,6 +49,9 @@
 #include <QQuickItem>
 #include <QQuickItemGrabResult>
 #include <QQuickWindow>
+#include <QCursor>
+#include <QGuiApplication>
+#include <QLineF>
 #include <QSet>
 #include <QSize>
 #include <QStandardPaths>
@@ -58,6 +61,8 @@
 #include <QUrl>
 #include <QVariantMap>
 #include <QWheelEvent>
+#include <QVideoFrame>
+#include <QVideoSink>
 #include <QtWebEngineQuick/qquickwebengineprofile.h>
 #include <QtWebEngineQuick/qtwebenginequickglobal.h>
 #include <algorithm>
@@ -69,6 +74,13 @@
 #include <fstream>
 #include <sys/socket.h>
 #include <unistd.h>
+
+// QTest's own way into the shortcut map. A QKeyEvent sent to the window skips it, so
+// every QML Shortcut would look dead to a check that only sent events.
+Q_GUI_EXPORT bool qt_sendShortcutOverrideEvent(QObject* o, ulong timestamp, int k,
+                                               Qt::KeyboardModifiers mods,
+                                               const QString& text = QString(),
+                                               bool autorep = false, ushort count = 1);
 
 namespace {
 
@@ -8891,15 +8903,154 @@ int main(int argc, char** argv) {
                         row->mapToScene(QPointF(row->width() / 2, row->height() / 2));
                     const QPointF onSource = sourceDrop->mapToScene(
                         QPointF(sourceDrop->width() / 2, sourceDrop->height() / 3));
+                    workspace.focusPanel(QStringLiteral("edit-bins"));
                     drag(from, onSource);
                     report(ghost->property("dragging").toBool(),
                            "dragging a pool file starts a drag");
+                    report(QGuiApplication::overrideCursor() &&
+                               QGuiApplication::overrideCursor()->shape() ==
+                                   Qt::ClosedHandCursor,
+                           "and the pointer becomes a closed hand while it is carried");
+                    report(ghost->isVisible() &&
+                               std::abs(ghost->width() - row->width()) < 1 &&
+                               std::abs(ghost->height() - row->height()) < 1,
+                           "an outline the size of the picked-up tile follows the pointer");
+                    {
+                        const QPointF hot = ghost->mapToScene(QPointF(
+                            ghost->property("grabbed").toPointF()));
+                        report(QLineF(hot, onSource).length() < 2,
+                               "with the pointer still on the spot that was pressed");
+                    }
+                    report(workspace.focusedPanel() == QLatin1String("edit-source"),
+                           "carrying a file over the Source viewer makes it the active panel");
                     post(QEvent::MouseButtonRelease, onSource, Qt::LeftButton, Qt::NoButton);
                     settle();
                     report(!ghost->property("dragging").toBool(), "and letting go ends it");
                     report(edit->sourceMap().value(QStringLiteral("path")).toString() ==
                                seedPath,
                            "a pool file dropped on the Source viewer opens there");
+                    report(!QGuiApplication::overrideCursor(),
+                           "and letting go gives the pointer back");
+
+                    {
+                        // The first frame, decoded and handed to the picture: a drop that
+                        // left the old picture up looked like no drop at all.
+                        const auto outs = collect(window->contentItem(), QStringLiteral("sourceOutput"));
+                        auto* sink = outs.isEmpty() ? nullptr
+                                                    : outs.front()->property("videoSink").value<QVideoSink*>();
+                        for (int i = 0; i < 80 && sink && !sink->videoFrame().isValid(); ++i)
+                            pump(25);
+                        report(sink && sink->videoFrame().isValid(),
+                               "a file dropped on the Source viewer shows its first frame");
+                    }
+                    if (parser.isSet(shot_opt)) {
+                        pump(600); // the first frame is decoded, not instant
+                        QDir().mkpath(parser.value(shot_opt));
+                        window->grabWindow().save(parser.value(shot_opt) +
+                                                  QStringLiteral("/edit-source.png"));
+                    }
+                    {
+                        const auto names = collect(window->contentItem(), QStringLiteral("sourceName"));
+                        report(!names.isEmpty() && names.front()->isVisible() &&
+                                   names.front()->property("text").toString() ==
+                                       QLatin1String("seed.mp4"),
+                               "the Source viewer names the file it is showing");
+                    }
+
+                    // The clock and the bar. A file with no timeline yet is still a file with
+                    // a length; a click halfway along the bar lands halfway into it.
+                    for (int i = 0; i < 120 && edit->sourceMap()
+                                                   .value(QStringLiteral("frames"))
+                                                   .toLongLong() <= 0;
+                         ++i)
+                        pump(25);
+                    const auto scrubs = collect(window->contentItem(), QStringLiteral("sourceScrub"));
+                    const auto clocks = collect(window->contentItem(), QStringLiteral("sourceTimecode"));
+                    const auto shuttles = collect(window->contentItem(), QStringLiteral("sourceShuttle"));
+                    QObject* shuttle = shuttles.isEmpty() ? nullptr : shuttles.front();
+                    if (!scrubs.isEmpty() && !clocks.isEmpty() && shuttle) {
+                        QQuickItem* bar = scrubs.front();
+                        const QPointF mid = bar->mapToScene(QPointF(bar->width() / 2, bar->height() / 2));
+                        post(QEvent::MouseButtonPress, mid, Qt::LeftButton, Qt::LeftButton);
+                        post(QEvent::MouseButtonRelease, mid, Qt::LeftButton, Qt::NoButton);
+                        settle();
+                        const QString half = clocks.front()->property("text").toString();
+                        report(half == QLatin1String("00:00:00:15"),
+                               "clicking halfway along the Source bar moves the clock halfway");
+                        if (half != QLatin1String("00:00:00:15"))
+                            std::fprintf(stderr, "  source clock read %s\n", qPrintable(half));
+                        const QPointF quarter =
+                            bar->mapToScene(QPointF(bar->width() / 4, bar->height() / 2));
+                        drag(mid, quarter);
+                        post(QEvent::MouseButtonRelease, quarter, Qt::LeftButton, Qt::NoButton);
+                        settle();
+                        const QString dragged = clocks.front()->property("text").toString();
+                        report(dragged == QLatin1String("00:00:00:07") ||
+                                   dragged == QLatin1String("00:00:00:08"),
+                               "and dragging the handle back scrubs it");
+
+                        // J-K-L and space, through the shortcut map as a keyboard would.
+                        const auto key = [&](int k, const QString& text) {
+                            // No settle: the seed is a second long, and at 8x a settle runs
+                            // it into its end, which stops the shuttle as it should.
+                            qt_sendShortcutOverrideEvent(window, 0, k, Qt::NoModifier, text);
+                            QCoreApplication::processEvents();
+                        };
+                        const auto rate = [&] { return shuttle->property("rate").toDouble(); };
+                        key(Qt::Key_L, QStringLiteral("l"));
+                        key(Qt::Key_L, QStringLiteral("l"));
+                        report(rate() == 2.0, "L twice in the Source viewer shuttles at 2x");
+                        for (int i = 0; i < 5; ++i)
+                            key(Qt::Key_L, QStringLiteral("l"));
+                        report(rate() == 32.0, "and stacking L tops out at 32x");
+                        key(Qt::Key_J, QStringLiteral("j"));
+                        report(rate() == -1.0, "J turns it round at 1x backwards");
+                        key(Qt::Key_J, QStringLiteral("j"));
+                        report(rate() == -2.0, "and J again doubles backwards");
+                        key(Qt::Key_K, QStringLiteral("k"));
+                        report(rate() == 0.0, "K stops it");
+                        key(Qt::Key_Space, QStringLiteral(" "));
+                        const double spaced = rate();
+                        key(Qt::Key_Space, QStringLiteral(" "));
+                        report(spaced == 1.0 && rate() == 0.0, "space plays and stops");
+                        // Above 1x the picture has to keep moving, both ways: parked seeks
+                        // issued faster than they decode drew nothing until normal speed.
+                        {
+                            const auto outs =
+                                collect(window->contentItem(), QStringLiteral("sourceOutput"));
+                            auto* sink = outs.isEmpty() ? nullptr
+                                                        : outs.front()->property("videoSink").value<QVideoSink*>();
+                            int drawn = 0;
+                            const auto counting = sink ? QObject::connect(sink, &QVideoSink::videoFrameChanged,
+                                                                          [&drawn] { ++drawn; })
+                                                       : QMetaObject::Connection{};
+                            const auto run = [&](double from_ms, int k, const QString& text) {
+                                QMetaObject::invokeMethod(shuttle, "seek", Q_ARG(QVariant, from_ms));
+                                pump(150);
+                                key(k, text);
+                                key(k, text);
+                                drawn = 0;
+                                pump(300);
+                                const int seen = drawn;
+                                key(Qt::Key_K, QStringLiteral("k"));
+                                return seen;
+                            };
+                            const int ahead = run(0, Qt::Key_L, QStringLiteral("l"));
+                            const int back = run(950, Qt::Key_J, QStringLiteral("j"));
+                            QObject::disconnect(counting);
+                            report(ahead >= 4, "at 2x forwards the Source picture keeps moving");
+                            report(back >= 3, "and at 2x backwards it does too");
+                            if (ahead < 4 || back < 3)
+                                std::fprintf(stderr, "    frames drawn in 300 ms: %d forwards, %d backwards\n",
+                                             ahead, back);
+                        }
+
+                        workspace.focusPanel(QStringLiteral("edit-bins"));
+                        key(Qt::Key_L, QStringLiteral("l"));
+                        report(rate() == 0.0, "and none of it reaches the viewer when another panel is active");
+                    } else {
+                        report(false, "the Source viewer has its bar, clock and shuttle");
+                    }
 
                     // Out of the picture and onto a track. The range is marked first, as
                     // the operator would, so the drop has a length.
@@ -8946,11 +9097,277 @@ int main(int argc, char** argv) {
                                "pressing on the Source picture picks up the marked range");
                         report(target->property("containsDrag").toBool(),
                                "and carrying it over the timeline is seen by the timeline");
+                    {
+                        const auto outlines =
+                            collect(window->contentItem(), QStringLiteral("sourceDragOutline"));
+                        QQuickItem* o = outlines.isEmpty() ? nullptr : outlines.front();
+                        report(o && o->isVisible() && o->width() > 0 &&
+                                   target->contains(target->mapFromScene(o->mapToScene(
+                                       QPointF(o->width() / 2, o->height() / 2)))) ,
+                               "the picture's outline follows the pointer onto the timeline");
+                        report(QGuiApplication::overrideCursor() != nullptr,
+                               "with the closed hand for a pointer");
+                    }
                         post(QEvent::MouseButtonRelease, land, Qt::LeftButton, Qt::NoButton);
                         settle();
                         report(countClips() > before,
                                "dragging the Source picture onto a track places the clip");
                         report(edit->dragPayload().isEmpty(), "and the drag is over");
+
+                        // Straight from the pool, no Source viewer between: the whole file.
+                        const auto poolRows =
+                            collect(window->contentItem(), QStringLiteral("poolFileRow"));
+                        if (!poolRows.isEmpty()) {
+                            QQuickItem* r = poolRows.front();
+                            const int had = countClips();
+                            drag(r->mapToScene(QPointF(r->width() / 2, r->height() / 2)), land);
+                            report(!edit->dragPayload().isEmpty(),
+                                   "a pool file carried over the timeline is a clip to drop");
+                            post(QEvent::MouseButtonRelease, land, Qt::LeftButton, Qt::NoButton);
+                            settle();
+                            report(countClips() > had,
+                                   "and letting go on a track places it, no Source viewer needed");
+                            report(edit->dragPayload().isEmpty(), "and that drag is over too");
+                        } else {
+                            report(false, "the pool shows a file to drag to the timeline");
+                        }
+
+                        // Scrubbing across a cut between two files: the Program picture stays
+                        // up the whole way. One player reloaded at the cut went black.
+                        const QString other = QFileInfo(seedPath).absolutePath() +
+                                              QStringLiteral("/other.mp4");
+                        {
+                            QProcess make;
+                            make.start(QStandardPaths::findExecutable(QStringLiteral("ffmpeg")),
+                                       {"-v", "error", "-y", "-f", "lavfi", "-i",
+                                        "testsrc2=size=160x90:rate=30:duration=2", "-g", "60",
+                                        "-pix_fmt", "yuv420p", other});
+                            make.waitForFinished(30000);
+                        }
+                        const int cut = static_cast<int>(
+                            edit->timeline().value(QStringLiteral("duration")).toLongLong());
+                        edit->beginFileDrag(other);
+                        edit->dropOnTimeline(firstTrack, cut, false);
+                        settle();
+                        const auto shownSink = [&]() -> QVideoSink* {
+                            for (const QString& name : {QStringLiteral("programDeckA"),
+                                                        QStringLiteral("programDeckB")})
+                                for (QQuickItem* d : collect(window->contentItem(), name))
+                                    if (d->isVisible())
+                                        if (auto* o = d->property("output").value<QQuickItem*>())
+                                            return o->property("videoSink").value<QVideoSink*>();
+                            return nullptr;
+                        };
+                        // A saved layout can lack the Program viewer; opened for this, and
+                        // closed again after.
+                        workspace.focusPanel(QStringLiteral("edit-program"));
+                        const bool programOpened =
+                            workspace.focusedPanel() != QLatin1String("edit-program");
+                        if (programOpened)
+                            workspace.openPanel(QStringLiteral("edit-program"));
+                        workspace.activate(QStringLiteral("edit-program"));
+                        settle();
+                        edit->setPlayhead(cut - 12);
+                        for (int i = 0; i < 80; ++i) {
+                            const QVideoSink* k = shownSink();
+                            if (k && k->videoFrame().isValid())
+                                break;
+                            pump(25);
+                        }
+                        int blank = 0;
+                        int steps = 0;
+                        const QString firstSource =
+                            edit->clipUnderPlayheadMap().value(QStringLiteral("source")).toString();
+                        bool crossed = false;
+                        for (int f = cut - 12; f <= cut + 12; f += 2) {
+                            edit->setPlayhead(f);
+                            pump(40);
+                            ++steps;
+                            const QVideoSink* k = shownSink();
+                            if (!k || !k->videoFrame().isValid())
+                                ++blank;
+                            crossed = crossed ||
+                                      edit->clipUnderPlayheadMap().value(QStringLiteral("source")).toString() !=
+                                          firstSource;
+                        }
+                        // Both ways, as a hand scrubs.
+                        for (int f = cut + 12; f >= cut - 12; f -= 3) {
+                            edit->setPlayhead(f);
+                            pump(25);
+                            ++steps;
+                            const QVideoSink* k = shownSink();
+                            if (!k || !k->videoFrame().isValid())
+                                ++blank;
+                        }
+                        report(crossed, "the scrub crosses a cut between two files");
+                        report(blank == 0, "and the Program picture never goes blank doing it");
+                        if (blank)
+                            std::fprintf(stderr, "    blank on %d of %d steps\n", blank, steps);
+                        pump(400);
+                        const QVideoSink* k = shownSink();
+                        const auto shownUrl = [&] {
+                            for (const QString& name : {QStringLiteral("programDeckA"),
+                                                        QStringLiteral("programDeckB")})
+                                for (QQuickItem* d : collect(window->contentItem(), name))
+                                    if (d->isVisible())
+                                        return d->property("url").toString();
+                            return QString{};
+                        };
+                        const QString back = shownUrl();
+                        edit->setPlayhead(cut + 6);
+                        pump(500);
+                        const QString across = shownUrl();
+                        report(k && k->videoFrame().isValid() &&
+                                   back == QStringLiteral("file://") + firstSource &&
+                                   across == QStringLiteral("file://") + other,
+                               "and the picture shown is the shot under the playhead, either side");
+                        if (back != QStringLiteral("file://") + firstSource ||
+                            across != QStringLiteral("file://") + other)
+                            std::fprintf(stderr, "    before the cut %s, after it %s\n",
+                                         qPrintable(back), qPrintable(across));
+                        if (programOpened) {
+                            workspace.closePanel(QStringLiteral("edit-program"));
+                            settle();
+                        }
+
+                        // Effects are listed picture first, then sound, each under a heading.
+                        {
+                            // Opened if the layout lacks it, and its tab brought forward so
+                            // the list is built.
+                            workspace.openPanel(QStringLiteral("edit-effects"));
+                            workspace.activate(QStringLiteral("edit-effects"));
+                            // The list shows for a selected clip.
+                            for (const QVariant& t :
+                                 edit->timeline().value(QStringLiteral("tracks")).toList())
+                                for (const QVariant& c : t.toMap().value(QStringLiteral("clips")).toList()) {
+                                    edit->selectClip(t.toMap().value(QStringLiteral("id")).toString(),
+                                                     c.toMap().value(QStringLiteral("id")).toString());
+                                    break;
+                                }
+                            settle();
+                            // The list's own model, in order: the rows far down are not built
+                            // until scrolled to, so the drawn ones cannot say.
+                            QStringList order;
+                            bool sorted = true;
+                            bool sawAudio = false;
+                            QQuickItem* list = nullptr;
+                            for (QQuickItem* h : collect(window->contentItem(), QStringLiteral("effectsHeading")))
+                                if (h->isVisible())
+                                    for (QQuickItem* p = h->parentItem(); p && !list; p = p->parentItem())
+                                        if (p->inherits("QQuickListView"))
+                                            list = p;
+                            for (const QVariant& v : list ? list->property("model").toList() : QVariantList{}) {
+                                const QVariantMap m = v.toMap();
+                                if (m.contains(QStringLiteral("heading"))) {
+                                    order << m.value(QStringLiteral("heading")).toString();
+                                    continue;
+                                }
+                                const bool audio = m.value(QStringLiteral("audio")).toBool();
+                                sorted = sorted && audio == (order.size() == 2) && !order.isEmpty();
+                                sawAudio = sawAudio || audio;
+                            }
+                            report(list && sawAudio && sorted &&
+                                       order == QStringList{QStringLiteral("Video"), QStringLiteral("Audio")},
+                                   "effects are listed under Video, then Audio");
+                            if (parser.isSet(shot_opt))
+                                window->grabWindow().save(parser.value(shot_opt).split(QLatin1Char(',')).front() +
+                                                          QStringLiteral("/edit-effects.png"));
+                        }
+                    }
+
+                    // The sequence's own J-K-L, from the Program viewer and from the timeline:
+                    // the timeline's used to be `Keys`, dead the moment a click took focus.
+                    const auto press = [&](int k, const QString& text) {
+                        qt_sendShortcutOverrideEvent(window, 0, k, Qt::NoModifier, text);
+                        QCoreApplication::processEvents();
+                    };
+                    // A saved layout can lack either; opened for the check, closed after.
+                    QStringList opened;
+                    for (const QString& id :
+                         {QStringLiteral("edit-program"), QStringLiteral("edit-timeline")}) {
+                        edit->pause();
+                        edit->setPlayhead(0);
+                        workspace.focusPanel(id);
+                        if (workspace.focusedPanel() != id) {
+                            workspace.openPanel(id);
+                            opened << id;
+                            settle();
+                            workspace.focusPanel(id);
+                        }
+                        settle();
+                        press(Qt::Key_L, QStringLiteral("l"));
+                        press(Qt::Key_L, QStringLiteral("l"));
+                        const double two = edit->rate();
+                        press(Qt::Key_K, QStringLiteral("k"));
+                        const double stopped = edit->rate();
+                        press(Qt::Key_Space, QStringLiteral(" "));
+                        const double played = edit->rate();
+                        press(Qt::Key_Space, QStringLiteral(" "));
+                        report(two == 2.0 && stopped == 0.0 && played == 1.0 && edit->rate() == 0.0,
+                               qPrintable(QStringLiteral("L L, K and space drive the sequence from ") + id));
+                        if (!(two == 2.0 && stopped == 0.0 && played == 1.0))
+                            std::fprintf(stderr, "    %s: L L %.1f, K %.1f, space %.1f, focused %s, length %lld\n",
+                                         qPrintable(id), two, stopped, played,
+                                         qPrintable(workspace.focusedPanel()),
+                                         edit->timeline().value(QStringLiteral("duration")).toLongLong());
+                        // Opened as a tab in the biggest group, it would hide the next panel.
+                        if (opened.contains(id)) {
+                            workspace.closePanel(id);
+                            settle();
+                        }
+                    }
+
+                    // New Timeline asks before it makes: the + opens the dialog, and the format
+                    // chosen there is the one the timeline gets.
+                    {
+                        const auto buttons =
+                            collect(window->contentItem(), QStringLiteral("newTimelineButton"));
+                        const auto dialogs =
+                            collect(window->contentItem(), QStringLiteral("timelineDialog"));
+                        const qsizetype before = edit->timelines().size();
+                        if (!buttons.isEmpty() && !dialogs.isEmpty()) {
+                            QQuickItem* plus = buttons.front();
+                            const QPointF at =
+                                plus->mapToScene(QPointF(plus->width() / 2, plus->height() / 2));
+                            post(QEvent::MouseButtonPress, at, Qt::LeftButton, Qt::LeftButton);
+                            post(QEvent::MouseButtonRelease, at, Qt::LeftButton, Qt::NoButton);
+                            settle();
+                            QQuickItem* dialog = dialogs.front();
+                            report(dialog->isVisible() && edit->timelines().size() == before,
+                                   "New Timeline opens its dialog rather than making one");
+                            dialog->setProperty("timelineName", QStringLiteral("Dialog Timeline"));
+                            dialog->setProperty("rate", QStringLiteral("23.976"));
+                            dialog->setProperty("preset", QStringLiteral("3840 x 2160 Ultra HD"));
+                            QMetaObject::invokeMethod(dialog, "applyPreset");
+                            if (parser.isSet(shot_opt)) {
+                                const QString dir =
+                                    parser.value(shot_opt).split(QLatin1Char(',')).front();
+                                QDir().mkpath(dir);
+                                window->grabWindow().save(dir + QStringLiteral("/new-timeline.png"));
+                            }
+                            const auto accepts =
+                                collect(window->contentItem(), QStringLiteral("timelineAccept"));
+                            if (!accepts.isEmpty()) {
+                                QQuickItem* ok = accepts.front();
+                                const QPointF go =
+                                    ok->mapToScene(QPointF(ok->width() / 2, ok->height() / 2));
+                                post(QEvent::MouseButtonPress, go, Qt::LeftButton, Qt::LeftButton);
+                                post(QEvent::MouseButtonRelease, go, Qt::LeftButton, Qt::NoButton);
+                            }
+                            settle();
+                            const QVariantMap made = edit->timeline();
+                            report(!dialog->isVisible() && edit->timelines().size() == before + 1 &&
+                                       made.value(QStringLiteral("name")).toString() ==
+                                           QLatin1String("Dialog Timeline"),
+                                   "Create makes the timeline named in the dialog");
+                            report(std::abs(made.value(QStringLiteral("fps")).toDouble() -
+                                            24000.0 / 1001.0) < 1e-9 &&
+                                       made.value(QStringLiteral("width")).toInt() == 3840 &&
+                                       made.value(QStringLiteral("height")).toInt() == 2160,
+                                   "at the rate and size chosen there");
+                        } else {
+                            report(false, "the Sequences list has a + and a New Timeline dialog");
+                        }
                     }
                 }
             }

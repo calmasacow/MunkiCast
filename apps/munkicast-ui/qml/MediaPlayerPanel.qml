@@ -39,6 +39,21 @@ Item {
         audioOutput: AudioOutput {}
     }
 
+    Shuttle {
+        id: shuttle
+        player: player
+        output: output
+    }
+
+    TransportKeys {
+        panelId: "media-player"
+        enabled: panel.playable
+        onReverse: shuttle.reverse()
+        onStop: shuttle.stop()
+        onForward: shuttle.forward()
+        onToggle: shuttle.toggle()
+    }
+
     VideoOutput {
         id: output
 
@@ -117,7 +132,7 @@ Item {
                     if (player.duration <= 0)
                         return;
                     const fraction = Math.max(0, Math.min(1, x / track.width));
-                    player.position = fraction * player.duration;
+                    shuttle.seek(fraction * player.duration);
                 }
             }
         }
@@ -130,15 +145,15 @@ Item {
             spacing: 6
 
             ToolButton {
-                label: player.playing ? "❚❚" : "▶"
-                tip: player.playing ? qsTr("Pause") : qsTr("Play")
-                onClicked: player.playing ? player.pause() : player.play()
+                label: shuttle.rate !== 0 ? "❚❚" : "▶"
+                tip: qsTr("Play or pause (space; J, K, L shuttle)")
+                onClicked: shuttle.toggle()
             }
 
             ToolButton {
                 label: "■"
                 tip: qsTr("Stop")
-                onClicked: player.stop()
+                onClicked: { shuttle.stop(); player.stop(); }
             }
         }
 

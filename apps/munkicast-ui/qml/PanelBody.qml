@@ -520,4 +520,17 @@ Item {
         color: Theme.c.textMuted
         opacity: 0.5
     }
+
+    // A press anywhere in a panel makes it the focused one, not only a press on its tab --
+    // that is how J-K-L and space reach the player under the pointer. Laid over the contents
+    // and passive: it watches the press go by and every control underneath still gets it.
+    Item {
+        anchors.fill: parent
+        z: 1000
+
+        PointHandler {
+            acceptedButtons: Qt.AllButtons
+            onActiveChanged: if (active) Workspace.focusPanel(body.panelId)
+        }
+    }
 }
