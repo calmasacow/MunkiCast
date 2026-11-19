@@ -162,7 +162,7 @@ Item {
 
             Text {
                 width: content.width
-                visible: Document.decks.rowCount() === 0
+                visible: Document.revision >= 0 && Document.decks.rowCount() === 0
                 padding: 10
                 text: qsTr("No deck. A deck is one program path for one canvas.")
                 font.pixelSize: 10

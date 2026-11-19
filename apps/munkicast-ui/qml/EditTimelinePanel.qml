@@ -34,7 +34,8 @@ Item {
 
     readonly property var doc: Edit.timeline
     readonly property bool hasDocument: Edit.hasTimeline
-    readonly property var tracks: panel.hasDocument ? panel.doc.tracks : []
+    // `|| []`: a timeline just made is announced before its tracks are filled in.
+    readonly property var tracks: panel.hasDocument ? (panel.doc.tracks || []) : []
 
     function frameAt(x) {
         return Math.max(0, Math.round(panel.offset + (x - panel.headerWidth) / panel.scale));
@@ -228,7 +229,8 @@ Item {
 
                 required property int index
 
-                readonly property var track: panel.trackOfLane(header.index)
+                // `|| ({})`: for a moment after tracks change, a delegate outlives its lane.
+                readonly property var track: panel.trackOfLane(header.index) || ({})
                 readonly property bool audio: header.track.kind === "audio"
 
                 width: parent.width
@@ -366,7 +368,7 @@ Item {
                     anchors.bottomMargin: 5
                     visible: header.audio
                     text: (header.track.gainDb > 0 ? "+" : "") +
-                          header.track.gainDb.toFixed(1)
+                          (header.track.gainDb || 0).toFixed(1)
                     font.pixelSize: 9
                     font.family: "monospace"
                     color: gainMouse.containsMouse ? Theme.c.accent : Theme.c.textMuted
@@ -969,6 +971,7 @@ Item {
     DropArea {
         id: timelineDrop
 
+        objectName: "timelineDrop"
         anchors.fill: parent
         keys: ["application/x-munkicast-source"]
 

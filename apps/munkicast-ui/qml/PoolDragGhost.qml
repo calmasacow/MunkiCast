@@ -14,37 +14,36 @@ import MunkiCast
 Item {
     id: ghost
 
+    objectName: "poolDragGhost"
+
     property string path: ""
     property string label: ""
+    /// Set by the panel when a press has moved far enough to be a drag.
+    property bool dragging: false
 
-    /// Told to the drop target through the drag's own mime data, so the Source viewer does
-    /// not have to reach back into the panel the drag came from.
-    Drag.active: dragArea.drag.active
-    Drag.hotSpot.x: width / 2
-    Drag.hotSpot.y: height / 2
+    /// What the drop target sees. The Source viewer reads the uri from here, so it does not
+    /// have to reach back into the panel the drag came from.
+    Drag.active: ghost.dragging
+    // The hot spot is the pointer: the ghost sits just right of and below it, and the
+    // drop lands where the pointer is, not 8px away.
+    Drag.hotSpot.x: 0
+    Drag.hotSpot.y: 0
+    // Keys as well as data: for an internal drag a DropArea matches its `keys` against
+    // these, not against the mime formats, so without them every target refused the drop.
+    Drag.keys: ["text/uri-list"]
     Drag.mimeData: ({"text/uri-list": "file://" + ghost.path})
     Drag.dragType: Drag.Internal
+    Drag.supportedActions: Qt.CopyAction
 
-    width: 1
-    height: 1
+    // A real size, because Qt drags an item by moving it and a one-pixel item has nowhere to
+    // be. This is the label that follows the cursor.
+    width: caption.implicitWidth + 14
+    height: caption.implicitHeight + 8
+    visible: ghost.dragging
+    z: 95
 
-    function drop() {
-        if (ghost.Drag.active)
-            ghost.Drag.drop();
-        ghost.x = 0;
-        ghost.y = 0;
-    }
-
-    // The label that follows the cursor. Parented to the window so it is not clipped by the
-    // panel the drag started in.
     Rectangle {
-        parent: ghost.Window.contentItem
-        visible: ghost.Drag.active
-        z: 90
-        x: ghost.mapToItem(parent, 0, 0).x + 12
-        y: ghost.mapToItem(parent, 0, 0).y + 12
-        width: caption.implicitWidth + 14
-        height: caption.implicitHeight + 8
+        anchors.fill: parent
         radius: 3
         color: Theme.c.panelBackground
         border.color: Theme.c.accent
@@ -58,15 +57,5 @@ Item {
             font.pixelSize: 10
             color: Theme.c.text
         }
-    }
-
-    // `drag.target` on the caller's MouseArea needs a target with a drag of its own for
-    // `Drag.active` to mean anything.
-    MouseArea {
-        id: dragArea
-
-        anchors.fill: parent
-        enabled: false
-        drag.target: ghost
     }
 }

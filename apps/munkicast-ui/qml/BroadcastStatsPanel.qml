@@ -466,7 +466,7 @@ Item {
 
             Text {
                 width: parent.width
-                visible: Document.outputs.rowCount() === 0
+                visible: Document.revision >= 0 && Document.outputs.rowCount() === 0
                 text: qsTr("No outputs configured.")
                 font.pixelSize: 10
                 color: Theme.c.textMuted

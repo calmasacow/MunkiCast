@@ -270,7 +270,9 @@ void Media::setProjectDirectory(const QString& dir) {
     // Straight to Recordings: on the Media tab, the overwhelmingly common errand is "play back
     // what I just recorded".
     openFolder(dir.isEmpty() ? QString{} : QStringLiteral("Recordings"));
-    open_bin_ = dir.isEmpty() ? QString{} : QStringLiteral("Recordings");
+    // The pool starts at its root: a new project's first sight of the pool is its bins.
+    open_bin_.clear();
+    bin_items_.clear();
     emit folderChanged();
     // The pool is a different project's now, so every bin in it changed. Without this the
     // Media Pool panel kept whatever list it last read -- which, on a shell that opened a
@@ -325,8 +327,26 @@ void Media::openFolder(const QString& pathOrName) {
     if (!path.isEmpty() && !QDir::isAbsolutePath(path) && !projectDir_.isEmpty())
         path = QDir(projectDir_).filePath(path);
     folder_ = path;
+    // One folder on screen, shared with the pool: browsing a system folder elsewhere is
+    // opening its bin, and anything else leaves no bin open rather than one whose name
+    // disagrees with the files listed.
+    bin_items_.clear();
+    open_bin_.clear();
+    for (const std::string& name : ldoc::system_bin_folders()) {
+        const QString folder = QString::fromStdString(name);
+        if (!projectDir_.isEmpty() && path == QDir(projectDir_).filePath(folder))
+            open_bin_ = folder;
+    }
     scan();
     emit folderChanged();
+    emit binsChanged();
+}
+
+void Media::closeBin() {
+    if (open_bin_.isEmpty())
+        return;
+    open_bin_.clear();
+    emit binsChanged();
 }
 
 void Media::refresh() {

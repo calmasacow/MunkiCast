@@ -18,9 +18,60 @@ Item {
     id: panel
 
     /// Showing a folder's files rather than the folders themselves.
-    property bool inFolder: false
+    // Held by Media, not here: the panel is rebuilt when the Edit tab is left, and a
+    // flag of its own came back false, dropping the operator out of the bin they were in.
+    readonly property bool inFolder: Media.openBin !== ""
     /// Tiles or rows. A grid reads faster for pictures, a list for names and lengths.
     property bool grid: true
+
+    /// The one drag in flight, driven by whichever row was pressed.
+    ///
+    /// A property rather than a component per row: Qt drags an item by moving it, so the
+    /// thing being dragged has to be a real item with somewhere to go.
+    readonly property var poolDragState: QtObject {
+        property string path: ""
+        property point from: Qt.point(0, 0)
+        property bool active: false
+        /// True from the moment a drag passes the threshold until the click that follows the
+        /// release has been swallowed, so a drag does not also open the file.
+        property bool wasDrag: false
+
+        function press(filePath, label, at) {
+            poolDragState.path = filePath;
+            poolDragState.from = at;
+            poolDragState.active = false;
+            poolDragState.wasDrag = false;
+            poolDrag.label = label;
+            poolDrag.path = filePath;
+        }
+
+        function move(at) {
+            if (poolDragState.path === "")
+                return;
+            if (!poolDragState.active) {
+                const dx = at.x - poolDragState.from.x;
+                const dy = at.y - poolDragState.from.y;
+                if (dx * dx + dy * dy < 36)
+                    return; // inside the threshold: still a click
+                poolDragState.active = true;
+                poolDragState.wasDrag = true;
+                poolDrag.dragging = true;
+            }
+            // The ghost lives on the window, so it is not clipped to the pool.
+            const p = panel.mapToItem(poolDrag.parent, at.x, at.y);
+            poolDrag.x = p.x;
+            poolDrag.y = p.y;
+        }
+
+        function release() {
+            if (poolDragState.active) {
+                poolDrag.Drag.drop();
+                poolDrag.dragging = false;
+                poolDragState.active = false;
+            }
+            poolDragState.path = "";
+        }
+    }
 
     /// Open the pool's menu. `bin` is the one under the pointer, or null for empty space.
     function showMenu(from, ev, bin) {
@@ -71,7 +122,7 @@ Item {
             label: "↑"
             tip: qsTr("Back to the project's folders")
             enabled: panel.inFolder
-            onClicked: panel.inFolder = false
+            onClicked: Media.closeBin()
         }
 
         Rectangle {
@@ -159,6 +210,7 @@ Item {
                 delegate: Item {
                     id: tile
 
+                    objectName: "binTile"
                     required property var modelData
 
                     width: 84
@@ -229,13 +281,15 @@ Item {
                         anchors.fill: parent
                         hoverEnabled: true
                         acceptedButtons: Qt.LeftButton | Qt.RightButton
-                        onClicked: (ev) => {
+                        // Not an arrow function: `this` inside one is not the MouseArea, so
+                        // the menu could not work out where it had been opened and never
+                        // appeared.
+                        onClicked: function(ev) {
                             if (ev.button === Qt.RightButton) {
-                                panel.showMenu(this, ev, tile.modelData);
+                                panel.showMenu(tileMouse, ev, tile.modelData);
                                 return;
                             }
                             Media.openBinById(tile.modelData.id);
-                            panel.inFolder = true;
                         }
                     }
 
@@ -254,12 +308,24 @@ Item {
 
         // Right-clicking the empty space below the bins is the other way to reach the menu,
         // and the only one when a project has no bins at all.
-        MouseArea {
-            anchors.fill: parent
-            z: -1
-            acceptedButtons: Qt.RightButton
-            onClicked: (ev) => panel.showMenu(this, ev, null)
-        }
+    }
+
+    // Right-clicking anywhere in the pool opens its menu, not only within a few pixels of a
+    // bin. This sits over the whole panel rather than inside the Flow, which is only as tall
+    // as its rows -- so every empty pixel below the last row was dead, which is most of the
+    // panel. The bins take their own right-clicks first; this one gets the rest.
+    MouseArea {
+        id: emptyMouse
+
+        objectName: "poolEmptySpace"
+
+        anchors.left: parent.left
+        anchors.right: parent.right
+        anchors.top: bar.bottom
+        anchors.bottom: timelinesHeader.top
+        z: -1
+        acceptedButtons: Qt.RightButton
+        onClicked: function(ev) { panel.showMenu(emptyMouse, ev, null); }
     }
 
     // ---- a folder's files ----
@@ -279,6 +345,9 @@ Item {
         GridView {
             clip: true
             model: Media
+            // Not flicked: a flick takes the press a drag needs (ADR-0039). The wheel
+            // comes back through NoDragScroll.
+            interactive: false
             cellWidth: 96
             cellHeight: 76
             boundsBehavior: Flickable.StopAtBounds
@@ -287,6 +356,8 @@ Item {
 
             delegate: Item {
                 id: gtile
+
+                objectName: "poolFileRow"
 
                 required property int index
                 required property string path
@@ -350,32 +421,33 @@ Item {
                 MouseArea {
                     id: gridMouse
 
+                    // Kept from the panel stack's own gestures once a drag is under way.
+                    preventStealing: true
+
                     anchors.fill: parent
                     hoverEnabled: true
                     // Dragged onto the Source viewer, which is how a clip is auditioned
                     // before any of it is used. The payload is the file; the Source viewer
                     // is what decides which part of it goes anywhere.
-                    drag.target: gridGhost
-                    onPressed: {
-                        gridGhost.path = gtile.path;
-                        gridGhost.label = gtile.name;
-                    }
-                    onReleased: gridGhost.drop()
-                    onClicked: Edit.openSource(gtile.path)
-                    onDoubleClicked: {
-                        if (!Edit.hasTimeline)
-                            Edit.createTimeline(qsTr("Timeline 1"));
-                        Edit.appendToFirstTrack(gtile.path);
-                    }
-                }
-
-                PoolDragGhost {
-                    id: gridGhost
+                    // The drag is run by the panel: one ghost, moved in panel
+                    // coordinates. A ghost per row was tried and cannot work -- Qt drags an
+                    // item by moving it, and a one-pixel item inside a delegate has nowhere
+                    // to be moved to.
+                    onPressed: (ev) => poolDragState.press(gtile.path, gtile.name,
+                                                      gridMouse.mapToItem(panel, ev.x, ev.y))
+                    onPositionChanged: (ev) => poolDragState.move(
+                        gridMouse.mapToItem(panel, ev.x, ev.y))
+                    onReleased: poolDragState.release()
+                    onClicked: { if (!poolDragState.wasDrag) Edit.openSource(gtile.path); }
+                    // Into the Source viewer, not onto the timeline. A clip is looked at
+                    // and marked up before any of it is used; appending the whole of it
+                    // because someone double-clicked is an edit they did not ask for.
+                    onDoubleClicked: Edit.openSource(gtile.path)
                 }
 
                 ToolTipText {
-                    text: qsTr("Click or drag to the Source viewer, double-click to append")
-                    visible: gridMouse.containsMouse && !gridGhost.Drag.active
+                    text: qsTr("Open in the Source viewer, or drag it there")
+                    visible: gridMouse.containsMouse && !poolDragState.active
                     hoverArea: gridMouse
                 }
             }
@@ -388,6 +460,7 @@ Item {
         ListView {
             clip: true
             model: Media
+            interactive: false
             boundsBehavior: Flickable.StopAtBounds
 
             NoDragScroll {}
@@ -395,6 +468,7 @@ Item {
             delegate: Item {
                 id: file
 
+                objectName: "poolFileRow"
                 required property int index
                 required property string path
                 required property string name
@@ -435,32 +509,23 @@ Item {
                 MouseArea {
                     id: fileMouse
 
+                    // Kept from the panel stack's own gestures once a drag is under way.
+                    preventStealing: true
+
                     anchors.fill: parent
                     hoverEnabled: true
-                    drag.target: rowGhost
-                    onPressed: {
-                        rowGhost.path = file.path;
-                        rowGhost.label = file.name;
-                    }
-                    onReleased: rowGhost.drop()
-                    onClicked: Edit.openSource(file.path)
-                    // Double-click appends, rather than drag-and-drop: dropping onto a
-                    // Canvas-drawn timeline would need its own hit testing, and appending is
-                    // the gesture an assembly edit is actually made of.
-                    onDoubleClicked: {
-                        if (!Edit.hasTimeline)
-                            Edit.createTimeline(qsTr("Timeline 1"));
-                        Edit.appendToFirstTrack(file.path);
-                    }
-                }
-
-                PoolDragGhost {
-                    id: rowGhost
+                    onPressed: (ev) => poolDragState.press(file.path, file.name,
+                                                      fileMouse.mapToItem(panel, ev.x, ev.y))
+                    onPositionChanged: (ev) => poolDragState.move(
+                        fileMouse.mapToItem(panel, ev.x, ev.y))
+                    onReleased: poolDragState.release()
+                    onClicked: { if (!poolDragState.wasDrag) Edit.openSource(file.path); }
+                    onDoubleClicked: Edit.openSource(file.path)
                 }
 
                 ToolTipText {
-                    text: qsTr("Click or drag to the Source viewer, double-click to append")
-                    visible: fileMouse.containsMouse && !rowGhost.Drag.active
+                    text: qsTr("Open in the Source viewer, or drag it there")
+                    visible: fileMouse.containsMouse && !poolDragState.active
                     hoverArea: fileMouse
                 }
             }
@@ -496,6 +561,14 @@ Item {
         }
     }
 
+    PoolDragGhost {
+        id: poolDrag
+
+        parent: panel.Window.contentItem
+
+        objectName: "poolDragGhost"
+    }
+
     StripMenu {
         id: poolMenu
 
@@ -527,7 +600,6 @@ Item {
             if (made !== "") {
                 newBin.visible = false;
                 Media.openBinById(made);
-                panel.inFolder = true;
             }
         }
 

@@ -55,13 +55,19 @@ Item {
     // A clip dragged out of the Media Pool lands here, which is how one is auditioned
     // before any of it is used.
     DropArea {
+        objectName: "sourceDrop"
         anchors.fill: parent
         keys: ["text/uri-list"]
 
         onDropped: (drop) => {
-            const uri = drop.getDataAsString("text/uri-list");
-            if (uri.startsWith("file://"))
-                Edit.openSource(uri.substring(7));
+            // From the pool the drag is internal, and the file is on the ghost that carried
+            // it; from outside the application it is only in the data.
+            const carried = drop.source && drop.source.path ? drop.source.path : "";
+            const uri = carried ? "" : drop.getDataAsString("text/uri-list");
+            if (carried)
+                Edit.openSource(carried);
+            else if (uri.startsWith("file://"))
+                Edit.openSource(decodeURIComponent(uri.split(/\r?\n/)[0].substring(7)));
             drop.accept();
         }
 
@@ -92,13 +98,27 @@ Item {
     Item {
         id: dragOut
 
-        anchors.fill: output
+        objectName: "sourceDragOut"
+
+        // Sized, not anchored: an anchored item cannot be moved, and a drag is the item
+        // moving. `output` sits at the panel's top-left, so 0,0 is its place at rest.
+        x: 0
+        y: 0
+        width: output.width
+        height: output.height
         z: 5
         visible: panel.hasSource
 
         Drag.active: dragMouse.drag.active
-        Drag.hotSpot.x: 0
-        Drag.hotSpot.y: 0
+        // Where the press was, inside the picture. The drop lands at the hot spot, so it
+        // has to be the point under the pointer; at the item's corner a press in the
+        // middle of the picture dropped half a viewer up and left of the cursor -- usually
+        // off the timeline altogether, so letting go did nothing.
+        property point grabbed: Qt.point(0, 0)
+        Drag.hotSpot.x: dragOut.grabbed.x
+        Drag.hotSpot.y: dragOut.grabbed.y
+        // DropArea matches these, not the mime formats, for an internal drag.
+        Drag.keys: ["application/x-munkicast-source"]
         Drag.mimeData: ({"application/x-munkicast-source": panel.src.path})
         Drag.dragType: Drag.Internal
 
@@ -110,7 +130,14 @@ Item {
             // A click still scrubs nothing and a drag still starts: the threshold keeps a
             // careless press from becoming an edit.
             drag.threshold: 8
-            onPressed: Edit.beginSourceDrag(panel.dragVideo, panel.dragAudio)
+            // Not smoothed: smoothing holds the item back by the threshold so it does not jump,
+            // which left the drop point that far behind the pointer -- in the ruler when the
+            // pointer was on the top track, so the drop found no track.
+            drag.smoothed: false
+            onPressed: (mouse) => {
+                dragOut.grabbed = Qt.point(mouse.x, mouse.y);
+                Edit.beginSourceDrag(panel.dragVideo, panel.dragAudio);
+            }
             onReleased: {
                 if (dragOut.Drag.active)
                     dragOut.Drag.drop();

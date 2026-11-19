@@ -147,6 +147,9 @@ public:
 
     /// Show a bin's contents.
     Q_INVOKABLE void openBinById(const QString& id);
+    /// Back to the pool's root, the bins themselves. Held here rather than in the panel,
+    /// so leaving the Edit tab and coming back finds the pool where it was left.
+    Q_INVOKABLE void closeBin();
     /// Make a bin. Returns its id, or empty when the name is unusable or already taken.
     Q_INVOKABLE QString createBin(const QString& name);
     /// Rename or remove one the operator made. System bins are refused: their names are their

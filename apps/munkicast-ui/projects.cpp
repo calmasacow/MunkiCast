@@ -120,15 +120,10 @@ bool Document::createProject(const QString& path, const QString& name) {
         emit notice(QString::fromStdString(made.error()));
         return false;
     }
-    if (!openProject(path))
-        return false;
-
-    // A project with no shows in it is a project you cannot do anything in: every panel on
-    // the Live and Build tabs needs a collection to draw. Making the first one here means a
-    // new project opens ready to work rather than opening empty and saying so.
-    if (ldoc::project_collections(fs::path(path.toStdString())).empty())
-        return createCollection(name.trimmed());
-    return true;
+    // No scene collection is made here. A project is the folder the work lives in; which
+    // shows go in it is the operator's decision, and inventing one named after the project
+    // guesses at it. The Scene Collection menu makes them.
+    return openProject(path);
 }
 
 bool Document::openProject(const QString& path) {

@@ -284,6 +284,18 @@ int main(int argc, char** argv) {
     QObject::connect(&theme, &munkicast::ui::Theme::notice, &app, say);
     QObject::connect(&document, &munkicast::ui::Document::notice, &app, say);
     QObject::connect(&preview, &munkicast::ui::Preview::notice, &app, say);
+
+    // Reopen the project that was open at close. Only the collection used to come back,
+    // so the shell started on a show with no project around it: no pool, no folders,
+    // nothing to save into. A preference for "last project or project manager" goes
+    // here once the manager exists.
+    if (!check && !parser.isSet(project_opt)) {
+        const QVariantList recent = document.recentProjects();
+        const QString last = recent.isEmpty()
+            ? QString{} : recent.front().toMap().value(QStringLiteral("path")).toString();
+        if (!last.isEmpty() && QFileInfo::exists(last))
+            document.openProject(last);
+    }
     auto* websocket = engine.singletonInstance<munkicast::ui::WebsocketServer*>("MunkiCast", "WebsocketServer");
     if (!websocket) return fail("the WebSocket settings could not be created");
     websocket->initialize(preview, document,
@@ -8720,6 +8732,238 @@ int main(int argc, char** argv) {
             }
         }
 
+        // The pool's own gestures, driven as gestures: a right-click that has to open a
+        // menu, and a press-move-release that has to become a drag.
+        //
+        // Where the shell goes back to when this is done.
+        //
+        // The C++ behind both was checked by calling it directly, and passed, while neither
+        // gesture worked at all -- the ghost bound `Drag.active` to a MouseArea it had
+        // disabled, and the menu handlers were arrow functions, where `this` is not the
+        // MouseArea and `mapToItem` fails. Calling the C++ could never have found either.
+        {
+            const QString restoreCollection = document.projectPath();
+            // And the tab: every check after this one drives panels by name, and those on
+            // the Edit tab are not the ones they look for.
+            const QString restoreWorkspace = workspace.activeWorkspaceName();
+
+            // The Edit tab, by name: the pool only exists there.
+            const bool onEdit = workspace.showWorkspace(QStringLiteral("Edit"));
+            settle();
+            report(onEdit, "the Edit tab can be shown");
+
+            // And a project, because the pool is the project's folders: without one there
+            // are no bins to right-click and nothing to drag.
+            QTemporaryDir poolHome;
+            const QString poolProject = poolHome.path() + QStringLiteral("/Gesture Check");
+            report(document.createProject(poolProject, QStringLiteral("Gesture Check")),
+                   "a project can be made for the gesture check");
+            // Something in a bin to drag: a real second of picture, because the timeline
+            // refuses a drop with no length, and a four-byte stand-in has none.
+            const QString seedPath = poolProject + QStringLiteral("/Clips/seed.mp4");
+            {
+                QProcess make;
+                make.start(QStandardPaths::findExecutable(QStringLiteral("ffmpeg")),
+                           {"-v", "error", "-y", "-f", "lavfi", "-i",
+                            "testsrc=size=160x90:rate=30:duration=1", "-pix_fmt", "yuv420p",
+                            seedPath});
+                make.waitForFinished(30000);
+            }
+            report(QFileInfo(seedPath).size() > 0, "a file is put in a bin to drag");
+            auto* media = engine.singletonInstance<munkicast::ui::Media*>("MunkiCast", "Media");
+            auto* edit = engine.singletonInstance<munkicast::ui::Edit*>("MunkiCast", "Edit");
+            if (media)
+                media->closeBin();
+            settle();
+            const auto pools = collect(window->contentItem(), QStringLiteral("poolMenu"));
+            report(pools.size() == 1, "the Media Pool has a context menu");
+
+            const auto tiles = collect(window->contentItem(), QStringLiteral("binTile"));
+            report(!tiles.isEmpty(), "the pool draws its bins");
+
+            if (!pools.isEmpty() && !tiles.isEmpty()) {
+                QQuickItem* menu = pools.front();
+                QQuickItem* tile = tiles.front();
+                report(!menu->isVisible(), "the menu starts closed");
+
+                // Right-click a bin.
+                const QPointF on =
+                    tile->mapToScene(QPointF(tile->width() / 2, tile->height() / 2));
+                post(QEvent::MouseButtonPress, on, Qt::RightButton, Qt::RightButton);
+                post(QEvent::MouseButtonRelease, on, Qt::RightButton, Qt::NoButton);
+                settle();
+                report(menu->isVisible(), "right-clicking a bin opens the pool menu");
+
+                // And it offers the two things it is for.
+                const QVariantList rows = menu->property("items").toList();
+                QStringList labels;
+                for (const QVariant& row : rows)
+                    labels.append(row.toMap().value(QStringLiteral("text")).toString());
+                report(labels.filter(QStringLiteral("New Bin")).size() == 1,
+                       "the menu offers New Bin");
+                report(labels.filter(QStringLiteral("Import Media")).size() == 1,
+                       "the menu offers Import Media");
+
+                // Escape puts it away again.
+                QKeyEvent escape(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+                QCoreApplication::sendEvent(window, &escape);
+                settle();
+                report(!menu->isVisible(), "escape closes the pool menu");
+
+                const auto rightClick = [&](QQuickItem* item, QPointF local) {
+                    const QPointF at = item->mapToScene(local);
+                    post(QEvent::MouseButtonPress, at, Qt::RightButton, Qt::RightButton);
+                    post(QEvent::MouseButtonRelease, at, Qt::RightButton, Qt::NoButton);
+                    settle();
+                    const bool opened = menu->isVisible();
+                    QKeyEvent away(QEvent::KeyPress, Qt::Key_Escape, Qt::NoModifier);
+                    QCoreApplication::sendEvent(window, &away);
+                    settle();
+                    return opened;
+                };
+                const auto leftClick = [&](QQuickItem* item) {
+                    const QPointF at =
+                        item->mapToScene(QPointF(item->width() / 2, item->height() / 2));
+                    post(QEvent::MouseButtonPress, at, Qt::LeftButton, Qt::LeftButton);
+                    post(QEvent::MouseButtonRelease, at, Qt::LeftButton, Qt::NoButton);
+                    settle();
+                };
+                /// A real drag: press, walk to the target in steps, let go.
+                const auto drag = [&](QPointF from, QPointF to) {
+                    post(QEvent::MouseButtonPress, from, Qt::LeftButton, Qt::LeftButton);
+                    settle();
+                    for (int step = 1; step <= 12; ++step) {
+                        post(QEvent::MouseMove, from + (to - from) * (step / 12.0),
+                             Qt::NoButton, Qt::LeftButton);
+                        settle();
+                    }
+                };
+
+                // Empty space, far below the last bin: the pool's whole body takes a
+                // right-click, not just the strip the bins sit in.
+                const auto empties =
+                    collect(window->contentItem(), QStringLiteral("poolEmptySpace"));
+                QQuickItem* empty = empties.isEmpty() ? nullptr : empties.front();
+                report(empty && rightClick(empty, QPointF(empty->width() / 2,
+                                                          empty->height() - 6)),
+                       "right-clicking empty space at the bottom of the pool opens the menu");
+
+                // Into the Clips bin, with the pointer, as the operator does it.
+                QQuickItem* clipsTile = nullptr;
+                for (QQuickItem* bin : collect(window->contentItem(), QStringLiteral("binTile")))
+                    if (bin->property("modelData").toMap().value("id").toString() ==
+                        QLatin1String("Clips"))
+                        clipsTile = bin;
+                report(clipsTile != nullptr, "the Clips bin is drawn");
+                if (clipsTile)
+                    leftClick(clipsTile);
+                report(media && media->openBin() == QLatin1String("Clips"),
+                       "clicking a bin opens it");
+                report(empty && rightClick(empty, QPointF(empty->width() / 2,
+                                                          empty->height() - 6)),
+                       "right-clicking empty space inside a bin opens the menu too");
+
+                // Away from Edit and back: the pool is where it was left.
+                workspace.showWorkspace(QStringLiteral("Live"));
+                settle();
+                workspace.showWorkspace(QStringLiteral("Edit"));
+                settle();
+                report(media && media->openBin() == QLatin1String("Clips") &&
+                           !collect(window->contentItem(), QStringLiteral("poolFileRow"))
+                                .isEmpty(),
+                       "leaving the Edit tab and coming back keeps the open bin");
+
+                const auto rowsOnScreen =
+                    collect(window->contentItem(), QStringLiteral("poolFileRow"));
+                const auto ghosts =
+                    collect(window->contentItem(), QStringLiteral("poolDragGhost"));
+                const auto sourceDrops =
+                    collect(window->contentItem(), QStringLiteral("sourceDrop"));
+                report(!rowsOnScreen.isEmpty(), "the open bin shows its file");
+                report(!ghosts.isEmpty(), "the pool has a drag ghost");
+                report(!sourceDrops.isEmpty(), "the Source viewer takes drops");
+                QQuickItem* row = rowsOnScreen.isEmpty() ? nullptr : rowsOnScreen.front();
+                QQuickItem* ghost = ghosts.isEmpty() ? nullptr : ghosts.front();
+                QQuickItem* sourceDrop = sourceDrops.isEmpty() ? nullptr : sourceDrops.front();
+                if (row && ghost && sourceDrop && edit) {
+                    edit->openSource(QString{});
+                    const QPointF from =
+                        row->mapToScene(QPointF(row->width() / 2, row->height() / 2));
+                    const QPointF onSource = sourceDrop->mapToScene(
+                        QPointF(sourceDrop->width() / 2, sourceDrop->height() / 3));
+                    drag(from, onSource);
+                    report(ghost->property("dragging").toBool(),
+                           "dragging a pool file starts a drag");
+                    post(QEvent::MouseButtonRelease, onSource, Qt::LeftButton, Qt::NoButton);
+                    settle();
+                    report(!ghost->property("dragging").toBool(), "and letting go ends it");
+                    report(edit->sourceMap().value(QStringLiteral("path")).toString() ==
+                               seedPath,
+                           "a pool file dropped on the Source viewer opens there");
+
+                    // Out of the picture and onto a track. The range is marked first, as
+                    // the operator would, so the drop has a length.
+                    for (int i = 0; i < 120 && edit->sourceMap()
+                                                       .value(QStringLiteral("frames"))
+                                                       .toLongLong() <= 0;
+                         ++i)
+                        pump(25);
+                    edit->setSourceIn(0);
+                    edit->setSourceOut(10);
+                    if (!edit->hasTimeline())
+                        edit->createTimeline(QStringLiteral("Gesture Check"));
+                    settle();
+                    const auto outs = collect(window->contentItem(), QStringLiteral("sourceDragOut"));
+                    const auto targets =
+                        collect(window->contentItem(), QStringLiteral("timelineDrop"));
+                    QQuickItem* out = outs.isEmpty() ? nullptr : outs.front();
+                    QQuickItem* target = targets.isEmpty() ? nullptr : targets.front();
+                    report(out && out->isVisible(), "the Source picture can be dragged from");
+                    report(target != nullptr, "the timeline takes drops");
+                    if (out && target) {
+                        QString firstTrack;
+                        for (const QVariant& t :
+                             edit->timeline().value(QStringLiteral("tracks")).toList())
+                            if (t.toMap().value(QStringLiteral("kind")).toString() ==
+                                QLatin1String("video"))
+                                firstTrack = t.toMap().value(QStringLiteral("id")).toString();
+                        const auto countClips = [&] {
+                            int n = 0;
+                            for (const QVariant& t :
+                                 edit->timeline().value(QStringLiteral("tracks")).toList())
+                                n += t.toMap().value(QStringLiteral("clips")).toList().size();
+                            return n;
+                        };
+                        const int before = countClips();
+                        const QPointF pick =
+                            out->mapToScene(QPointF(out->width() / 2, out->height() / 2));
+                        // Lane 0 is the top video track; well right of the headers.
+                        const QPointF land = target->mapToScene(QPointF(
+                            target->width() * 0.5,
+                            22 + 48 / 2));
+                        drag(pick, land);
+                        report(!edit->dragPayload().isEmpty(),
+                               "pressing on the Source picture picks up the marked range");
+                        report(target->property("containsDrag").toBool(),
+                               "and carrying it over the timeline is seen by the timeline");
+                        post(QEvent::MouseButtonRelease, land, Qt::LeftButton, Qt::NoButton);
+                        settle();
+                        report(countClips() > before,
+                               "dragging the Source picture onto a track places the clip");
+                        report(edit->dragPayload().isEmpty(), "and the drag is over");
+                    }
+                }
+            }
+
+            // Back to the collection, before `poolHome` goes: a catalogue pointed at a
+            // directory that no longer exists fails every later save.
+            document.useCollectionRoot(std::filesystem::path(collectionsBase / "collections"));
+            report(document.openCollection(restoreCollection),
+                   "the shell returns to the collection the gesture check started on");
+            workspace.showWorkspace(restoreWorkspace);
+            settle();
+        }
+
         // Making a project through its own dialog: a name and a place for it, and the folder
         // made where those two say. Driven here rather than trusted because the first version
         // asked only for a location and built the tree inside whatever was picked, which
@@ -8776,11 +9020,12 @@ int main(int argc, char** argv) {
                            QFileInfo::exists(target + QStringLiteral("/Collections")) &&
                            QFileInfo::exists(target + QStringLiteral("/Recordings")),
                        "the tree is made inside the project's own folder");
-                // And it opens ready to work: a project with no collection in it has nothing
-                // for the Live or Build tabs to draw.
-                report(document.projectName() == QLatin1String("Dialog Check") &&
-                           document.projectPath().startsWith(target),
-                       "a new project opens with a scene collection of its own");
+                // Opened, and with no collection invented for it: which shows go in a
+                // project is the operator's call, not one made by naming one after it.
+                report(document.openProjectPath() == target &&
+                           QDir(target + QStringLiteral("/Collections"))
+                               .entryList(QDir::AllEntries | QDir::NoDotAndDotDot).isEmpty(),
+                       "a new project opens empty, with no scene collection made for it");
                 // The folder that was picked holds the project and nothing else: the tree did
                 // not spill into it.
                 report(!QFileInfo::exists(where.path() + QStringLiteral("/Collections")) &&
@@ -8927,6 +9172,16 @@ int main(int argc, char** argv) {
             const QStringList blendNames{"Normal",   "Add",     "Subtract", "Screen",
                                          "Multiply", "Lighten", "Darken"};
             for (int mode = 0; blendField && mode < blendNames.size(); ++mode) {
+                // Found again every pass: choosing a mode changes the document, Properties
+                // rebuilds its fields, and the pointer from the last pass is to a deleted item.
+                blendField = nullptr;
+                for (auto* field : collect(window->contentItem(), "blendModeField"))
+                    if (field->isVisible())
+                        blendField = field;
+                if (!blendField) {
+                    report(false, "the blend field is still there after choosing a mode");
+                    break;
+                }
                 for (auto* parent = blendField->parentItem(); parent;
                      parent = parent->parentItem()) {
                     if (!parent->property("contentY").isValid())

@@ -245,7 +245,12 @@ Item {
 
             Text {
                 width: content.width
-                visible: Document.outputs.rowCount() === 0
+                // `rowCount()` is a call, and a call is not a dependency: the QML engine
+                // has nothing to re-evaluate this on, so the panel kept whatever answer it
+                // got when it was built. Opening a project under an already-visible Outputs
+                // panel left it saying there were no destinations until something else
+                // happened to rebuild it. The revision is the dependency.
+                visible: Document.revision >= 0 && Document.outputs.rowCount() === 0
                 padding: 10
                 text: qsTr("No destinations. Use + to add an output.")
                 font.pixelSize: 10

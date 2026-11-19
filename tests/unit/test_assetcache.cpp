@@ -20,7 +20,7 @@ namespace {
 
 /// A video of this size. Duration is what tells `probe_asset` a video from a still, so a
 /// fixture without one would be testing the still path by accident.
-Probe video(int w, int h) { return Probe{QSize(w, h), QStringLiteral("h264"), 4.0}; }
+Probe video(int w, int h) { return Probe{QSize(w, h), QStringLiteral("h264"), {}, 4.0}; }
 
 const QSize k1440p{2560, 1440};
 const QSize k1080p{1920, 1080};
@@ -79,7 +79,7 @@ LTEST_CASE(encoded_dimensions_are_even) {
 LTEST_CASE(stills_and_unprobeable_files_are_copied) {
     // A still has a video stream and a size too. Duration is what separates them, and a
     // probe that failed entirely must not be guessed at.
-    CHECK_EQ(recipe_for(Probe{QSize(8000, 6000), QStringLiteral("png"), 0.0}, k1080p).name,
+    CHECK_EQ(recipe_for(Probe{QSize(8000, 6000), QStringLiteral("png"), {}, 0.0}, k1080p).name,
              QStringLiteral("copy"));
     CHECK_EQ(recipe_for(Probe{}, k1080p).name, QStringLiteral("copy"));
 }

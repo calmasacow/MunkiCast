@@ -45,19 +45,19 @@ Item {
             StatRow {
                 width: parent.width
                 label: qsTr("Scenes")
-                value: Document.scenes.rowCount()
+                value: Document.revision >= 0 ? Document.scenes.rowCount() : 0
             }
 
             StatRow {
                 width: parent.width
                 label: qsTr("Sources here")
-                value: Document.nodes.rowCount()
+                value: Document.revision >= 0 ? Document.nodes.rowCount() : 0
             }
 
             StatRow {
                 width: parent.width
                 label: qsTr("Inputs")
-                value: Document.sources.rowCount()
+                value: Document.revision >= 0 ? Document.sources.rowCount() : 0
             }
 
             StatRow {

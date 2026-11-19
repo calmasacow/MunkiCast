@@ -214,7 +214,7 @@ Item {
         anchors.right: parent.right
         anchors.top: parent.top
         anchors.margins: 12
-        visible: Document.favouriteScenes.rowCount() === 0
+        visible: Document.revision >= 0 && Document.favouriteScenes.rowCount() === 0
         wrapMode: Text.WordWrap
         text: qsTr("No favourites yet. Click the star beside a scene to put it here — then a live workspace can close the scene and source lists entirely.")
         font.pixelSize: 10
@@ -242,7 +242,9 @@ Item {
             anchors.left: parent.left
             anchors.leftMargin: 10
             anchors.verticalCenter: parent.verticalCenter
-            text: qsTr("%n favourite(s)", "", Document.favouriteScenes.rowCount())
+            text: Document.revision >= 0
+                      ? qsTr("%n favourite(s)", "", Document.favouriteScenes.rowCount())
+                      : ""
             font.pixelSize: 9
             color: Theme.c.textMuted
             opacity: 0.7
