@@ -303,8 +303,11 @@ Item {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: transport.top
-        anchors.margins: 8
-        height: 14
+        // The Source viewer's bar, to the pixel: the two monitors sit side by side.
+        anchors.leftMargin: 8
+        anchors.rightMargin: 8
+        anchors.bottomMargin: 6
+        height: 18
         visible: Edit.hasTimeline
 
         readonly property int total: Edit.hasTimeline ? (Edit.timeline.duration || 0) : 0
@@ -354,15 +357,23 @@ Item {
         }
 
         Rectangle {
+            objectName: "programPlayhead"
             x: Math.max(0, Math.min(scrub.xOf(Edit.hasTimeline ? Edit.timeline.playhead : 0),
-                                    bar.width - 2))
-            width: 2
+                                    bar.width)) - width / 2
+            anchors.verticalCenter: parent.verticalCenter
+            width: 8
             height: parent.height
-            color: Theme.c.text
+            radius: 2
+            color: programScrub.pressed ? Theme.c.accent : Theme.c.text
         }
 
         MouseArea {
+            id: programScrub
             anchors.fill: parent
+            anchors.topMargin: -4
+            anchors.bottomMargin: -4
+            preventStealing: true
+            cursorShape: Qt.PointingHandCursor
             onPressed: (mouse) => {
                 if (scrub.total > 0)
                     Edit.setPlayhead(Math.round(mouse.x / bar.width * scrub.total));
@@ -382,23 +393,38 @@ Item {
         anchors.left: parent.left
         anchors.right: parent.right
         anchors.bottom: parent.bottom
-        height: 40
+        // The Source viewer's two rows: the deck's buttons centred on top, the clock and the
+        // tools under them.
+        height: 66
         visible: Edit.hasTimeline
         color: Theme.c.panelHeader
 
         Text {
             anchors.left: parent.left
             anchors.leftMargin: 10
-            anchors.verticalCenter: parent.verticalCenter
+            anchors.verticalCenter: programTools.verticalCenter
             text: Edit.hasTimeline ? Edit.timecode(Edit.timeline.playhead) : ""
             font.pixelSize: 11
             font.family: "monospace"
             color: Theme.c.text
+
+            // The shuttle gear, while it is not plain play.
+            Text {
+                anchors.left: parent.right
+                anchors.leftMargin: 8
+                anchors.verticalCenter: parent.verticalCenter
+                visible: Edit.playing && Edit.rate !== 1
+                text: (Edit.rate < 0 ? "◀ " : "▶ ") + Math.abs(Edit.rate) + "×"
+                font.pixelSize: 11
+                color: Theme.c.accent
+            }
         }
 
         // Plain triangles: ⏮ and ⏭ fall back to the colour emoji font, drawn as blue tiles.
         Row {
-            anchors.centerIn: parent
+            anchors.horizontalCenter: parent.horizontalCenter
+            anchors.top: parent.top
+            anchors.topMargin: 4
             spacing: 6
 
             ToolButton {
@@ -406,13 +432,6 @@ Item {
                 label: "|◀◀"
                 tip: qsTr("Go to the start (Home)")
                 onClicked: Edit.goToStart()
-            }
-
-            ToolButton {
-                width: 34; height: 30; glyphSize: 18
-                label: "⮜"
-                tip: qsTr("Previous edit (Up)")
-                onClicked: Edit.stepEdit(false)
             }
 
             ToolButton {
@@ -441,13 +460,6 @@ Item {
 
             ToolButton {
                 width: 34; height: 30; glyphSize: 18
-                label: "⮞"
-                tip: qsTr("Next edit (Down)")
-                onClicked: Edit.stepEdit(true)
-            }
-
-            ToolButton {
-                width: 34; height: 30; glyphSize: 18
                 label: "▶▶|"
                 tip: qsTr("Go to the end (End)")
                 onClicked: Edit.goToEnd()
@@ -455,10 +467,24 @@ Item {
         }
 
         Row {
+            id: programTools
             anchors.right: parent.right
             anchors.rightMargin: 6
-            anchors.verticalCenter: parent.verticalCenter
+            anchors.bottom: parent.bottom
+            anchors.bottomMargin: 5
             spacing: 4
+
+            ToolButton {
+                label: "⮜"
+                tip: qsTr("Previous edit (Up)")
+                onClicked: Edit.stepEdit(false)
+            }
+
+            ToolButton {
+                label: "⮞"
+                tip: qsTr("Next edit (Down)")
+                onClicked: Edit.stepEdit(true)
+            }
 
             // How the picture is sized. Cycled rather than a menu: there are four, and the
             // one in use is almost always Fit.
@@ -502,18 +528,6 @@ Item {
                 onClicked: Edit.addMarkerAtPlayhead()
             }
         }
-
-        // The shuttle rate, when it is not simply playing: an editor racing through at 8x
-        // wants to see that is what is happening.
-        Text {
-            anchors.horizontalCenter: parent.horizontalCenter
-            anchors.top: parent.top
-            anchors.topMargin: 1
-            visible: Math.abs(Edit.rate) > 1
-            text: Math.abs(Edit.rate) + "×"
-            font.pixelSize: 9
-            color: Theme.c.accent
-        }
     }
 
     Text {
@@ -524,6 +538,5 @@ Item {
         font.pixelSize: 11
         color: Theme.c.textMuted
     }
-
 
 }

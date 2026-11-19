@@ -34,6 +34,7 @@
 #include <QImage>
 #include <QInputMethodEvent>
 #include <QJSValue>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QMouseEvent>
@@ -827,13 +828,19 @@ int main(int argc, char** argv) {
                 return 1;
             }
 
-            // A project on disk, because a timeline is a file in one.
-            report(document->createCollection(QStringLiteral("Subdoc Check")),
+            // A real project, as the operator makes one: timelines are files in its Timelines/.
+            QTemporaryDir subdocHome;
+            const QString projectA = subdocHome.path() + QStringLiteral("/Project A");
+            const QString projectB = subdocHome.path() + QStringLiteral("/Project B");
+            report(document->createProject(projectA, QStringLiteral("Project A")) &&
+                       document->createCollection(QStringLiteral("Subdoc Check")),
                    "a project can be created for the check");
-            const QString subdocCollection = document->projectPath();
 
             const QString timeline = edit->createTimeline(QStringLiteral("Check Edit"));
             report(!timeline.isEmpty() && edit->hasTimeline(), "a timeline can be made");
+            const QString timelineFile = projectA + QStringLiteral("/Timelines/Check Edit.mtime");
+            report(QFileInfo::exists(timelineFile),
+                   "a new timeline is written at once to Timelines/, named after itself");
 
             // One change to the show, one to the timeline, one to the show again.
             document->renameCollection(QStringLiteral("Renamed Show"));
@@ -843,6 +850,20 @@ int main(int argc, char** argv) {
                                          .toList()
                                          .size();
             document->renameCollection(QStringLiteral("Renamed Twice"));
+
+            // Save Project writes the timeline too: before, a reopen found it empty.
+            report(edit->dirty(), "a timeline edit leaves the timeline unsaved");
+            document->save();
+            document->flushSaves();
+            report(!edit->dirty(), "Save Project saves the open timeline's edits");
+            const auto savedTracks = [&] {
+                QFile f(timelineFile);
+                return f.open(QIODevice::ReadOnly)
+                    ? static_cast<int>(QJsonDocument::fromJson(f.readAll())
+                                           .object().value(QStringLiteral("tracks")).toArray().size())
+                    : -1;
+            };
+            report(savedTracks() == tracks_after, "the saved file holds the edit");
 
             // Undo with the Live tab in front: the show goes back one step and the timeline
             // does not move, even though the timeline edit is the more recent one.
@@ -967,6 +988,35 @@ int main(int argc, char** argv) {
                                "an effect can be taken off again");
                     }
                 }
+            }
+
+            // What the operator reported: a second project showed the first one's timelines,
+            // and a reopen came back empty. Make B, then go back to A.
+            {
+                document->save();
+                document->flushSaves();
+                report(document->createProject(projectB, QStringLiteral("Project B")),
+                       "a second project can be made");
+                report(edit->timelines().isEmpty() && !edit->hasTimeline(),
+                       "a new project starts with no timelines from the last one");
+                report(QDir(projectB + QStringLiteral("/Timelines"))
+                           .entryList(QDir::Files).isEmpty(),
+                       "and nothing is written into its Timelines/");
+                edit->createTimeline(QStringLiteral("B Cut"));
+                report(QFileInfo::exists(projectB + QStringLiteral("/Timelines/B Cut.mtime")),
+                       "a timeline made in B is written to B's Timelines/");
+
+                report(document->openProject(projectA), "the first project reopens");
+                const auto rows = edit->timelines();
+                report(rows.size() == 1 && rows.front().toMap().value(QStringLiteral("name"))
+                                                 .toString() == QLatin1String("Check Edit"),
+                       "it lists only its own timeline, by name");
+                if (!rows.isEmpty())
+                    edit->openTimeline(rows.front().toMap().value(QStringLiteral("id")).toString());
+                report(edit->hasTimeline() &&
+                           edit->timeline().value(QStringLiteral("tracks")).toList().size() ==
+                               savedTracks(),
+                       "and opens with the edits that were saved");
             }
 
             // The exported overlay is the point of the Graphics tab, so it is checked rather
@@ -1193,8 +1243,8 @@ int main(int argc, char** argv) {
                 // Back to the collection this check started on, before `projectHome` goes.
                 // Leaving the catalogue pointed at a directory about to be removed is what
                 // broke five unrelated checks the last time a check opened a project.
-                report(document->openCollection(subdocCollection),
-                       "the shell returns to the collection the check started on");
+                report(document->openProject(projectA),
+                       "the shell returns to the project the check started on");
             }
 
             // The collection the check made is left where `createCollection` put it, as every

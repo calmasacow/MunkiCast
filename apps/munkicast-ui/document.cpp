@@ -6060,6 +6060,7 @@ void Document::redo() {
 }
 
 void Document::save() {
+    emit saving();
     if (live_) {
         save_when_idle_ = true;
         emit notice(QStringLiteral("Will save when recording and streaming stop."));
@@ -6076,6 +6077,7 @@ void Document::save() {
 }
 
 void Document::saveInBackground() {
+    emit saving();
     if (session_->path().empty())
         return;
     QPointer<Document> self(this);

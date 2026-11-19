@@ -11,6 +11,7 @@
 #include <ldoc/workbench.hpp>
 
 #include <filesystem>
+#include <map>
 
 class QTimer;
 
@@ -86,9 +87,12 @@ public:
     Q_INVOKABLE QString createTimeline(const QString& name, int fpsNum = 30, int fpsDen = 1,
                                        int width = 1920, int height = 1080, int videoTracks = 1,
                                        int audioTracks = 1);
-    Q_INVOKABLE void openTimeline(const QString& id);
+    /// Open a timeline by its file in the project's Timelines/ folder.
+    Q_INVOKABLE void openTimeline(const QString& path);
     Q_INVOKABLE void closeTimeline();
     Q_INVOKABLE void save();
+    /// Write every open timeline with unsaved edits. Run when the project saves or closes.
+    void saveAll();
 
     /// Undo and redo *this timeline*. Never the project: see the class comment.
     Q_INVOKABLE void undo();
@@ -293,6 +297,13 @@ private:
     ldoc::Id selected_clip_;
     ldoc::Id selected_track_;
     std::filesystem::path dir_;
+    /// Where each open timeline is saved: `<project>/Timelines/<name>.mtime`.
+    std::map<ldoc::Id, std::filesystem::path> files_;
+    [[nodiscard]] std::filesystem::path timelinesDir() const;
+    /// A free file name in Timelines/ for a timeline called `name`.
+    [[nodiscard]] std::filesystem::path fileFor(const std::string& name) const;
+    /// Write one open timeline to its file. Reports and returns false on failure.
+    bool write(const ldoc::Timeline& timeline);
 };
 
 } // namespace munkicast::ui

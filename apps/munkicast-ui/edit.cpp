@@ -3,6 +3,8 @@
 
 #include "edit.hpp"
 
+#include <QCoreApplication>
+
 #include <QCursor>
 #include <QGuiApplication>
 
@@ -17,6 +19,7 @@
 #include <lcomp/filters.hpp>
 #include <ldoc/json.hpp>
 #include <ldoc/project_io.hpp>
+#include <lcore/atomic_file.hpp>
 
 #include <algorithm>
 #include <cmath>
@@ -109,14 +112,20 @@ Edit* Edit::create(QQmlEngine* engine, QJSEngine*) {
         e->document_ = engine->singletonInstance<Document*>("MunkiCast", "Document");
         e->art_ = engine->singletonInstance<ClipArt*>("MunkiCast", "ClipArt");
         if (e->document_) {
-            connect(e->document_, &Document::projectOpened, e, [e](const QString& dir) {
-                e->setProject(dir.isEmpty() ? std::filesystem::path{}
-                                            : std::filesystem::path{dir.toStdString()});
+            // The project folder, not the show collection: timelines live in the project's
+            // Timelines/ folder, and switching collections inside one project keeps them.
+            connect(e->document_, &Document::projectChanged, e, [e] {
+                const std::filesystem::path dir{e->document_->openProjectPath().toStdString()};
+                if (dir != e->dir_)
+                    e->setProject(dir);
             });
+            connect(e->document_, &Document::saving, e, &Edit::saveAll);
+            // Quitting keeps timeline edits too, as closing any editor does.
+            connect(qApp, &QCoreApplication::aboutToQuit, e, &Edit::saveAll);
             // A QML singleton is created the first time something asks for it, which may be
             // long after the project was opened. Seeding it here is what stops it starting
             // with no project in a session that already has one.
-            const QString open = e->document_->projectDirectory();
+            const QString open = e->document_->openProjectPath();
             if (!open.isEmpty())
                 e->setProject(std::filesystem::path{open.toStdString()});
         }
@@ -125,6 +134,41 @@ Edit* Edit::create(QQmlEngine* engine, QJSEngine*) {
 }
 
 Edit::Edit(QObject* parent) : QObject(parent) {}
+
+std::filesystem::path Edit::timelinesDir() const { return dir_ / "Timelines"; }
+
+std::filesystem::path Edit::fileFor(const std::string& name) const {
+    // The name is typed by the operator, so it is made safe to be a file name: no folders, no
+    // hidden file, nothing a file manager refuses.
+    std::string safe;
+    for (const char c : name)
+        safe += std::string_view{"/\\:*?\"<>|"}.find(c) == std::string_view::npos ? c : '_';
+    while (!safe.empty() && (safe.front() == '.' || safe.front() == ' '))
+        safe.erase(safe.begin());
+    if (safe.empty())
+        safe = "Timeline";
+    std::filesystem::path path = timelinesDir() / (safe + ".mtime");
+    for (int n = 2; std::filesystem::exists(path); ++n)
+        path = timelinesDir() / std::format("{} ({}).mtime", safe, n);
+    return path;
+}
+
+bool Edit::write(const ldoc::Timeline& timeline) {
+    const auto file = files_.find(timeline.id);
+    if (file == files_.end())
+        return false;
+    // Checked before it reaches the disk: a timeline the loader would refuse is a file that
+    // cannot be reopened.
+    std::string error;
+    if (const auto bad = timeline.validate())
+        error = *bad;
+    else if (const auto r = lc::write_atomic(file->second, ldoc::timeline_to_json(timeline)); !r)
+        error = r.error();
+    if (error.empty())
+        return true;
+    emit notice(tr("The timeline could not be saved: %1").arg(QString::fromStdString(error)));
+    return false;
+}
 
 ldoc::TimelineHistory* Edit::history() {
     return open_.is_nil() ? nullptr : bench_.timeline(open_);
@@ -202,13 +246,20 @@ QVariantMap Edit::timeline() const {
 
 QVariantList Edit::timelines() const {
     QVariantList rows;
-    if (!document_)
+    if (dir_.empty())
         return rows;
-    for (const ldoc::SubdocRef& ref : document_->projectForBindings().timelines) {
-        rows.append(QVariantMap{{QStringLiteral("id"), to_qt(ref.id)},
-                                {QStringLiteral("name"), QString::fromStdString(ref.name)},
-                                {QStringLiteral("open"), ref.id == open_}});
-    }
+    const auto open = files_.find(open_);
+    std::vector<std::filesystem::path> found;
+    std::error_code ec;
+    for (const auto& entry : std::filesystem::directory_iterator(timelinesDir(), ec))
+        if (entry.path().extension() == ".mtime")
+            found.push_back(entry.path());
+    std::sort(found.begin(), found.end());
+    for (const auto& path : found)
+        rows.append(QVariantMap{
+            {QStringLiteral("id"), QString::fromStdString(path.string())},
+            {QStringLiteral("name"), QString::fromStdString(path.stem().string())},
+            {QStringLiteral("open"), open != files_.end() && open->second == path}});
     return rows;
 }
 
@@ -260,7 +311,10 @@ bool Edit::dirty() const {
 void Edit::setProject(const std::filesystem::path& dir) {
     // Closing a project closes its documents: their undo stacks belong to work that is no
     // longer open, and keeping them would let an undo reach into a project that has gone.
+    // Written first, to the project they belong to: switching away must not drop edits.
+    saveAll();
     bench_.clear();
+    files_.clear();
     open_ = {};
     selected_clip_ = {};
     selected_track_ = {};
@@ -303,20 +357,12 @@ QString Edit::createTimeline(const QString& name, int fpsNum, int fpsDen, int wi
     add(ldoc::TrackKind::Video, "V", videoTracks);
     add(ldoc::TrackKind::Audio, "A", audioTracks);
 
-    // Written before it is announced: a manifest entry naming a file that does not exist is a
-    // project that reports a missing document on its next open.
-    if (const auto r = ldoc::save_timeline(dir_, t, 0); !r) {
-        emit notice(tr("The timeline could not be written: %1")
-                        .arg(QString::fromStdString(r.error())));
+    const std::filesystem::path file = fileFor(t.name);
+    files_[t.id] = file;
+    if (!write(t)) {
+        files_.erase(t.id);
         return {};
     }
-
-    ldoc::SubdocRef ref;
-    ref.id = t.id;
-    ref.name = t.name;
-    if (document_)
-        document_->runCommand(
-            ldoc::AddTimelineRef{ref, document_->projectForBindings().timelines.size()});
 
     const QString id = to_qt(t.id);
     bench_.open_timeline(std::move(t));
@@ -326,20 +372,31 @@ QString Edit::createTimeline(const QString& name, int fpsNum, int fpsDen, int wi
     return id;
 }
 
-void Edit::openTimeline(const QString& id) {
-    const ldoc::Id wanted = from_qt(id);
-    if (wanted.is_nil())
-        return;
+void Edit::openTimeline(const QString& path) {
+    const std::filesystem::path file{path.toStdString()};
     // Already open: switch to it and keep its stack exactly where it was left. Reading the file
     // again here would discard undo history for work that is still in progress.
-    if (!bench_.timeline(wanted)) {
-        auto loaded = ldoc::load_timeline(dir_, wanted);
+    ldoc::Id wanted;
+    for (const auto& [id, at] : files_)
+        if (at == file)
+            wanted = id;
+    if (wanted.is_nil()) {
+        const auto text = lc::read_file(file);
+        auto loaded = text ? ldoc::timeline_from_json(*text)
+                           : std::expected<ldoc::SubdocFile<ldoc::Timeline>, std::string>(
+                                 std::unexpected(text.error()));
         if (!loaded) {
             emit notice(tr("That timeline could not be opened: %1")
                             .arg(QString::fromStdString(loaded.error())));
             return;
         }
-        bench_.open_timeline(std::move(*loaded));
+        wanted = loaded->document.id;
+        // ponytail: a copied .mtime keeps its id, so it opens as the original. Re-id on load if
+        // operators start duplicating timelines in the file manager.
+        if (!bench_.timeline(wanted)) {
+            files_[wanted] = file;
+            bench_.open_timeline(std::move(loaded->document));
+        }
     }
     open_ = wanted;
     selected_clip_ = {};
@@ -358,15 +415,25 @@ void Edit::closeTimeline() {
     emit selectionChanged();
 }
 
+void Edit::saveAll() {
+    if (dir_.empty())
+        return;
+    for (const ldoc::Id& id : bench_.open_timelines()) {
+        ldoc::TimelineHistory* h = bench_.timeline(id);
+        if (!h || !h->dirty())
+            continue;
+        if (write(h->document()))
+            h->note_saved();
+    }
+    emit changed();
+}
+
 void Edit::save() {
     ldoc::TimelineHistory* h = history();
     if (!h || dir_.empty())
         return;
-    if (const auto r = ldoc::save_timeline(dir_, h->document(), 0); !r) {
-        emit notice(tr("The timeline could not be saved: %1")
-                        .arg(QString::fromStdString(r.error())));
+    if (!write(h->document()))
         return;
-    }
     h->note_saved();
     emit changed();
 }

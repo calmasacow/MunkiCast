@@ -176,7 +176,7 @@ Controls.MenuBar {
         Entry {
             text: qsTr("Exit")
             onTriggered: {
-                if (Document.dirty) Document.save();
+                Document.save();
                 if (Document.dirty)
                     bar.mainWindow.report(qsTr("Project has unsaved changes. Save successfully before exiting."));
                 else bar.mainWindow.close();

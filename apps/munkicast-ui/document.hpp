@@ -843,6 +843,8 @@ signals:
   /// Graphics singletons each keep their own state against a project, and `Document` has no
   /// business knowing they exist.
   void projectOpened(const QString& directory);
+  /// About to save the project: workspaces flush their own documents (timelines, graphics).
+  void saving();
   /// The sources list should start renaming this node.
   void renameRequested(const QString& nodeId);
 
