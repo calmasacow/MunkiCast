@@ -21,12 +21,17 @@ Item {
 
     implicitHeight: 26
 
+    // Ends at the last tab: the strip is as wide as the menu, and past the tabs it would
+    // paint over the broadcast bar's buttons.
     Rectangle {
-        anchors.fill: parent
+        anchors.top: parent.top
+        anchors.bottom: parent.bottom
+        width: tabs.x + tabs.width
         color: Theme.c.panelHeader
     }
 
     Row {
+        id: tabs
         anchors.left: parent.left
         anchors.leftMargin: 6
         anchors.top: parent.top

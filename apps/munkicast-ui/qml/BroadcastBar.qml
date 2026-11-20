@@ -33,28 +33,15 @@ Item {
         return (n / (1024 * 1024)).toFixed(1) + " MB";
     }
 
-    ToolButton {
-        objectName: "studioModeButton"
-        anchors.right: info.left
-        anchors.rightMargin: 20
-        anchors.verticalCenter: parent.verticalCenter
-        width: 100; height: 28
-        label: qsTr("Studio Mode")
-        tip: qsTr("Stage Main scenes before taking them to Program")
-        active: !!Document.mainDeck.studio
-        enabled: !!Document.mainDeck.id
-        onClicked: {
-            Preview.setManualTransition(-1);
-            Document.setDeckStudioMode(Document.mainDeck.id, !Document.mainDeck.studio);
-        }
-    }
-
     Row {
         id: info
         anchors.right: actions.left
         anchors.rightMargin: 20
         anchors.verticalCenter: parent.verticalCenter
         spacing: 16
+        // ponytail: hidden when the window is too narrow to fit it beside the menu and
+        // tabs, which paint over the bar. A compact or wrapped readout is the upgrade.
+        visible: x >= 0
 
         // One column per figure, built from the same two-line shape so adding a figure later
         // costs a line. Machine load lives here rather than in Broadcast Stats because an
@@ -168,6 +155,20 @@ Item {
         anchors.rightMargin: 14
         anchors.verticalCenter: parent.verticalCenter
         spacing: 8
+
+        ToolButton {
+            objectName: "studioModeButton"
+            width: 100
+            height: 28
+            label: qsTr("Studio Mode")
+            tip: qsTr("Stage Main scenes before taking them to Program")
+            active: !!Document.mainDeck.studio
+            enabled: !!Document.mainDeck.id
+            onClicked: {
+                Preview.setManualTransition(-1);
+                Document.setDeckStudioMode(Document.mainDeck.id, !Document.mainDeck.studio);
+            }
+        }
 
         ToolButton {
             width: 96
